@@ -1,0 +1,998 @@
+//! Terminal tabs (M6): real PTYs (portable-pty) driven by alacritty's VT
+//! model (alacritty_terminal), rendered by our font stack.
+//!
+//! Memory rules (AGENTS.md guardrail 3):
+//! - the PTY reader thread pumps a BOUNDED channel (backpressure: the shell
+//!   blocks on write when the buffer fills — no byte dropped, no growth);
+//! - scrollback is capped by the model (`scrolling_history` = 2000);
+//! - each wake drains a bounded number of chunks; rasters cap at ~30fps
+//!   under output storms (the caller owns the budget).
+//!
+//! Lifecycle: dropping a `Terminal` drops the PTY master (SIGHUP kills the
+//! shell's whole process group per POSIX), then `kill()` backstops and
+//! `wait()` reaps.
+
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, SyncSender, TryRecvError};
+use std::thread;
+
+use alacritty_terminal::event::EventListener;
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::term::{self, cell::Flags, Config, Term, TermMode};
+use alacritty_terminal::vte::ansi::{self, Color as TermColor, NamedColor, Rgb};
+use cosmic_text::Weight;
+use portable_pty::{CommandBuilder, PtySize};
+use winit::event_loop::EventLoopProxy;
+use winit::keyboard::{Key, NamedKey};
+
+use crate::render::{Canvas, ColorRgb, Theme};
+use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
+use crate::ui::Rect;
+use crate::viewer::LINE_H;
+use crate::watch::Wake;
+
+/// Terminal scrollback cap (memory rule 3: capped terminal scrollback).
+pub const SCROLLBACK_LINES: usize = 2000;
+/// Grid cell metrics: the viewer's row height and the shared mono font.
+pub const TERM_LINE_H: f64 = LINE_H;
+
+/// Grid dimensions (alacritty's own `TermSize` is test-only in 0.26).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridSize {
+    pub cols: usize,
+    pub rows: usize,
+}
+
+impl GridSize {
+    pub fn new(cols: usize, rows: usize) -> Self {
+        GridSize { cols: cols.max(2), rows: rows.max(2) }
+    }
+
+    /// Fit a grid into a LOGICAL-px rect (whole cells only).
+    pub fn fit(width: f64, height: f64, advance: f64, line_h: f64) -> GridSize {
+        let cols = ((width / advance.max(1.0)).floor() as usize).max(2);
+        let rows = ((height / line_h.max(1.0)).floor() as usize).max(2);
+        GridSize::new(cols, rows)
+    }
+}
+
+impl Dimensions for GridSize {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
+
+/// Sink for the model's internal events (title changes, bells…): M6 renders
+/// the grid only, so every event is a no-op.
+#[derive(Clone, Copy, Debug)]
+pub struct NoopListener;
+
+impl EventListener for NoopListener {}
+
+#[derive(Debug)]
+pub enum TermError {
+    Io(std::io::Error),
+    Pty(anyhow::Error),
+}
+
+impl std::fmt::Display for TermError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TermError::Io(e) => write!(f, "{e}"),
+            TermError::Pty(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for TermError {}
+
+/// Shell registry (M6): `$SHELL` first, then the common shells that exist
+/// on this system. The default is registry[0]; the ark.toml editor (M9)
+/// makes this configurable.
+pub fn shell_registry() -> Vec<PathBuf> {
+    let mut shells = Vec::new();
+    if let Ok(s) = std::env::var("SHELL") {
+        let p = PathBuf::from(s);
+        if p.is_file() {
+            shells.push(p);
+        }
+    }
+    for candidate in ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh", "/usr/bin/fish"] {
+        let p = PathBuf::from(candidate);
+        if p.is_file() && !shells.contains(&p) {
+            shells.push(p);
+        }
+    }
+    shells
+}
+
+pub fn default_shell() -> PathBuf {
+    shell_registry().into_iter().next().unwrap_or_else(|| PathBuf::from("/bin/bash"))
+}
+
+/// One terminal tab: PTY + model + bounded output channel.
+pub struct Terminal {
+    shell: PathBuf,
+    /// Kept for `resize`; dropped FIRST on close (SIGHUP to the group).
+    master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    term: Term<NoopListener>,
+    processor: ansi::Processor,
+    rx: mpsc::Receiver<Vec<u8>>,
+    size: GridSize,
+    exited: bool,
+}
+
+impl Drop for Terminal {
+    /// Teardown: dropping the master hangs up the session (POSIX kills the
+    /// shell's whole process group via SIGHUP); `kill()` backstops; `wait()`
+    /// reaps so no zombie survives the tab.
+    fn drop(&mut self) {
+        self.master.take();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        log::debug!("terminal torn down (process group killed)");
+    }
+}
+
+impl Terminal {
+    /// Spawn `shell` in a PTY rooted at `root`, sized to `size`. Starts the
+    /// reader thread (bounded channel + one wake per chunk).
+    pub fn spawn(
+        root: &Path,
+        shell: &Path,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<Terminal, TermError> {
+        Self::spawn_with(root, shell, size, move || {
+            let _ = proxy.send_event(Wake::PtyData);
+        })
+    }
+
+    /// The spawn core with a pluggable wake (tests pass a no-op).
+    fn spawn_with(
+        root: &Path,
+        shell: &Path,
+        size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Terminal, TermError> {
+        let pair = portable_pty::native_pty_system()
+            .openpty(PtySize {
+                rows: size.rows as u16,
+                cols: size.cols as u16,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(TermError::Pty)?;
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.cwd(root);
+        // TERM/COLORTERM: running apps need them for colors + capabilities.
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        let child = pair.slave.spawn_command(cmd).map_err(TermError::Pty)?;
+        // The slave lives in the child's session now; drop our copy so the
+        // shell's exit produces EOF on the master.
+        drop(pair.slave);
+
+        let writer = pair.master.take_writer().map_err(TermError::Pty)?;
+        let mut reader = pair.master.try_clone_reader().map_err(TermError::Pty)?;
+        let (tx, rx): (SyncSender<Vec<u8>>, _) = mpsc::sync_channel(128);
+        thread::Builder::new()
+            .name("ark-pty-reader".into())
+            .spawn(move || {
+                let mut buf = [0u8; 8192];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break, // EOF: the session is gone
+                        Ok(n) => {
+                            // Bounded send: when the app lags, this BLOCKS
+                            // (backpressure to the shell) — no byte dropped.
+                            if tx.send(buf[..n].to_vec()).is_err() {
+                                break; // the tab closed; stop pumping
+                            }
+                            wake();
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+            .map_err(TermError::Io)?;
+
+        let config = Config { scrolling_history: SCROLLBACK_LINES, ..Config::default() };
+        let term = Term::new(config, &size, NoopListener);
+        Ok(Terminal {
+            shell: shell.to_path_buf(),
+            master: Some(pair.master),
+            writer,
+            child,
+            term,
+            processor: ansi::Processor::new(),
+            rx,
+            size,
+            exited: false,
+        })
+    }
+
+    pub fn shell_name(&self) -> &str {
+        self.shell
+            .file_name()
+            .map(|n| n.to_str().unwrap_or("?"))
+            .unwrap_or("?")
+    }
+
+    #[allow(dead_code)] // test/inspection surface; the frame drives resize directly
+    pub fn size(&self) -> GridSize {
+        self.size
+    }
+
+    pub fn exited(&self) -> bool {
+        self.exited
+    }
+
+    pub fn mode(&self) -> TermMode {
+        *self.term.mode()
+    }
+
+    /// Resize the model + the PTY. Returns whether anything changed.
+    pub fn resize(&mut self, size: GridSize) -> bool {
+        if self.size == size {
+            return false;
+        }
+        self.term.resize(size);
+        if let Some(master) = &self.master {
+            let _ = master.resize(PtySize {
+                rows: size.rows as u16,
+                cols: size.cols as u16,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
+        self.size = size;
+        true
+    }
+
+    /// Write raw input bytes to the shell (already encoded by the caller).
+    pub fn key_input(&mut self, bytes: &[u8]) {
+        if let Err(e) = self.writer.write_all(bytes).and_then(|_| self.writer.flush()) {
+            // Writes race the shell's exit — logged, never fatal.
+            log::debug!("terminal write failed: {e}");
+        }
+    }
+
+    /// Scroll the viewport by `lines` (positive = toward history).
+    pub fn scroll_display(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    /// Drain up to `max_chunks` output chunks into the model. `true` when
+    /// any chunk was parsed (the grid may have changed).
+    pub fn drain_output(&mut self, max_chunks: usize) -> bool {
+        let mut parsed = false;
+        for _ in 0..max_chunks {
+            match self.rx.try_recv() {
+                Ok(chunk) => {
+                    self.processor.advance(&mut self.term, &chunk);
+                    parsed = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.exited = true; // reader EOF: the session ended
+                    break;
+                }
+            }
+        }
+        parsed
+    }
+
+    /// Render the visible grid into `rect` (LOGICAL px). Viewport-only:
+    /// same-style runs share one shaped text call. The cursor paints when
+    /// `show_cursor` (the pane is focused) and is on-screen.
+    pub fn draw(&self, canvas: &mut Canvas, text: &mut TextSystem, theme: &Theme, scale: f64, rect: Rect, show_cursor: bool) {
+        if rect.w <= 0.0 || rect.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+            return;
+        }
+        let content = self.term.renderable_content();
+        let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+        let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+        let advance = f64::from(m.advance) / scale;
+        let rows = ((rect.h / TERM_LINE_H).floor() as usize).min(self.size.rows);
+
+        // Collect the viewport: [row][col] → (char, fg, bg, flags) with bg
+        // fills resolved to per-cell colors (default bg cells stay clean).
+        let mut grid: Vec<Vec<CellView>> = (0..rows).map(|_| Vec::new()).collect();
+        for indexed in content.display_iter {
+            let Some(vp) = term::point_to_viewport(content.display_offset, indexed.point) else {
+                continue;
+            };
+            if vp.line >= rows {
+                continue; // below the painted area (model rows > shown rows)
+            }
+            let cell = indexed.cell;
+            let (fg, bg) = resolve_pair(theme, content.colors, cell.fg, cell.bg, cell.flags);
+            let mut ch = cell.c;
+            if cell.flags.contains(Flags::HIDDEN) {
+                ch = ' ';
+            }
+            grid[vp.line].push(CellView { col: vp.column.0, ch, fg, bg, flags: cell.flags });
+        }
+        // Rows may arrive sparse — sort by column (the iterator is in order,
+        // but a skipped WIDE_CHAR_SPACER keeps it stable; sort is a no-op).
+        for row in &mut grid {
+            row.sort_by_key(|c| c.col);
+        }
+
+        // Backgrounds first (whole-cell fills), then text runs.
+        let baseline_off = f64::from(m.ascent - m.descent) / 2.0;
+        for (i, row) in grid.iter().enumerate() {
+            let row_y = rect.y + i as f64 * TERM_LINE_H;
+            for cell in row {
+                if cell.bg != theme.bg {
+                    canvas.fill_rect(
+                        rect.x + cell.col as f64 * advance,
+                        row_y,
+                        advance,
+                        TERM_LINE_H,
+                        cell.bg,
+                        scale,
+                    );
+                }
+            }
+            // Text runs: consecutive cells with the same (fg, bold) merge
+            // into one shaped call — a uniform row is a single run.
+            let mut run = String::new();
+            let mut run_start = 0usize;
+            let mut run_fg = theme.fg;
+            let mut run_bold = false;
+            let mut run_underline = false;
+            for cell in row {
+                let bold = cell.flags.contains(Flags::BOLD);
+                let same_style = cell.fg == run_fg && bold == run_bold;
+                if !same_style && !run.is_empty() {
+                    flush_run(canvas, text, theme, scale, rect, row_y, advance, baseline_off, &run, run_start, run_fg, run_bold, run_underline);
+                    run.clear();
+                    run_underline = false;
+                }
+                if run.is_empty() {
+                    run_start = cell.col;
+                    run_fg = cell.fg;
+                    run_bold = bold;
+                }
+                run_underline |= cell.flags.contains(Flags::UNDERLINE);
+                run.push(cell.ch);
+            }
+            if !run.is_empty() {
+                flush_run(canvas, text, theme, scale, rect, row_y, advance, baseline_off, &run, run_start, run_fg, run_bold, run_underline);
+            }
+        }
+
+        // Exited sessions render a dim note (the tab stays until closed).
+        if self.exited {
+            let m2 = text.mono_metrics((12.0 * scale) as f32, (12.0 * 1.35 * scale) as f32);
+            let baseline = (rect.y + 12.0) * scale + f64::from(m2.ascent - m2.descent) / 2.0;
+            text.draw_line(
+                canvas,
+                "(process exited)",
+                (rect.x * scale) as f32,
+                baseline as f32,
+                TextStyle { color: theme.fg_dim, font_size: (12.0 * scale) as f32, weight: Weight::NORMAL },
+            );
+        }
+
+        // Cursor: block in the accent color, character in bg (focused only;
+        // hidden when scrolled off-screen or the app hides it).
+        if show_cursor && content.cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden {
+            if let Some(vp) = term::point_to_viewport(content.display_offset, content.cursor.point) {
+                if vp.line < rows {
+                    let x = rect.x + vp.column.0 as f64 * advance;
+                    let y = rect.y + vp.line as f64 * TERM_LINE_H;
+                    canvas.fill_rect(x, y, advance, TERM_LINE_H, theme.accent, scale);
+                    let cursor_char = self
+                        .term
+                        .grid()[Point::new(Line(vp.line as i32 - content.display_offset as i32), Column(vp.column.0))]
+                        .c;
+                    let baseline = (y + TERM_LINE_H / 2.0) * scale + baseline_off;
+                    text.draw_line(
+                        canvas,
+                        &cursor_char.to_string(),
+                        (x * scale) as f32,
+                        baseline as f32,
+                        TextStyle { color: theme.bg, font_size, weight: Weight::NORMAL },
+                    );
+                }
+            }
+        }
+    }
+}
+
+struct CellView {
+    col: usize,
+    ch: char,
+    fg: ColorRgb,
+    bg: ColorRgb,
+    flags: Flags,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_run(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    _theme: &Theme,
+    scale: f64,
+    rect: Rect,
+    row_y: f64,
+    advance: f64,
+    baseline_off: f64,
+    run: &str,
+    run_start: usize,
+    fg: ColorRgb,
+    bold: bool,
+    underline: bool,
+) {
+    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+    let baseline = (row_y + TERM_LINE_H / 2.0) * scale + baseline_off;
+    text.draw_line(
+        canvas,
+        run,
+        ((rect.x + run_start as f64 * advance) * scale) as f32,
+        baseline as f32,
+        TextStyle { color: fg, font_size, weight: if bold { Weight::BOLD } else { Weight::NORMAL } },
+    );
+    if underline {
+        let y = row_y + TERM_LINE_H - 1.0;
+        let w = run.chars().count() as f64 * advance;
+        canvas.fill_rect(rect.x + run_start as f64 * advance, y, w, 1.0, fg, scale);
+    }
+}
+
+/// Catppuccin Mocha ANSI palette (normal 0-7, bright 8-15).
+const ANSI_PALETTE: [ColorRgb; 16] = [
+    (0x45, 0x47, 0x5A), // black (surface1)
+    (0xF3, 0x8B, 0xA8), // red
+    (0xA6, 0xE3, 0xA1), // green
+    (0xF9, 0xE2, 0xAF), // yellow
+    (0x89, 0xB4, 0xFA), // blue
+    (0xF5, 0xC2, 0xE7), // magenta (pink)
+    (0x94, 0xE2, 0xD5), // cyan (teal)
+    (0xBA, 0xC2, 0xDE), // white (subtext1)
+    (0x58, 0x5B, 0x70), // bright black (overlay0)
+    (0xF3, 0x8B, 0xA8),
+    (0xA6, 0xE3, 0xA1),
+    (0xF9, 0xE2, 0xAF),
+    (0x89, 0xB4, 0xFA),
+    (0xF5, 0xC2, 0xE7),
+    (0x94, 0xE2, 0xD5),
+    (0xA6, 0xAD, 0xC2), // bright white (subtext0)
+];
+
+/// Blend `c` toward `bg` by `t` (0 = c, 1 = bg) — used for DIM.
+fn blend_toward(c: ColorRgb, bg: ColorRgb, t: f64) -> ColorRgb {
+    let f = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
+    (f(c.0, bg.0), f(c.1, bg.1), f(c.2, bg.2))
+}
+
+/// xterm 256-color: 0-15 ANSI, 16-231 the 6×6×6 cube, 232-255 grays.
+fn xterm256(i: u8) -> ColorRgb {
+    let i = i as usize;
+    if i < 16 {
+        return ANSI_PALETTE[i];
+    }
+    if i < 232 {
+        let n = i - 16;
+        let levels = [0u8, 95, 135, 175, 215, 255];
+        let r = levels[n / 36];
+        let g = levels[(n % 36) / 6];
+        let b = levels[n % 6];
+        return (r, g, b);
+    }
+    let gray = (8 + 10 * (i - 232)) as u8;
+    (gray, gray, gray)
+}
+
+/// REVERSE-aware pair resolution for one cell: (fg, bg).
+fn resolve_pair(
+    theme: &Theme,
+    overrides: &alacritty_terminal::term::color::Colors,
+    fg: TermColor,
+    bg: TermColor,
+    flags: Flags,
+) -> (ColorRgb, ColorRgb) {
+    if flags.contains(Flags::INVERSE) {
+        let f = resolve_color_plain(theme, overrides, bg, flags);
+        let b = resolve_color_plain(theme, overrides, fg, flags);
+        (f, b)
+    } else {
+        let f = resolve_color_plain(theme, overrides, fg, flags);
+        let b = resolve_color_plain(theme, overrides, bg, flags);
+        (f, b)
+    }
+}
+
+fn resolve_color_plain(
+    theme: &Theme,
+    overrides: &alacritty_terminal::term::color::Colors,
+    c: TermColor,
+    flags: Flags,
+) -> ColorRgb {
+    let mut rgb = match c {
+        TermColor::Spec(Rgb { r, g, b }) => (r, g, b),
+        TermColor::Named(named) => {
+            let over = overrides[named];
+            if let Some(Rgb { r, g, b }) = over {
+                (r, g, b)
+            } else {
+                match named {
+                    NamedColor::Foreground => theme.fg,
+                    NamedColor::Background => theme.bg,
+                    NamedColor::Cursor => theme.accent,
+                    NamedColor::DimBlack => blend_toward(ANSI_PALETTE[0], theme.bg, 0.4),
+                    NamedColor::DimRed => blend_toward(ANSI_PALETTE[1], theme.bg, 0.4),
+                    NamedColor::DimGreen => blend_toward(ANSI_PALETTE[2], theme.bg, 0.4),
+                    NamedColor::DimYellow => blend_toward(ANSI_PALETTE[3], theme.bg, 0.4),
+                    NamedColor::DimBlue => blend_toward(ANSI_PALETTE[4], theme.bg, 0.4),
+                    NamedColor::DimMagenta => blend_toward(ANSI_PALETTE[5], theme.bg, 0.4),
+                    NamedColor::DimCyan => blend_toward(ANSI_PALETTE[6], theme.bg, 0.4),
+                    NamedColor::DimWhite => blend_toward(ANSI_PALETTE[7], theme.bg, 0.4),
+                    NamedColor::DimForeground => blend_toward(theme.fg, theme.bg, 0.4),
+                    NamedColor::BrightForeground => theme.fg,
+                    n if (n as u8) < 16 => ANSI_PALETTE[n as u8 as usize],
+                    _ => theme.fg,
+                }
+            }
+        }
+        TermColor::Indexed(i) => {
+            let over = overrides[i as usize];
+            if let Some(Rgb { r, g, b }) = over {
+                (r, g, b)
+            } else {
+                xterm256(i)
+            }
+        }
+    };
+    if flags.contains(Flags::DIM) {
+        rgb = blend_toward(rgb, theme.bg, 0.4);
+    }
+    rgb
+}
+
+// ---- keyboard + mouse encoding ----
+
+/// xterm modifier parameter for CSI sequences: 1 + shift + alt*2 + ctrl*4.
+fn csi_mod(mods: &winit::keyboard::ModifiersState) -> Option<u8> {
+    let m = (mods.shift_key() as u8)
+        + (mods.alt_key() as u8) * 2
+        + (mods.control_key() as u8) * 4;
+    if m == 0 {
+        None
+    } else {
+        Some(1 + m)
+    }
+}
+
+/// Encode one keyboard event into PTY bytes against the model's mode.
+pub fn encode_key(
+    logical: &Key,
+    text: Option<&str>,
+    mods: &winit::keyboard::ModifiersState,
+    mode: &TermMode,
+) -> Vec<u8> {
+    let ctrl = mods.control_key();
+    let alt = mods.alt_key();
+    let app_cursor = mode.contains(TermMode::APP_CURSOR);
+
+    if let Key::Named(named) = logical {
+        let seq: Vec<u8> = match named {
+            NamedKey::Enter => vec![b'\r'],
+            NamedKey::Backspace => vec![0x7f],
+            NamedKey::Tab => vec![b'\t'],
+            NamedKey::Escape => vec![0x1b],
+            NamedKey::Delete => b"\x1b[3~".to_vec(),
+            NamedKey::PageUp => b"\x1b[5~".to_vec(),
+            NamedKey::PageDown => b"\x1b[6~".to_vec(),
+            NamedKey::Home => {
+                if app_cursor {
+                    b"\x1bOH".to_vec()
+                } else {
+                    b"\x1b[H".to_vec()
+                }
+            }
+            NamedKey::End => {
+                if app_cursor {
+                    b"\x1bOF".to_vec()
+                } else {
+                    b"\x1b[F".to_vec()
+                }
+            }
+            NamedKey::ArrowUp
+            | NamedKey::ArrowDown
+            | NamedKey::ArrowRight
+            | NamedKey::ArrowLeft => {
+                let c = match named {
+                    NamedKey::ArrowUp => b'A',
+                    NamedKey::ArrowDown => b'B',
+                    NamedKey::ArrowRight => b'C',
+                    _ => b'D',
+                };
+                match csi_mod(mods) {
+                    Some(m) => format!("\x1b[1;{m}{}", c as char).into_bytes(),
+                    None if app_cursor => vec![b'\x1b', b'O', c],
+                    None => vec![b'\x1b', b'[', c],
+                }
+            }
+            NamedKey::F1 => b"\x1bOP".to_vec(),
+            NamedKey::F2 => b"\x1bOQ".to_vec(),
+            NamedKey::F3 => b"\x1bOR".to_vec(),
+            NamedKey::F4 => b"\x1bOS".to_vec(),
+            NamedKey::F5 => b"\x1b[15~".to_vec(),
+            NamedKey::F6 => b"\x1b[17~".to_vec(),
+            NamedKey::F7 => b"\x1b[18~".to_vec(),
+            NamedKey::F8 => b"\x1b[19~".to_vec(),
+            NamedKey::F9 => b"\x1b[20~".to_vec(),
+            NamedKey::F10 => b"\x1b[21~".to_vec(),
+            NamedKey::F11 => b"\x1b[23~".to_vec(),
+            NamedKey::F12 => b"\x1b[24~".to_vec(),
+            _ => Vec::new(),
+        };
+        if !seq.is_empty() {
+            return seq;
+        }
+    }
+
+    // Ctrl+letter/`@`/space → the classic C0 control byte.
+    if ctrl {
+        if *logical == Key::Named(NamedKey::Space) {
+            return vec![0]; // Ctrl+Space = NUL
+        }
+        if let Key::Character(s) = logical {
+            if let Some(c) = s.bytes().next() {
+                let c = c.to_ascii_lowercase();
+                if c.is_ascii_lowercase() {
+                    return vec![c - b'a' + 1];
+                }
+                if c == b'@' {
+                    return vec![0];
+                }
+            }
+        }
+    }
+
+    // Printable text (UTF-8); Alt prefixes ESC (meta). Control characters
+    // carried in `text` are never typed (they belong to named keys above).
+    if let Some(t) = text {
+        if !t.chars().any(char::is_control) {
+            let mut out = Vec::new();
+            if alt {
+                out.push(0x1b);
+            }
+            out.extend_from_slice(t.as_bytes());
+            return out;
+        }
+    }
+    Vec::new()
+}
+
+/// Encode one mouse event against the model's mode: SGR (1006) when
+/// enabled, else X10. `button`: 0 left, 1 middle, 2 right, 64 wheel up,
+/// 65 wheel down. `release` only differs for SGR (X10 reports button 3).
+/// `None` when the app has not enabled mouse reporting.
+pub fn encode_mouse_report(
+    mode: &TermMode,
+    button: u8,
+    col: usize,
+    row: usize,
+    release: bool,
+) -> Option<Vec<u8>> {
+    if !mode.intersects(
+        TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+    ) {
+        return None;
+    }
+    let col = (col + 1).min(1023);
+    let row = (row + 1).min(1023);
+    if mode.contains(TermMode::SGR_MOUSE) {
+        let final_ch = if release { 'm' } else { 'M' };
+        Some(format!("\x1b[<{button};{col};{row}{final_ch}").into_bytes())
+    } else {
+        let btn = if release { 3 } else { button };
+        Some(vec![
+            b'\x1b',
+            b'[',
+            b'M',
+            32 + btn,
+            32 + col.min(95) as u8,
+            32 + row.min(95) as u8,
+        ])
+    }
+}
+
+// ---- tab set ----
+
+/// All open terminal tabs + the active index.
+#[derive(Default)]
+pub struct TerminalTabs {
+    pub tabs: Vec<Terminal>,
+    pub active: usize,
+}
+
+impl TerminalTabs {
+    pub fn is_open(&self) -> bool {
+        !self.tabs.is_empty()
+    }
+
+    /// Spawn a new tab with the registry's default shell. Becomes active.
+    pub fn open(
+        &mut self,
+        root: &Path,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<(), TermError> {
+        let shell = default_shell();
+        let term = Terminal::spawn(root, &shell, size, proxy)?;
+        log::info!("terminal tab opened ({} @ {}×{})", term.shell_name(), size.cols, size.rows);
+        self.tabs.push(term);
+        self.active = self.tabs.len() - 1;
+        Ok(())
+    }
+
+    /// Close the active tab: the Terminal's Drop tears down the PTY (SIGHUP
+    /// to the process group + kill backstop + reap).
+    pub fn close_active(&mut self) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        self.tabs.remove(self.active);
+        log::info!("terminal tab closed ({} left)", self.tabs.len());
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len().saturating_sub(1);
+        }
+    }
+
+    pub fn active(&self) -> Option<&Terminal> {
+        self.tabs.get(self.active)
+    }
+
+    pub fn active_mut(&mut self) -> Option<&mut Terminal> {
+        self.tabs.get_mut(self.active)
+    }
+
+    /// Drain every tab (background tabs keep their scrollback current).
+    /// Returns whether any grid changed.
+    pub fn drain_all(&mut self, max_chunks_per_tab: usize) -> bool {
+        let mut changed = false;
+        for tab in &mut self.tabs {
+            changed |= tab.drain_output(max_chunks_per_tab);
+        }
+        changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::testutil::temp_dir;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+    use winit::keyboard::ModifiersState;
+
+    fn mods(ctrl: bool, alt: bool) -> ModifiersState {
+        let mut m = ModifiersState::empty();
+        if ctrl {
+            m |= ModifiersState::CONTROL;
+        }
+        if alt {
+            m |= ModifiersState::ALT;
+        }
+        m
+    }
+
+    // ---- keyboard encoding ----
+
+    #[test]
+    fn encode_key_printable_named_and_ctrl() {
+        let mode = TermMode::empty();
+        let plain = Key::Character("a".into());
+
+        // Printable text → UTF-8 bytes.
+        assert_eq!(encode_key(&plain, Some("a"), &mods(false, false), &mode), b"a");
+        // Named Enter → CR (never the text's \r).
+        assert_eq!(encode_key(&Key::Named(NamedKey::Enter), Some("\r"), &mods(false, false), &mode), b"\r");
+        // Backspace → DEL (xterm convention).
+        assert_eq!(encode_key(&Key::Named(NamedKey::Backspace), Some("\x08"), &mods(false, false), &mode), &[0x7f]);
+        // Escape / Tab.
+        assert_eq!(encode_key(&Key::Named(NamedKey::Escape), None, &mods(false, false), &mode), b"\x1b");
+        assert_eq!(encode_key(&Key::Named(NamedKey::Tab), Some("\t"), &mods(false, false), &mode), b"\t");
+
+        // Ctrl+letter → the C0 control byte (Ctrl+C = 0x03 = SIGINT).
+        assert_eq!(
+            encode_key(&Key::Character("c".into()), Some("c"), &mods(true, false), &mode),
+            vec![0x03]
+        );
+        // Ctrl+Space → NUL.
+        assert_eq!(
+            encode_key(&Key::Named(NamedKey::Space), Some(" "), &mods(true, false), &mode),
+            vec![0]
+        );
+        // Alt prefixes ESC (meta).
+        assert_eq!(
+            encode_key(&plain, Some("a"), &mods(false, true), &mode),
+            vec![0x1b, b'a']
+        );
+        // Unlabeled keys produce nothing.
+        assert!(encode_key(&Key::Named(NamedKey::F13), None, &mods(false, false), &mode).is_empty());
+        // Control chars in text without a named key are never typed.
+        assert!(encode_key(&Key::Named(NamedKey::F14), Some("\r"), &mods(false, false), &mode).is_empty());
+    }
+
+    #[test]
+    fn encode_key_arrows_follow_cursor_mode_and_modifiers() {
+        let normal = TermMode::empty();
+        let app = TermMode::APP_CURSOR;
+        let up = Key::Named(NamedKey::ArrowUp);
+
+        // Normal mode: CSI A.
+        assert_eq!(encode_key(&up, None, &mods(false, false), &normal), b"\x1b[A");
+        // Application cursor mode: SS3 A.
+        assert_eq!(encode_key(&up, None, &mods(false, false), &app), b"\x1bOA");
+        // Ctrl+arrow: the xterm modifier parameter (1 + ctrl*4 = 5).
+        assert_eq!(encode_key(&up, None, &mods(true, false), &normal), b"\x1b[1;5A");
+        // Down/Left/Right.
+        assert_eq!(encode_key(&Key::Named(NamedKey::ArrowDown), None, &mods(false, false), &normal), b"\x1b[B");
+        assert_eq!(encode_key(&Key::Named(NamedKey::ArrowLeft), None, &mods(false, false), &normal), b"\x1b[D");
+        assert_eq!(encode_key(&Key::Named(NamedKey::ArrowRight), None, &mods(false, false), &normal), b"\x1b[C");
+        // Home/End/PgUp/PgDn/Del.
+        assert_eq!(encode_key(&Key::Named(NamedKey::Home), None, &mods(false, false), &normal), b"\x1b[H");
+        assert_eq!(encode_key(&Key::Named(NamedKey::End), None, &mods(false, false), &normal), b"\x1b[F");
+        assert_eq!(encode_key(&Key::Named(NamedKey::PageUp), None, &mods(false, false), &normal), b"\x1b[5~");
+        assert_eq!(encode_key(&Key::Named(NamedKey::Delete), None, &mods(false, false), &normal), b"\x1b[3~");
+    }
+
+    // ---- mouse encoding ----
+
+    #[test]
+    fn mouse_reports_require_mouse_mode() {
+        let mode = TermMode::empty();
+        assert!(encode_mouse_report(&mode, 0, 3, 2, false).is_none(), "no mouse mode → no report");
+    }
+
+    #[test]
+    fn mouse_reports_sgr_when_enabled() {
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        // Press: <M;col+1;row+1
+        assert_eq!(
+            encode_mouse_report(&mode, 0, 3, 2, false),
+            Some(b"\x1b[<0;4;3M".to_vec())
+        );
+        // Release: m
+        assert_eq!(
+            encode_mouse_report(&mode, 0, 3, 2, true),
+            Some(b"\x1b[<0;4;3m".to_vec())
+        );
+        // Wheel buttons (64 up / 65 down).
+        assert_eq!(
+            encode_mouse_report(&mode, 64, 0, 0, false),
+            Some(b"\x1b[<64;1;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn mouse_reports_x10_fallback() {
+        let mode = TermMode::MOUSE_REPORT_CLICK;
+        // X10: ESC [ M <32+button> <32+col+1> <32+row+1>; release reports button 3.
+        assert_eq!(
+            encode_mouse_report(&mode, 0, 0, 0, false),
+            Some(vec![b'\x1b', b'[', b'M', 32, 33, 33])
+        );
+        assert_eq!(
+            encode_mouse_report(&mode, 0, 0, 0, true),
+            Some(vec![b'\x1b', b'[', b'M', 35, 33, 33])
+        );
+    }
+
+    // ---- registry ----
+
+    #[test]
+    fn registry_defaults_to_a_real_shell() {
+        let reg = shell_registry();
+        assert!(!reg.is_empty(), "this machine has a shell");
+        assert_eq!(reg[0], default_shell(), "registry[0] is the default");
+        assert!(reg[0].is_file(), "the default shell exists");
+        // No duplicates.
+        let mut sorted = reg.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), reg.len());
+    }
+
+    // ---- LIVE PTY round-trip (a real bash, a real echo) ----
+
+    /// Drain with a timeout: poll until the grid contains `needle` (the shell
+    /// needs a moment to start + run the command).
+    fn wait_for_text(term: &mut Terminal, needle: &str, budget: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < budget {
+            term.drain_output(256);
+            if visible_text(term).contains(needle) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        visible_text(term).contains(needle)
+    }
+
+    /// The visible viewport as text (rows joined with \n) — test-only read.
+    fn visible_text(term: &Terminal) -> String {
+        let content = term.term.renderable_content();
+        let mut rows: Vec<Vec<char>> = vec![Vec::new(); term.size.rows];
+        for indexed in content.display_iter {
+            if let Some(vp) = term::point_to_viewport(content.display_offset, indexed.point) {
+                if vp.line < rows.len() {
+                    let row = &mut rows[vp.line];
+                    if row.len() <= vp.column.0 {
+                        row.resize(vp.column.0 + 1, ' ');
+                    }
+                    row[vp.column.0] = indexed.cell.c;
+                }
+            }
+        }
+        rows.into_iter()
+            .map(|r| r.into_iter().collect::<String>().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn pty_round_trip_echo_and_group_kill() {
+        let d = temp_dir("pty");
+        let size = GridSize::new(80, 24);
+        let mut term =
+            Terminal::spawn_with(d.path(), &default_shell(), size, || {}).expect("spawn the shell");
+
+        // A real command echoes into the grid.
+        term.key_input(b"echo ark-pty-ok\r");
+        assert!(
+            wait_for_text(&mut term, "ark-pty-ok", Duration::from_secs(5)),
+            "output missing: {:?}",
+            visible_text(&term)
+        );
+
+        // Resize round-trip (model + pty size).
+        assert!(term.resize(GridSize::new(60, 20)));
+        assert_eq!(term.size(), GridSize::new(60, 20));
+        assert!(!term.resize(GridSize::new(60, 20)), "same size: no-op");
+
+        // Process-group teardown: a background sleep dies with the tab.
+        term.key_input(b"sleep 300 & echo $!\r");
+        let mut pid = None;
+        let start = Instant::now();
+        while pid.is_none() && start.elapsed() < Duration::from_secs(5) {
+            term.drain_output(256);
+            for line in visible_text(&term).lines() {
+                let t = line.trim();
+                if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+                    pid = t.parse::<u32>().ok();
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let pid = pid.expect("background job pid printed");
+        let proc = format!("/proc/{pid}");
+        assert!(Path::new(&proc).exists(), "sleep {pid} alive before teardown");
+        let shell_pid = term.child.process_id();
+        drop(term);
+        thread::sleep(Duration::from_millis(300));
+        assert!(!Path::new(&proc).exists(), "the background job died with the tab");
+        if let Some(sp) = shell_pid {
+            assert!(!Path::new(&format!("/proc/{sp}")).exists(), "the shell was reaped");
+        }
+    }
+}
