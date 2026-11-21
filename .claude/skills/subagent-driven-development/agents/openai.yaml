@@ -1,0 +1,6 @@
+interface:
+  display_name: "Subagent Driven Development"
+  short_description: "Help with Subagent Driven Development tasks"
+
+policy:
+  allow_implicit_invocation: false
