@@ -13,6 +13,7 @@
 //! `wait()` reaps.
 
 use std::io::{Read, Write};
+use std::time::Duration;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender, TryRecvError};
 use std::thread;
@@ -126,7 +127,11 @@ pub struct Terminal {
     /// Kept for `resize`; dropped FIRST on close (SIGHUP to the group).
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Box<dyn Write + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// `None` once the Drop teardown reaper owns it.
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// The shell's process group (== its pid: session leader), captured at
+    /// spawn for the teardown group kill.
+    pgid: Option<u32>,
     term: Term<NoopListener>,
     processor: ansi::Processor,
     rx: mpsc::Receiver<Vec<u8>>,
@@ -135,16 +140,76 @@ pub struct Terminal {
 }
 
 impl Drop for Terminal {
-    /// Teardown: dropping the master hangs up the session (POSIX kills the
-    /// shell's whole process group via SIGHUP); `kill()` backstops; `wait()`
-    /// reaps so no zombie survives the tab.
+    /// Teardown (deterministic process-group kill): dropping the master
+    /// SIGHUPs the foreground group, then a detached reaper SIGTERMs the
+    /// shell's whole process group (the shell is the session leader, so its
+    /// pgid == its pid — verified via /proc before the group kill), SIGKILLs
+    /// after a short grace, and reaps — all off the UI thread. Without a
+    /// pgid match (never a group leader) it falls back to child.kill().
     fn drop(&mut self) {
         self.master.take();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        log::debug!("terminal torn down (process group killed)");
+        let pgid = self.pgid;
+        if let Some(mut child) = self.child.take() {
+            let spawned = thread::Builder::new()
+                .name("ark-term-reaper".into())
+                .spawn(move || {
+                    // Every process in the shell's SESSION: interactive bash
+                    // gives background jobs their own process group, so a
+                    // group kill can't reach them — the session sweep does.
+                    // Bounded: one /proc pass, then TERM → grace → KILL.
+                    let victims = session_members(pgid);
+                    for pid in &victims {
+                        unsafe { libc::kill(*pid, libc::SIGTERM) };
+                    }
+                    thread::sleep(Duration::from_millis(80));
+                    for pid in &victims {
+                        unsafe { libc::kill(*pid, libc::SIGKILL) };
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    log::debug!(
+                        "terminal torn down ({} session process(es) killed)",
+                        victims.len()
+                    );
+                });
+            if spawned.is_err() {
+                log::warn!("terminal reaper thread unavailable — dropping the child");
+            }
+        }
     }
 }
+
+/// All pids whose SESSION equals the shell's (the shell + its descendants,
+/// including background jobs in their own groups). One bounded /proc pass.
+fn session_members(pgid: Option<u32>) -> Vec<i32> {
+    let Some(sid) = pgid else { return Vec::new() };
+    let mut out = Vec::new();
+    let Ok(dirs) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    for entry in dirs.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue; // non-numeric entries
+        };
+        if let Some(s) = session_id(pid) {
+            if s == sid {
+                out.push(pid as i32);
+            }
+        }
+    }
+    out
+}
+
+/// The session id of `pid` (field 6 of /proc/<pid>/stat — fields after the
+/// comm paren: state, ppid, pgrp, session, …). None when gone/unreadable.
+fn session_id(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit(')').next()?;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    fields.get(3)?.parse().ok()
+}
+
 
 impl Terminal {
     /// Spawn `shell` in a PTY rooted at `root`, sized to `size`. Starts the
@@ -181,6 +246,10 @@ impl Terminal {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         let child = pair.slave.spawn_command(cmd).map_err(TermError::Pty)?;
+        // The shell is the session leader: pgid == pid. Captured NOW (the
+        // /proc entry is gone once the teardown reaps the shell).
+        let pgid = child.process_id();
+        let child = Some(child);
         // The slave lives in the child's session now; drop our copy so the
         // shell's exit produces EOF on the master.
         drop(pair.slave);
@@ -220,6 +289,7 @@ impl Terminal {
             processor: ansi::Processor::new(),
             rx,
             size,
+            pgid,
             exited: false,
         })
     }
@@ -987,12 +1057,25 @@ mod tests {
         let pid = pid.expect("background job pid printed");
         let proc = format!("/proc/{pid}");
         assert!(Path::new(&proc).exists(), "sleep {pid} alive before teardown");
-        let shell_pid = term.child.process_id();
+        let shell_pid = term.child.as_ref().and_then(|c| c.process_id());
         drop(term);
-        thread::sleep(Duration::from_millis(300));
-        assert!(!Path::new(&proc).exists(), "the background job died with the tab");
+        // Poll for BOTH pids (the reaper grants the shell a short HUP-
+        // forwarding grace, then kills + reaps — delivery races assertions).
+        let mut gone = vec![pid];
         if let Some(sp) = shell_pid {
-            assert!(!Path::new(&format!("/proc/{sp}")).exists(), "the shell was reaped");
+            gone.push(sp);
+        }
+        let start = Instant::now();
+        loop {
+            if gone.iter().all(|p| !Path::new(&format!("/proc/{p}")).exists()) {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(4),
+                "the process group died with the tab (jobs + shell); gone={gone:?} alive={:?}",
+                gone.iter().filter(|p| Path::new(&format!("/proc/{p}")).exists()).collect::<Vec<_>>()
+            );
+            thread::sleep(Duration::from_millis(25));
         }
     }
 }

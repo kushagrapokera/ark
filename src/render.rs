@@ -35,6 +35,12 @@ pub struct Theme {
     pub syntax_number: ColorRgb,
     /// Comments (overlay0 — dimmer than fg_dim).
     pub syntax_comment: ColorRgb,
+    /// Git tree-badge / gutter-mark colors (M7): modified, added, deleted,
+    /// untracked.
+    pub git_modified: ColorRgb,
+    pub git_added: ColorRgb,
+    pub git_deleted: ColorRgb,
+    pub git_untracked: ColorRgb,
 }
 
 impl Theme {
@@ -50,6 +56,10 @@ impl Theme {
         syntax_string: (0xA6, 0xE3, 0xA1),
         syntax_number: (0xFA, 0xB3, 0x87),
         syntax_comment: (0x6C, 0x70, 0x86),
+        git_modified: (0xF9, 0xE2, 0xAF),
+        git_added: (0xA6, 0xE3, 0xA1),
+        git_deleted: (0xF3, 0x8B, 0xA8),
+        git_untracked: (0x94, 0xE2, 0xD5),
     };
 }
 

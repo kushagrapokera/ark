@@ -51,6 +51,12 @@ pub fn read_dir_sorted_with_cap(dir: &Path, cap: usize) -> io::Result<DirListing
                 continue;
             }
         };
+        // Git internals are never a workspace view (M7): skip the .git
+        // directory specifically (other dotfiles stay listed honestly).
+        if entry.file_name() == ".git" {
+            skipped += 1;
+            continue;
+        }
         // file_type() does NOT follow symlinks: a symlink (even one pointing
         // at a directory) classifies as a non-dir, so the tree can never
         // follow it into a cycle; broken symlinks classify without erroring.

@@ -162,6 +162,7 @@ dependencies = [
  "cosmic-text",
  "env_logger",
  "fontdb",
+ "libc",
  "log",
  "memmap2",
  "notify",

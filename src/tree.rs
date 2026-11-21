@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use cosmic_text::Weight;
 
 use crate::fs::{read_dir_sorted, DirListing};
+use crate::git::{Badge, GitStatus};
 use crate::icons::{self, Icon};
 use crate::render::{Canvas, Theme};
 use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
@@ -31,6 +32,8 @@ pub const ICON_SIZE: f64 = 14.0;
 /// Width of the scrollbar track occupying the panel's right edge; rows
 /// (backgrounds and hit testing) stay left of it.
 pub const TRACK_W: f64 = 8.0;
+/// Width of the git-badge letter cell at the row's right edge.
+pub const BADGE_W: f64 = 12.0;
 
 /// One visible row: a BORROW of the tree's cached state (no per-frame
 /// cloning of listings into rows).
@@ -364,6 +367,7 @@ pub fn handle_pointer(tree: &mut FileTree, panel: Rect, pointer: Pointer, double
 /// or File icon, name text at indent+20 — text may cross the panel's right
 /// edge and is left unclipped (no horizontal scroll in M3). Hovered rows
 /// paint `bg_elevated`, selected rows `selection` (selection wins).
+#[allow(clippy::too_many_arguments)] // git snapshot joins raster borrows; bundling would obscure the call
 pub fn draw_tree_panel(
     canvas: &mut Canvas,
     text: &mut TextSystem,
@@ -372,6 +376,7 @@ pub fn draw_tree_panel(
     panel: Rect,
     tree: &FileTree,
     pointer: Pointer,
+    git: Option<&GitStatus>,
 ) {
     if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
         return; // degenerate panel or scale: nothing to raster
@@ -435,6 +440,29 @@ pub fn draw_tree_panel(
             baseline as f32,
             TextStyle { color: theme.fg, font_size, weight: Weight::NORMAL },
         );
+
+        // Git badge (M/A/D/U letter) at the row's right edge.
+        if let Some(b) = git.and_then(|g| g.badge_for(row.path)) {
+            let (letter, color) = badge_glyph(b, theme);
+            let badge_x = panel.x + panel.w - TRACK_W - BADGE_W;
+            text.draw_line(
+                canvas,
+                letter,
+                (badge_x * scale) as f32,
+                baseline as f32,
+                TextStyle { color, font_size, weight: Weight::BOLD },
+            );
+        }
+    }
+}
+
+/// Badge letter + color per kind.
+fn badge_glyph(b: Badge, theme: &Theme) -> (&'static str, crate::render::ColorRgb) {
+    match b {
+        Badge::Modified => ("M", theme.git_modified),
+        Badge::Added => ("A", theme.git_added),
+        Badge::Deleted => ("D", theme.git_deleted),
+        Badge::Untracked => ("U", theme.git_untracked),
     }
 }
 

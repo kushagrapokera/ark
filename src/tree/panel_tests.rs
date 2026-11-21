@@ -41,6 +41,10 @@ fn panel_theme() -> Theme {
         syntax_string: bg,
         syntax_number: bg,
         syntax_comment: bg,
+        git_modified: bg,
+        git_added: bg,
+        git_deleted: bg,
+        git_untracked: bg,
     }
 }
 
@@ -210,7 +214,7 @@ fn viewport_only_rendering() {
     let draw = |canvas: &mut Canvas, tree: &FileTree| {
         canvas.fill(theme.bg);
         let mut text = TextSystem::new();
-        draw_tree_panel(canvas, &mut text, &theme, 1.0, panel, tree, Pointer::default());
+        draw_tree_panel(canvas, &mut text, &theme, 1.0, panel, tree, Pointer::default(), None);
     };
 
     let mut canvas = Canvas::new(220, 90);
@@ -253,7 +257,7 @@ fn row_visuals_pin_colors() {
 
     let draw = |canvas: &mut Canvas, text: &mut TextSystem, tree: &FileTree, pointer: Pointer| {
         canvas.fill(theme.bg);
-        draw_tree_panel(canvas, text, &theme, 1.0, PANEL, tree, pointer);
+        draw_tree_panel(canvas, text, &theme, 1.0, PANEL, tree, pointer, None);
     };
 
     // Collapsed dir: chevron ink in the depth-0 chevron cell.
@@ -327,10 +331,10 @@ fn panel_draw_degenerates_safely() {
         Rect { x: 10.0, y: 10.0, w: 200.0, h: 0.0 },
         Rect { x: 10.0, y: 10.0, w: -5.0, h: 66.0 },
     ] {
-        draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, panel, &tree, Pointer::default());
+        draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, panel, &tree, Pointer::default(), None);
     }
-    draw_tree_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &tree, Pointer::default());
-    draw_tree_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &tree, Pointer::default());
+    draw_tree_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &tree, Pointer::default(), None);
+    draw_tree_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &tree, Pointer::default(), None);
     assert_eq!(
         count_color_in(&canvas, theme.bg, 0, 0, 220, 90),
         220 * 90,
@@ -340,6 +344,45 @@ fn panel_draw_degenerates_safely() {
     // NaN offset (pub field corrupted) must not panic either.
     let (_d4, mut nan_tree) = panel_fixture("degenerate-nan");
     nan_tree.offset = f64::NAN;
-    draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &nan_tree, Pointer::default());
+    draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &nan_tree, Pointer::default(), None);
     assert!(row_at(PANEL, 50.0, 21.0, &nan_tree).is_none(), "NaN offset hits nothing");
+}
+
+// ---- M7: git badges ----
+
+#[test]
+fn git_badges_render_at_the_row_edge() {
+    let (d, tree) = panel_fixture("git-badge");
+    // Distinct badge tokens (the shared theme keeps them chrome-invisible).
+    let mut theme = panel_theme();
+    theme.git_modified = (250, 179, 135);
+    theme.git_untracked = (148, 226, 213);
+    theme.git_added = (166, 227, 161);
+    // The fixture's b.txt is modified; A/ untracked.
+    let status = crate::git::parse_status(
+        "1 .M N... 000000 100644 100644 111 222 b.txt\n? A\n",
+    )
+    .rooted(d.path());
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(220, 90);
+    canvas.fill(theme.bg);
+    draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &tree, Pointer::default(), Some(&status));
+
+    // The badge zone sits left of the scrollbar track: [panel.x+w-8-12, panel.x+w-8).
+    let zone_x0 = (PANEL.x + PANEL.w - crate::tree::TRACK_W - crate::tree::BADGE_W) as u32;
+    let zone_x1 = (PANEL.x + PANEL.w - crate::tree::TRACK_W) as u32;
+    assert!(
+        count_color_in(&canvas, theme.git_modified, zone_x0, 32, zone_x1, 54) > 0,
+        "M badge ink next to b.txt's row"
+    );
+    assert!(
+        count_color_in(&canvas, theme.git_untracked, zone_x0, 10, zone_x1, 32) > 0,
+        "U badge ink next to A's row (dirs badge too — untracked dir)"
+    );
+    // No badge on rows without a status.
+    assert_eq!(
+        count_color_in(&canvas, theme.git_added, zone_x0, 10, zone_x1, 54),
+        0,
+        "no A ink"
+    );
 }

@@ -23,6 +23,7 @@ use std::time::SystemTime;
 use cosmic_text::Weight;
 use memmap2::Mmap;
 
+use crate::git::{FileDiff, GutterMark};
 use crate::highlight::{Highlighter, Token};
 use crate::render::{Canvas, Theme};
 use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
@@ -429,6 +430,7 @@ fn char_range(s: &str, a: usize, b: usize) -> &str {
 /// Gutter: reserved git-mark strip (M7 paints it) + right-aligned dim line
 /// numbers. Selection backgrounds paint under the text; text draws in
 /// `highlighter` token colors over `fg`.
+#[allow(clippy::too_many_arguments)] // highlighter + diff join raster borrows; explicit beats bundling
 pub fn draw_viewer_panel(
     canvas: &mut Canvas,
     text: &mut TextSystem,
@@ -437,6 +439,7 @@ pub fn draw_viewer_panel(
     panel: Rect,
     viewer: &Viewer,
     highlighter: &Highlighter,
+    file_diff: Option<&FileDiff>,
 ) {
     if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
         return; // degenerate panel or scale: nothing to raster
@@ -458,8 +461,25 @@ pub fn draw_viewer_panel(
         return;
     }
 
-    // Reserved git-mark strip (M7 paints marks into it).
+    // Reserved git-mark strip: the M7 diff marks paint into it.
     canvas.fill_rect(panel.x, panel.y, MARK_W, panel.h, theme.bg_elevated, scale);
+    let offset_lines = viewer.offset_lines();
+    let visible_rows = ((panel.h / LINE_H).floor() as usize).max(1);
+    if let Some(diff) = file_diff {
+        for (line, kind) in &diff.marks {
+            // line is 1-based; the strip bar spans the line's row band.
+            let row_i = *line as i64 - 1 - offset_lines as i64;
+            if row_i < 0 || row_i as usize >= visible_rows {
+                continue;
+            }
+            let y = panel.y + row_i as f64 * LINE_H;
+            let color = match kind {
+                GutterMark::Added => theme.git_added,
+                GutterMark::Modified => theme.git_modified,
+            };
+            canvas.fill_rect(panel.x + 1.0, y + 1.0, MARK_W - 2.0, LINE_H - 2.0, color, scale);
+        }
+    }
 
     let gutter_w = gutter_width(viewer.line_count(), advance);
     let text_x = panel.x + gutter_w;

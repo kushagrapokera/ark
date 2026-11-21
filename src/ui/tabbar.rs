@@ -107,6 +107,10 @@ mod tests {
             syntax_string: (0, 7, 0),
             syntax_number: (0, 0, 7),
             syntax_comment: (8, 8, 0),
+            git_modified: (9, 0, 0),
+            git_added: (0, 9, 0),
+            git_deleted: (0, 0, 9),
+            git_untracked: (10, 10, 0),
         };
         let mut text = TextSystem::new();
         let mut canvas = Canvas::new(600, 40);

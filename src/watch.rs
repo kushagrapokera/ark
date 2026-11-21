@@ -17,12 +17,19 @@ use winit::event_loop::EventLoopProxy;
 /// UserEvent payload for app-level wake-ups: fs activity (M5) or PTY data
 /// ready to drain (M6). The event loop coalesces naturally — handlers do
 /// bounded work per wake.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Wake {
     /// fs activity happened — check the fs pending flag.
     FsChanged,
     /// A terminal tab has PTY bytes ready to drain.
     PtyData,
+    /// A git status subprocess finished (None = not a repo / git missing).
+    GitStatus(Option<std::sync::Arc<crate::git::GitStatus>>),
+    /// A git diff subprocess finished (stale results are dropped by path).
+    GitDiff {
+        path: std::path::PathBuf,
+        diff: std::sync::Arc<crate::git::FileDiff>,
+    },
 }
 
 /// Coalescing flag shared with notify's event thread: `signal` sets it,

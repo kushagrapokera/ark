@@ -10,6 +10,7 @@
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context as _};
@@ -25,6 +26,7 @@ use winit::{
 
 mod frame;
 mod fs;
+mod git;
 mod highlight;
 mod icons;
 mod render;
@@ -40,6 +42,7 @@ mod watch;
 mod demo;
 
 use frame::{AppLayout, Frame, SplitDrag};
+use git::{FileDiff as GitFileDiff, GitStatus};
 use highlight::Highlighter;
 use render::{Canvas, Damage, DamageRect, Theme};
 use state::BufferCache;
@@ -229,6 +232,14 @@ struct App {
     last_tree_refresh: Option<Instant>,
     /// fs activity arrived while the tree refresh was debounced away.
     fs_dirty: bool,
+    /// Git status snapshot (M7): None = not a repo / git unavailable.
+    git: Option<Arc<GitStatus>>,
+    /// One open-file diff (bounded: replaced, never accumulated).
+    file_diff: Option<(PathBuf, Arc<GitFileDiff>)>,
+    /// A git status subprocess is running (one at a time).
+    git_inflight: bool,
+    /// fs activity arrived while the status was in flight.
+    git_pending: bool,
     /// Smoke-test mode (`ARK_SMOKE=1`): exit cleanly after the first
     /// successful present so automated verification never blocks on a human.
     smoke: bool,
@@ -283,6 +294,10 @@ impl App {
             flash_until: None,
             last_tree_refresh: None,
             fs_dirty: false,
+            git: None,
+            file_diff: None,
+            git_inflight: false,
+            git_pending: false,
             smoke,
             pending_exit: false,
         }
@@ -364,6 +379,12 @@ impl App {
             None => None,
         };
         let viewer_error = self.viewer_error.as_deref();
+        let git = self.git.as_deref();
+        let file_diff = self
+            .file_diff
+            .as_ref()
+            .filter(|(p, _)| Some(p) == self.open_path.as_ref())
+            .map(|(_, d)| d.as_ref());
         let effects = frame::draw_frame(
             &mut Frame {
                 canvas: &mut self.canvas,
@@ -377,6 +398,8 @@ impl App {
                 viewer_error,
                 viewer_flash: self.flash_until.is_some_and(|d| Instant::now() < d),
                 highlighter: &self.highlighter,
+                git,
+                file_diff,
                 terms: Some(&mut self.terms),
                 term_focused: self.term_focused,
                 tabbar: &mut self.term_tabbar,
@@ -429,6 +452,88 @@ impl App {
         // has ended (request_redraw borrows all of self).
         if need_redraw {
             self.request_redraw();
+        }
+    }
+
+    /// Dispatch a git status subprocess (M7): one in flight at a time; fs
+    /// bursts during flight set a pending flag, re-dispatched on completion.
+    /// Without a proxy (tests) the status runs inline.
+    fn request_git_refresh(&mut self) {
+        if self.git_inflight {
+            self.git_pending = true;
+            return;
+        }
+        self.git_inflight = true;
+        let root = self.root.clone();
+        match self.proxy.clone() {
+            Some(proxy) => {
+                let spawned = thread::Builder::new()
+                    .name("ark-git-status".into())
+                    .spawn(move || {
+                        let status = match git::status(&root) {
+                            Ok(s) => Some(Arc::new(s)),
+                            Err(e) => {
+                                log::debug!("git status unavailable: {e}");
+                                None
+                            }
+                        };
+                        let _ = proxy.send_event(Wake::GitStatus(status));
+                    });
+                if spawned.is_err() {
+                    self.git_inflight = false;
+                    self.git_pending = true;
+                }
+            }
+            None => {
+                let status = git::status(&root).ok().map(Arc::new);
+                self.apply_git_status(status);
+            }
+        }
+    }
+
+    /// Apply a finished status snapshot (None = not a repo): refresh the
+    /// open-file diff and repaint.
+    fn apply_git_status(&mut self, status: Option<Arc<GitStatus>>) {
+        self.git_inflight = false;
+        self.git = status;
+        self.request_diff_refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+        if self.git_pending {
+            self.git_pending = false;
+            self.request_git_refresh();
+        }
+    }
+
+    /// Re-run the per-file diff for the OPEN viewer file (lazy, M7): a
+    /// background subprocess lands via Wake::GitDiff; a stale result (file
+    /// no longer open) is dropped on arrival. Without a proxy (tests) it
+    /// runs inline.
+    fn request_diff_refresh(&mut self) {
+        let Some(p) = self.open_path.clone() else {
+            self.file_diff = None;
+            return;
+        };
+        if self.git.is_none() {
+            self.file_diff = None;
+            return;
+        }
+        match self.proxy.clone() {
+            Some(proxy) => {
+                let spawned = thread::Builder::new()
+                    .name("ark-git-diff".into())
+                    .spawn(move || {
+                        let diff = git::diff_file(&p, &p).unwrap_or_default();
+                        let _ = proxy.send_event(Wake::GitDiff { path: p, diff: Arc::new(diff) });
+                    });
+                if spawned.is_err() {
+                    log::warn!("git diff thread spawn failed");
+                }
+            }
+            None => {
+                let diff = git::diff_file(&p, &p).unwrap_or_default();
+                self.file_diff = Some((p, Arc::new(diff)));
+            }
         }
     }
 
@@ -518,6 +623,7 @@ impl App {
     /// Returns whether the viewer changed.
     fn process_fs_change(&mut self) -> bool {
         self.fs_dirty = true;
+        self.request_git_refresh();
         let mut viewer_changed = false;
         if let Some(p) = self.open_path.clone() {
             let disk_changed = self
@@ -531,6 +637,7 @@ impl App {
                         info!("viewer refreshed (changed on disk): {}", p.display());
                         self.flash_until = Some(Instant::now() + FLASH_DURATION);
                         viewer_changed = true;
+                        self.request_diff_refresh();
                     }
                     Err(e) => {
                         // Keep the old view: a vanished/binary file never
@@ -613,6 +720,17 @@ impl ApplicationHandler<Wake> for App {
                 self.window = Some(window);
                 self.damage.mark_full();
                 self.request_redraw();
+                // M7: status on open — dispatched here (the loop is live);
+                // send_event before run_app is dropped by winit.
+                self.request_git_refresh();
+                // Catch fs events that fired during startup (their wake was
+                // coalesced away before the loop existed).
+                if self.watcher.as_ref().map(Watcher::take_pending).unwrap_or(false) {
+                    if self.process_fs_change() {
+                        self.damage.mark_full();
+                    }
+                    self.schedule_followups(event_loop);
+                }
             }
             Err(e) => {
                 error!("surface creation failed: {e}");
@@ -636,6 +754,15 @@ impl ApplicationHandler<Wake> for App {
                 self.request_redraw();
             }
             Wake::PtyData => self.on_pty_data(event_loop),
+            Wake::GitStatus(status) => self.apply_git_status(status),
+            Wake::GitDiff { path, diff } => {
+                // Stale-diff guard: only the currently open file applies.
+                if self.open_path.as_deref() == Some(path.as_path()) {
+                    self.file_diff = Some((path, diff));
+                    self.damage.mark_full();
+                    self.request_redraw();
+                }
+            }
         }
     }
 

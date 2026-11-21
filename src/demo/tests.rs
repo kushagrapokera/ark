@@ -136,6 +136,10 @@ fn content_box_text_baseline_scales_with_dpi() {
         syntax_string: bg,
         syntax_number: bg,
         syntax_comment: bg,
+        git_modified: bg,
+        git_added: bg,
+        git_deleted: bg,
+        git_untracked: bg,
     };
     let mut text = TextSystem::new();
     let mut scratch = Canvas::new(1, 1);

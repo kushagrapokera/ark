@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use cosmic_text::Weight;
 
+use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::render::{Canvas, Theme};
 use crate::term::{self, TerminalTabs};
@@ -122,6 +123,10 @@ pub struct Frame<'a> {
     pub viewer_flash: bool,
     /// Shared regex highlighter (compiled once at startup).
     pub highlighter: &'a Highlighter,
+    /// Git status snapshot (M7): None = not a repo / git unavailable.
+    pub git: Option<&'a GitStatus>,
+    /// The open file's diff marks (gutter strip).
+    pub file_diff: Option<&'a FileDiff>,
     /// Terminal tabs (M6) — the right pane shows them while open.
     pub terms: Option<&'a mut TerminalTabs>,
     /// Terminal pane focused (keys route to the shell; cursor visible).
@@ -237,7 +242,7 @@ pub fn draw_frame(
     if tree.set_offset(tree.offset, layout.tree_panel.h) && !effects.tree_changed {
         effects.scrolled = true;
     }
-    tree::draw_tree_panel(f.canvas, f.text, f.theme, f.scale, layout.tree_panel, tree, f.pointer);
+    tree::draw_tree_panel(f.canvas, f.text, f.theme, f.scale, layout.tree_panel, tree, f.pointer, f.git);
 
     // Scrollbar (tree panel's right edge): the tree offset is the single
     // source of truth — sync in, interact, apply back.
@@ -254,7 +259,7 @@ pub fn draw_frame(
 
     // Right pane: terminal tabs (M6) while open, else the viewer /
     // placeholder.
-    if let Some(terms) = f.terms.as_deref_mut() {
+    if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
         let pane = layout.viewer_pane;
         let tabbar_rect = Rect { x: pane.x, y: pane.y, w: (pane.w - 60.0).max(0.0), h: TAB_HEIGHT };
         let plus = Rect { x: pane.x + pane.w - 56.0, y: pane.y + 3.0, w: 26.0, h: 24.0 };
@@ -311,6 +316,7 @@ pub fn draw_frame(
                 pane,
                 viewer,
                 f.highlighter,
+                f.file_diff,
             );
             // Viewer scrollbar: lines ↔ px via LINE_H (single source of
             // truth is the viewer's integer line offset).
@@ -353,7 +359,7 @@ pub fn draw_frame(
     // Status line (mono 12px, dim).
     f.text.draw_line(
         f.canvas,
-        &frame_status(tree, f.viewer.as_deref(), f.terms.as_deref(), layout.tree_panel.h),
+        &frame_status(tree, f.viewer.as_deref(), f.terms.as_deref(), f.git, layout.tree_panel.h),
         (LEFT_MARGIN * f.scale) as f32,
         ((lh - STATUS_BASELINE_INSET) * f.scale) as f32,
         TextStyle { color: f.theme.fg_dim, font_size: status_size, weight: Weight::NORMAL },
@@ -394,6 +400,7 @@ fn frame_status(
     tree: &FileTree,
     viewer: Option<&Viewer>,
     terms: Option<&TerminalTabs>,
+    git: Option<&GitStatus>,
     viewport: f64,
 ) -> String {
     if let Some(err) = &tree.last_error {
@@ -412,10 +419,14 @@ fn frame_status(
         tree.visible_count(),
         tree.expanded_dir_count()
     );
+    // Git tail (all modes): changed-entry count, or the not-a-repo note.
+    let git_tail = match git {
+        Some(g) => format!(" · git {}", g.changed_count()),
+        None => " · no git".to_string(),
+    };
     // With terminals open the viewer segment is replaced by the terminal one.
     if terms_status(terms).is_some() {
-        let head = format!("{head} · scroll {pct:.0}%");
-        return format!("{head} · {}", terms_status(terms).expect("checked above"));
+        return format!("{head} · scroll {pct:.0}% · {}{git_tail}", terms_status(terms).expect("checked above"));
     }
     match viewer {
         None => {
@@ -424,7 +435,7 @@ fn frame_status(
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "none".into());
-            format!("{head} · selected {selected} · scroll {pct:.0}%")
+            format!("{head} · selected {selected} · scroll {pct:.0}%{git_tail}")
         }
         Some(v) => {
             let name = v.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -433,7 +444,7 @@ fn frame_status(
                 0 => "none".to_string(),
                 n => format!("{n} chars"),
             };
-            format!("{head} · scroll {pct:.0}% · {name} {} lines{trunc} · sel {sel}", v.line_count())
+            format!("{head} · scroll {pct:.0}% · {name} {} lines{trunc} · sel {sel}{git_tail}", v.line_count())
         }
     }
 }

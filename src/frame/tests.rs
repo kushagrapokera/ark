@@ -34,16 +34,16 @@ fn frame_status_formats_tree_state() {
     fs::File::create(d.path().join("b.txt")).expect("create b.txt");
     let mut tree = FileTree::new(d.path());
     assert_eq!(
-        frame_status(&tree, None, None, 66.0),
-        "visible 2 · expanded 0 · selected none · scroll 0%"
+        frame_status(&tree, None, None, None, 66.0),
+        "visible 2 · expanded 0 · selected none · scroll 0% · no git"
     );
 
     // Expanding an EMPTY dir changes the expansion count, not the rows;
     // content (44px) still fits the 66px viewport → 0%.
     tree.toggle(&tree.root.join("A"), true);
     assert_eq!(
-        frame_status(&tree, None, None, 66.0),
-        "visible 2 · expanded 1 · selected none · scroll 0%"
+        frame_status(&tree, None, None, None, 66.0),
+        "visible 2 · expanded 1 · selected none · scroll 0% · no git"
     );
 
     // Overflow: 10 files (220px) in a 3-row viewport (66px) → max offset
@@ -56,19 +56,19 @@ fn frame_status_formats_tree_state() {
     let mut big = FileTree::new(d2.path());
     assert!(big.scroll_by(1000.0, 66.0), "10 rows in a 3-row viewport overflows");
     assert_eq!(big.offset, 154.0, "clamped to the max offset");
-    assert!(frame_status(&big, None, None, 66.0).ends_with("scroll 100%"), "max offset → 100%");
+    assert!(frame_status(&big, None, None, None, 66.0).contains("scroll 100% · no git"), "max offset → 100%");
     big.select(&big.root.join("f3.txt"));
     assert!(
-        frame_status(&big, None, None, 66.0).contains("selected f3.txt"),
+        frame_status(&big, None, None, None, 66.0).contains("selected f3.txt"),
         "{}",
-        frame_status(&big, None, None, 66.0)
+        frame_status(&big, None, None, None, 66.0)
     );
 
     // A listing failure replaces the status line (error surface).
     let missing = temp_dir("status-missing");
     let gone = missing.path().join("gone");
     let err_tree = FileTree::new(&gone);
-    assert!(frame_status(&err_tree, None, None, 66.0).contains("cannot list"), "error surfaces");
+    assert!(frame_status(&err_tree, None, None, None, 66.0).contains("cannot list"), "error surfaces");
 }
 
 #[test]
@@ -81,8 +81,8 @@ fn frame_status_formats_viewer_state() {
 
     // Viewer segment: name, line count, no selection → none.
     assert_eq!(
-        frame_status(&tree, Some(&viewer), None, 632.0),
-        "visible 1 · expanded 0 · scroll 0% · sample.txt 3 lines · sel none"
+        frame_status(&tree, Some(&viewer), None, None, 632.0),
+        "visible 1 · expanded 0 · scroll 0% · sample.txt 3 lines · sel none · no git"
     );
 
     // A selection reports its char count.
@@ -90,9 +90,9 @@ fn frame_status_formats_viewer_state() {
     v.select_at(0, 0);
     v.extend_select(0, 5);
     assert!(
-        frame_status(&tree, Some(&v), None, 632.0).ends_with("sel 5 chars"),
+        frame_status(&tree, Some(&v), None, None, 632.0).contains("sel 5 chars"),
         "{}",
-        frame_status(&tree, Some(&v), None, 632.0)
+        frame_status(&tree, Some(&v), None, None, 632.0)
     );
 
     // A truncated view carries the flag.
@@ -101,9 +101,9 @@ fn frame_status_formats_viewer_state() {
     let trunc = Viewer::open_with_cap(&big, 50).expect("opens");
     assert!(trunc.truncated());
     assert!(
-        frame_status(&tree, Some(&trunc), None, 632.0).contains("big.txt 25 lines · truncated"),
+        frame_status(&tree, Some(&trunc), None, None, 632.0).contains("big.txt 25 lines · truncated"),
         "{}",
-        frame_status(&tree, Some(&trunc), None, 632.0)
+        frame_status(&tree, Some(&trunc), None, None, 632.0)
     );
 }
 
@@ -135,6 +135,10 @@ fn frame_theme() -> Theme {
         syntax_string: (166, 227, 161),
         syntax_number: (250, 179, 135),
         syntax_comment: (108, 112, 134),
+        git_modified: (250, 179, 135),
+        git_added: (166, 227, 161),
+        git_deleted: (243, 139, 168),
+        git_untracked: (148, 226, 213),
     }
 }
 
@@ -163,6 +167,8 @@ fn frame_scene_renders_spec_surfaces() {
             viewer_error: None,
             viewer_flash: false,
             highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
             terms: None,
             term_focused: false,
             tabbar: &mut TabBar::default(),
@@ -223,6 +229,8 @@ fn frame_viewer_pane_renders_over_placeholder() {
             viewer_error: None,
             viewer_flash: false,
             highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
             terms: None,
             term_focused: false,
             tabbar: &mut TabBar::default(),
@@ -284,6 +292,8 @@ fn frame_interactions_report_effects() {
         viewer_error: None,
         viewer_flash: false,
         highlighter: &Highlighter::new(),
+        git: None,
+        file_diff: None,
         terms: None,
         term_focused: false,
         tabbar: &mut TabBar::default(),
@@ -363,6 +373,8 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         viewer_error: None,
         viewer_flash: false,
         highlighter: &Highlighter::new(),
+        git: None,
+        file_diff: None,
         terms: None,
         term_focused: false,
         tabbar: &mut TabBar::default(),
@@ -456,6 +468,8 @@ fn viewer_flash_paints_accent_strip() {
                 viewer_error: None,
                 viewer_flash: flash,
                 highlighter: &Highlighter::new(),
+                git: None,
+                file_diff: None,
                 terms: None,
                 term_focused: false,
                 tabbar,
@@ -513,6 +527,8 @@ fn viewer_offset_self_heals_before_hit_testing() {
             viewer_error: None,
             viewer_flash: false,
             highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
             terms: None,
             term_focused: false,
             tabbar: &mut TabBar::default(),

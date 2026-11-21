@@ -24,6 +24,10 @@ fn panel_theme() -> Theme {
         syntax_string: (166, 227, 161),
         syntax_number: bg,
         syntax_comment: bg,
+        git_modified: bg,
+        git_added: bg,
+        git_deleted: bg,
+        git_untracked: bg,
     }
 }
 
@@ -45,7 +49,7 @@ fn draw(theme: &Theme, panel: Rect, viewer: &Viewer, canvas: &mut Canvas) -> cra
     let font_size = (UI_FONT_SIZE as f64 * 1.0) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     canvas.fill(theme.bg);
-    draw_viewer_panel(canvas, &mut text, theme, 1.0, panel, viewer, &Highlighter::new());
+    draw_viewer_panel(canvas, &mut text, theme, 1.0, panel, viewer, &Highlighter::new(), None);
     m
 }
 
@@ -216,10 +220,10 @@ fn panel_draw_degenerates_safely() {
         Rect { x: 10.0, y: 10.0, w: 300.0, h: 0.0 },
         Rect { x: 10.0, y: 10.0, w: 300.0, h: -5.0 },
     ] {
-        draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, panel, &v, &Highlighter::new());
+        draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, panel, &v, &Highlighter::new(), None);
     }
-    draw_viewer_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &v, &Highlighter::new());
-    draw_viewer_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &v, &Highlighter::new());
+    draw_viewer_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &v, &Highlighter::new(), None);
+    draw_viewer_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &v, &Highlighter::new(), None);
     assert_eq!(
         count_color_in(&canvas, theme.bg, 0, 0, 320, 80),
         320 * 80,
@@ -235,5 +239,44 @@ fn panel_draw_degenerates_safely() {
     assert!(
         count_color_in(&canvas, theme.fg_dim, 10, 10, 310, 67) > 0,
         "(empty file) note ink"
+    );
+}
+
+// ---- M7: git gutter marks ----
+
+#[test]
+fn git_marks_paint_the_reserved_strip() {
+    let (_d, p) = lines_fixture("git-marks");
+    let mut v = Viewer::open(&p).expect("opens");
+    v.scroll_by_lines(2, 3); // lines 3,4,5 visible
+    // Distinct mark tokens (the shared theme keeps them chrome-invisible).
+    let mut theme = panel_theme();
+    theme.git_added = (166, 227, 161);
+    theme.git_modified = (250, 179, 135);
+    let mut canvas = Canvas::new(320, 90);
+    // Marks: line 3 added, line 5 modified (visible); line 40 off-screen.
+    let diff = crate::git::FileDiff {
+        marks: vec![(3, crate::git::GutterMark::Added), (5, crate::git::GutterMark::Modified)],
+        truncated: false,
+    };
+    let mut text = TextSystem::new();
+    canvas.fill(theme.bg);
+    draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &v, &Highlighter::new(), Some(&diff));
+
+    // Strip bars: green at row 0 (line 3), yellow at row 2 (line 5).
+    let strip_x0 = PANEL.x as u32 + 1;
+    let strip_x1 = PANEL.x as u32 + crate::viewer::MARK_W as u32 - 1;
+    assert!(
+        count_color_in(&canvas, theme.git_added, strip_x0, 11, strip_x1, 30) > 10,
+        "added bar in the strip at the first visible row"
+    );
+    assert!(
+        count_color_in(&canvas, theme.git_modified, strip_x0, 48, strip_x1, 68) > 10,
+        "modified bar at the third visible row"
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.git_added, strip_x0, 48, strip_x1, 68),
+        0,
+        "no added ink at the modified row"
     );
 }

@@ -44,6 +44,10 @@ notify = "9"
 # battle-tested VT parser/grid model we render ourselves (viewport-only).
 portable-pty = "0.9"
 alacritty_terminal = "0.26"
+# M7 terminal teardown: POSIX kill(-pgid) so closing a tab kills the shell's
+# whole process group (libc is already in the tree transitively; no new
+# transitive deps).
+libc = "0.2"
 
 [profile.release]
 lto = "thin"
