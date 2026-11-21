@@ -1,0 +1,345 @@
+//! Tree-panel tests: row hit-testing (`row_at`), pointer interaction
+//! (`handle_pointer`) and viewport-only rendering pins (`draw_tree_panel`).
+//! Pixel pins use the M2 chrome-invisible theme technique (all tokens but
+//! the one under test set to bg so exact-color counts are deterministic).
+
+use super::*;
+use crate::fs::testutil::{temp_dir, TempDir};
+use crate::render::{Canvas, Theme};
+use crate::text::TextSystem;
+use crate::ui::testutil::{count_color_in, ink_bbox_in};
+use crate::ui::{Pointer, Rect};
+use std::fs;
+
+/// Fixture: root containing `A/` (containing `C/` and `a.txt`) and `b.txt`,
+/// expanded state controlled by the caller. Rows: [A, C, a.txt, b.txt].
+fn panel_fixture(label: &str) -> (TempDir, FileTree) {
+    let d = temp_dir(label);
+    fs::create_dir_all(d.path().join("A/C")).expect("create A/C");
+    fs::File::create(d.path().join("A/a.txt")).expect("create A/a.txt");
+    fs::File::create(d.path().join("b.txt")).expect("create b.txt");
+    let tree = FileTree::new(d.path());
+    (d, tree)
+}
+
+/// 4-row panel exactly covering rows [A, C, a.txt, b.txt] at offset 0.
+const PANEL: Rect = Rect { x: 10.0, y: 10.0, w: 200.0, h: 88.0 };
+
+/// Theme with only the row-ink tokens distinct: fg paints icons/names,
+/// bg_elevated the hover bg, selection the selected bg.
+fn panel_theme() -> Theme {
+    let bg = (0, 0, 0);
+    Theme {
+        bg,
+        bg_elevated: (10, 20, 30),
+        fg: (255, 255, 255),
+        fg_dim: bg,
+        accent: bg,
+        border: bg,
+        selection: (40, 50, 60),
+        syntax_keyword: bg,
+        syntax_string: bg,
+        syntax_number: bg,
+        syntax_comment: bg,
+    }
+}
+
+// ---- row_at: offset-aware hit testing ----
+
+#[test]
+fn row_at_maps_offset_to_rows() {
+    let (_d, mut tree) = panel_fixture("row-at");
+    tree.toggle(&tree.root.join("A"), true); // rows: A, C, a.txt, b.txt
+
+    // Row 0 (A, dir, depth 0): pointer anywhere in [10, 32).
+    let hit = row_at(PANEL, 50.0, 21.0, &tree).expect("row 0 hit");
+    assert_eq!(hit.row.name, "A");
+    assert!(hit.row.is_dir && hit.row.depth == 0);
+    assert_eq!(hit.y, 10.0, "row 0 top edge");
+    assert!(!hit.on_chevron, "x=50 is past the depth-0 chevron zone [10, 26)");
+
+    // Chevron zone of a dir row: indent 0 → [panel.x, panel.x+16).
+    assert!(row_at(PANEL, 15.0, 21.0, &tree).expect("A hit").on_chevron);
+    assert!(
+        !row_at(PANEL, 26.0, 21.0, &tree).expect("A hit").on_chevron,
+        "x=26 is past the chevron zone (indent 0 + 16)"
+    );
+
+    // Deeper row: C at depth 1 → chevron zone [panel.x+16, panel.x+32).
+    let c = row_at(PANEL, 30.0, 43.0, &tree).expect("row 1 hit");
+    assert_eq!(c.row.name, "C");
+    assert_eq!(c.row.depth, 1);
+    assert!(c.on_chevron, "x=30 is inside depth-1 chevron zone [26, 42)");
+    assert!(
+        !row_at(PANEL, 20.0, 43.0, &tree).expect("C hit").on_chevron,
+        "x=20 is left of the depth-1 chevron zone"
+    );
+
+    // File rows never report the chevron zone, whatever x is.
+    let a_txt = row_at(PANEL, 15.0, 65.0, &tree).expect("row 2 hit");
+    assert_eq!(a_txt.row.name, "a.txt");
+    assert!(!a_txt.on_chevron, "files have no chevron zone");
+
+    // Scroll shifts the mapping: a 3-row viewport on the 4-row content has
+    // max offset 22 (overshoot clamps); at offset 22 pointer row-0 band
+    // hits row 1, whose panel-space y is the panel's top band.
+    let (_d2, mut tree2) = panel_fixture("row-at-scroll");
+    tree2.toggle(&tree2.root.join("A"), true);
+    let scroll_panel = Rect { x: 10.0, y: 10.0, w: 200.0, h: 66.0 };
+    assert!(tree2.scroll_by(5.0 * ROW_H, scroll_panel.h), "overflow exists");
+    assert_eq!(tree2.offset, 22.0, "clamped to count×ROW_H − viewport");
+    let hit = row_at(scroll_panel, 50.0, 21.0, &tree2).expect("hit through offset");
+    assert_eq!(hit.row.name, "C", "offset 22 maps pointer y=21 to row 1");
+    assert_eq!(hit.y, 10.0, "row 1 now occupies the panel's top band");
+
+    // Misses: outside the panel, inside the scrollbar track zone, or past
+    // the last row (stale offset reaching beyond the visible rows).
+    assert!(row_at(PANEL, 5.0, 21.0, &tree).is_none(), "left of panel");
+    assert!(row_at(PANEL, 50.0, 9.0, &tree).is_none(), "above panel");
+    assert!(row_at(PANEL, 50.0, 99.0, &tree).is_none(), "below panel");
+    assert!(
+        row_at(PANEL, PANEL.x + PANEL.w - 4.0, 21.0, &tree).is_none(),
+        "the 8px scrollbar track zone never hits a row"
+    );
+    let (_d3, mut stale) = panel_fixture("row-at-stale");
+    stale.offset = 500.0; // pub field corrupted directly (e.g. future bug)
+    assert!(
+        row_at(PANEL, 50.0, 21.0, &stale).is_none(),
+        "offset past the content → past the last row → None"
+    );
+}
+
+// ---- handle_pointer: click routing ----
+
+#[test]
+fn handle_pointer_routes_clicks() {
+    let (_d, mut tree) = panel_fixture("clicks");
+    let a = tree.root.join("A");
+    let b = tree.root.join("b.txt");
+
+    // Chevron click on a dir row toggles.
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 15.0, y: 21.0, down: false, click: true }, false),
+        TreeAction::Toggled
+    );
+    assert!(tree.is_expanded(&a), "chevron click expands");
+    assert!(tree.selected().is_none(), "chevron click does not select");
+
+    // Row-body click on a dir selects ONLY (never expands).
+    tree.toggle(&a, true); // collapse again
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 21.0, down: false, click: true }, false),
+        TreeAction::Selected
+    );
+    assert!(!tree.is_expanded(&a), "row-body click does not expand a dir");
+    assert_eq!(tree.selected(), Some(a.as_path()), "row-body click selects");
+
+    // Clicking a file selects it; re-clicking the same row is a no-op.
+    // (A is collapsed here, so only 2 rows are visible: b.txt at row 1.)
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, false),
+        TreeAction::Selected
+    );
+    assert_eq!(tree.selected(), Some(b.as_path()), "file click selects");
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, false),
+        TreeAction::None,
+        "re-selecting the same row changes nothing"
+    );
+
+    // Clicks outside the panel (or without the click flag) never act.
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 500.0, y: 21.0, down: false, click: true }, false),
+        TreeAction::None
+    );
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 15.0, y: 21.0, down: false, click: false }, false),
+        TreeAction::None
+    );
+    assert_eq!(tree.selected(), Some(b.as_path()), "state untouched");
+}
+
+// ---- handle_pointer: double-click opens files (M4) ----
+
+#[test]
+fn handle_pointer_opens_files_on_double_click() {
+    let (_d, mut tree) = panel_fixture("open");
+    let b = tree.root.join("b.txt");
+
+    // Single click selects; double-click on the SAME file opens it.
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, false),
+        TreeAction::Selected
+    );
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, true),
+        TreeAction::Opened(b.clone())
+    );
+
+    // A double-click on a dir row body does NOT open (selection only).
+    let a = tree.root.join("A");
+    assert_eq!(
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 21.0, down: false, click: true }, true),
+        TreeAction::Selected,
+        "dirs never open — single-select even on double-click"
+    );
+    assert!(!tree.is_expanded(&a));
+}
+
+// ---- draw_tree_panel: viewport-only ink ----
+
+/// 100 files named with strictly growing length ("a", "aa", …) so a row
+/// band's ink width identifies which row is rendered there.
+fn wide_fixture(label: &str) -> (TempDir, FileTree) {
+    let d = temp_dir(label);
+    for i in 0..100 {
+        let name = "a".repeat(i + 1);
+        fs::File::create(d.path().join(&name)).expect("create file");
+    }
+    let tree = FileTree::new(d.path());
+    (d, tree)
+}
+
+#[test]
+fn viewport_only_rendering() {
+    let (_d, mut tree) = wide_fixture("viewport");
+    assert_eq!(tree.visible_count(), 100);
+    let theme = panel_theme();
+    let panel = Rect { x: 10.0, y: 10.0, w: 200.0, h: 66.0 }; // 3 rows high
+
+    let draw = |canvas: &mut Canvas, tree: &FileTree| {
+        canvas.fill(theme.bg);
+        let mut text = TextSystem::new();
+        draw_tree_panel(canvas, &mut text, &theme, 1.0, panel, tree, Pointer::default());
+    };
+
+    let mut canvas = Canvas::new(220, 90);
+    draw(&mut canvas, &tree);
+    // All ink confined to the 3-row band [10, 76) — nothing below it.
+    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 220, 90).expect("tree ink");
+    assert!(bbox.1 >= 10 && bbox.3 < 76, "ink rows confined to the visible band, got {bbox:?}");
+    // Band 3 [54, 76) shows row 2 = "aaa" (3 chars + icon).
+    let (_, short) = band_width(&canvas, theme.bg, 54, 76);
+
+    // Scroll by two rows: band 3 now shows row 4 = "aaaaa" (5 chars).
+    assert!(tree.scroll_by(2.0 * ROW_H, panel.h));
+    draw(&mut canvas, &tree);
+    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 220, 90).expect("scrolled tree ink");
+    assert!(bbox.1 >= 10 && bbox.3 < 76, "scrolled ink still viewport-only");
+    let (_, long) = band_width(&canvas, theme.bg, 54, 76);
+    assert!(
+        long > short + 10,
+        "band 3 must show the LONGER row 4 after scrolling 2 rows ({short} → {long})"
+    );
+}
+
+/// Ink extent (min_x, max_x) within a horizontal pixel band.
+fn band_width(canvas: &Canvas, bg: crate::render::ColorRgb, y0: u32, y1: u32) -> (u32, u32) {
+    let bbox = ink_bbox_in(canvas, bg, 0, y0, canvas.width(), y1)
+        .expect("band must contain ink");
+    (bbox.0, bbox.2)
+}
+
+// ---- draw_tree_panel: row visuals ----
+
+#[test]
+fn row_visuals_pin_colors() {
+    let (_d, mut tree) = panel_fixture("visuals");
+    let theme = panel_theme();
+    let a = tree.root.join("A");
+    let b = tree.root.join("b.txt");
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(220, 90);
+
+    let draw = |canvas: &mut Canvas, text: &mut TextSystem, tree: &FileTree, pointer: Pointer| {
+        canvas.fill(theme.bg);
+        draw_tree_panel(canvas, text, &theme, 1.0, PANEL, tree, pointer);
+    };
+
+    // Collapsed dir: chevron ink in the depth-0 chevron cell.
+    draw(&mut canvas, &mut text, &tree, Pointer::default());
+    let w_right = ink_bbox_in(&canvas, theme.bg, 10, 10, 27, 32).expect("collapsed chevron ink");
+
+    // Expanded dir: ChevronDown is a wider glyph than ChevronRight.
+    tree.toggle(&a, true);
+    draw(&mut canvas, &mut text, &tree, Pointer::default());
+    let w_down = ink_bbox_in(&canvas, theme.bg, 10, 10, 27, 32).expect("expanded chevron ink");
+    // Robust glyph discriminator (AA edges round tightly): ChevronDown is
+    // wider than tall, ChevronRight taller than wide.
+    assert!(
+        w_down.2 - w_down.0 > w_down.3 - w_down.1,
+        "ChevronDown ({w_down:?}) must be wider than tall"
+    );
+    assert!(
+        w_right.3 - w_right.1 > w_right.2 - w_right.0,
+        "ChevronRight ({w_right:?}) must be taller than wide"
+    );
+
+    // File row: collapse A again → rows [A, b.txt], the file at row 1
+    // (y [32, 54)) with its File icon ink at indent+2.
+    tree.toggle(&a, true);
+    draw(&mut canvas, &mut text, &tree, Pointer::default());
+    assert!(
+        ink_bbox_in(&canvas, theme.bg, 12, 32, 27, 54).is_some(),
+        "file icon ink in its depth-0 cell"
+    );
+
+    // Hover: row 0 under the pointer paints bg_elevated across the row.
+    let hover_pointer = Pointer { x: 50.0, y: 21.0, down: false, click: false };
+    draw(&mut canvas, &mut text, &tree, hover_pointer);
+    assert!(
+        count_color_in(&canvas, theme.bg_elevated, 10, 10, 202, 32) > 1000,
+        "hovered row paints bg_elevated"
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.bg_elevated, 10, 32, 202, 54),
+        0,
+        "non-hovered rows stay clean"
+    );
+
+    // Selection: row bg selection, winning over hover when both apply.
+    tree.select(&b);
+    draw(&mut canvas, &mut text, &tree, Pointer::default());
+    assert!(
+        count_color_in(&canvas, theme.selection, 10, 32, 202, 54) > 1000,
+        "selected row paints the selection bg"
+    );
+    draw(&mut canvas, &mut text, &tree, Pointer { x: 50.0, y: 43.0, down: false, click: false });
+    assert!(
+        count_color_in(&canvas, theme.selection, 10, 32, 202, 54) > 1000
+            && count_color_in(&canvas, theme.bg_elevated, 10, 32, 202, 54) == 0,
+        "selection wins when a selected row is also hovered"
+    );
+}
+
+// ---- draw_tree_panel: degenerate frames ----
+
+#[test]
+fn panel_draw_degenerates_safely() {
+    let (_d, tree) = panel_fixture("degenerate");
+    let theme = panel_theme();
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(220, 90);
+    canvas.fill(theme.bg);
+
+    for panel in [
+        Rect { x: 10.0, y: 10.0, w: 0.0, h: 66.0 },
+        Rect { x: 10.0, y: 10.0, w: 200.0, h: 0.0 },
+        Rect { x: 10.0, y: 10.0, w: -5.0, h: 66.0 },
+    ] {
+        draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, panel, &tree, Pointer::default());
+    }
+    draw_tree_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &tree, Pointer::default());
+    draw_tree_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &tree, Pointer::default());
+    assert_eq!(
+        count_color_in(&canvas, theme.bg, 0, 0, 220, 90),
+        220 * 90,
+        "degenerate frames rasterize nothing"
+    );
+
+    // NaN offset (pub field corrupted) must not panic either.
+    let (_d4, mut nan_tree) = panel_fixture("degenerate-nan");
+    nan_tree.offset = f64::NAN;
+    draw_tree_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &nan_tree, Pointer::default());
+    assert!(row_at(PANEL, 50.0, 21.0, &nan_tree).is_none(), "NaN offset hits nothing");
+}
