@@ -1,0 +1,8 @@
+
+# Per-plan SDD workspaces are scratch: everything except the journal.
+# (Exclude contents, not the directory itself, so the journal negation works.)
+implementation/*/.sdd/*
+!implementation/*/.sdd/journal.md
+
+# Rust build artifacts
+/target
