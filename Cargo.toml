@@ -1,0 +1,52 @@
+[package]
+name = "ark"
+version = "0.1.0"
+edition = "2021"
+description = "ark — ultra-lightweight agent-first code editor"
+license = "MIT"
+
+[dependencies]
+# CLI entry point (`ark [PATH]`)
+clap = { version = "4", features = ["derive"] }
+# Windowing (native decorations, Wayland/X11/Windows)
+winit = "0.30"
+# Software presentation: writes pixels to the window, no GPU context
+softbuffer = "0.4"
+# CPU rasterization of the whole UI (paths, rects, icons)
+tiny-skia = "0.11"
+# Text shaping/layout/rasterization. default-features off drops `fontconfig`
+# — the system-font scanner (memory rule 4: bundled fonts only).
+cosmic-text = { version = "0.14", default-features = false, features = ["std", "swash"] }
+# fontdb types used to load bundled font bytes into cosmic-text (same
+# version as cosmic-text's own dependency so Source::Binary matches)
+fontdb = "0.16"
+# Error handling: thiserror-style definitions via anyhow at the edges
+anyhow = "1"
+# Logging (rule 4 in AGENTS.md)
+log = "0.4"
+env_logger = "0.11"
+# M4 viewer: memory-mapped file IO. Zero-copy reads; RSS grows only by the
+# pages actually touched (viewport discipline), no transitive deps.
+memmap2 = "0.9"
+# M4 highlighter: token regexes. The rule set is compiled once at startup
+# (bounded); matching runs on the ~40 visible lines per frame only.
+regex = "1"
+# M4 selection copy: native Wayland data-control clipboard. A serving thread
+# lives only while ark owns the clipboard; arboard (X11 fallback) deferred —
+# see implementation/m4-viewer/plan.md.
+wl-clipboard-rs = "0.9"
+# M5 live refresh: inotify fs events. notify runs its own internal thread
+# (one per process); events coalesce into a single pending flag in ark — no
+# per-event allocations reach the app, nothing grows with event storms.
+notify = "9"
+# M6 terminals: real PTYs (one reader thread per terminal tab, bounded
+# backpressure channel — no byte is dropped, memory is capped) and the
+# battle-tested VT parser/grid model we render ourselves (viewport-only).
+portable-pty = "0.9"
+alacritty_terminal = "0.26"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+

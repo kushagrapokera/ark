@@ -1,0 +1,889 @@
+//! ark — ultra-lightweight agent-first code editor.
+//!
+//! M3: the lazy virtualized file tree panel in the real app frame. `frame.rs`
+//! owns layout + scene composition; `tree.rs` owns the tree state model and
+//! its viewport-only panel rendering. `App` routes winit events into the
+//! frame: tree scroll marks panel-level damage (partial presents), everything
+//! else is full. The M2 demo scene survives as test-only `demo.rs`. HiDPI:
+//! layout in logical px, raster ×scale.
+
+use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{bail, Context as _};
+use clap::Parser;
+use log::{error, info};
+use softbuffer::{Context, Surface};
+use winit::{
+    application::ApplicationHandler,
+    event::{ElementState, MouseScrollDelta, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    window::{Window, WindowId},
+};
+
+mod frame;
+mod fs;
+mod highlight;
+mod icons;
+mod render;
+mod state;
+mod term;
+mod text;
+mod tree;
+mod ui;
+mod viewer;
+mod watch;
+/// Test-only M2 demo scene.
+#[cfg(test)]
+mod demo;
+
+use frame::{AppLayout, Frame, SplitDrag};
+use highlight::Highlighter;
+use render::{Canvas, Damage, DamageRect, Theme};
+use state::BufferCache;
+use alacritty_terminal::term::TermMode;
+use text::{TextSystem, UI_FONT_SIZE};
+use tree::FileTree;
+use ui::{Pointer, Rect, Scrollbar, Split};
+use viewer::{Viewer, LINE_H};
+use watch::{Wake, Watcher};
+
+/// Logical px scrolled per wheel notch.
+const WHEEL_PX: f64 = 40.0;
+/// Viewer LRU capacity (memory rule: bounded open buffers).
+const BUFFER_CACHE_CAP: usize = 8;
+/// Double-click window (ms) and click slop (logical px).
+const DBL_CLICK_MS: u128 = 400;
+const DBL_CLICK_SLOP: f64 = 6.0;
+/// M5 fs pipeline: tree re-lists coalesce to one per debounce window; the
+/// flash is a bounded two-frame animation (ON for the deadline, one redraw
+/// clears it).
+const TREE_REFRESH_DEBOUNCE: Duration = Duration::from_millis(400);
+const FLASH_DURATION: Duration = Duration::from_millis(900);
+/// Terminal raster floor under output storms (~30fps).
+const TERM_FRAME_BUDGET: Duration = Duration::from_millis(33);
+
+/// Parsed command line: `ark [PATH]` — the `code .`-style entry point.
+#[derive(Parser, Debug)]
+#[command(name = "ark", version, about = "ark — ultra-lightweight agent-first code editor")]
+struct Cli {
+    /// Project directory to open (defaults to the current directory)
+    path: Option<PathBuf>,
+}
+
+/// Wheel delta → logical px for [`FileTree::scroll_by`]; `None` for unhandled
+/// kinds (PixelDelta, e.g. touchpads). winit's `LineDelta` y is positive when
+/// content moves DOWN, so the sign flips: wheel down scrolls toward the end
+/// at [`WHEEL_PX`] per notch.
+fn wheel_scroll_px(delta: &MouseScrollDelta) -> Option<f64> {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => Some(-f64::from(*y) * WHEEL_PX),
+        _ => None,
+    }
+}
+
+/// Logical rect → physical damage rect, clamped to the canvas.
+fn damage_rect(rect: Rect, scale: f64, canvas_w: u32, canvas_h: u32) -> DamageRect {
+    let x0 = ((rect.x * scale).floor().max(0.0)) as u32;
+    let y0 = ((rect.y * scale).floor().max(0.0)) as u32;
+    let x1 = (((rect.x + rect.w) * scale).ceil() as u32).min(canvas_w);
+    let y1 = (((rect.y + rect.h) * scale).ceil() as u32).min(canvas_h);
+    DamageRect {
+        x: x0.min(x1),
+        y: y0.min(y1),
+        width: x1.saturating_sub(x0),
+        height: y1.saturating_sub(y0),
+    }
+}
+
+/// M3 damage contract for tree scrolls (wheel): scroll the tree and mark
+/// ONLY the panel + status rects — header, split and viewer pane are
+/// untouched by scrolling. Returns whether anything was damaged.
+fn route_wheel_scroll(
+    tree: &mut FileTree,
+    dy: f64,
+    layout: &AppLayout,
+    scale: f64,
+    canvas: &Canvas,
+    damage: &mut Damage,
+) -> bool {
+    if !tree.scroll_by(dy, layout.tree_panel.h) {
+        return false;
+    }
+    let (cw, ch) = (canvas.width(), canvas.height());
+    damage.mark(damage_rect(layout.tree_panel, scale, cw, ch));
+    damage.mark(damage_rect(layout.status, scale, cw, ch));
+    true
+}
+
+/// M6 wheel over the terminal grid: mouse-reporting apps receive encoded
+/// wheel buttons; otherwise the scrollback scrolls. Marks the grid rect.
+/// Returns whether anything changed.
+fn route_wheel_term(app: &mut App, dy: f64, grid: &Rect) -> bool {
+    let Some(term) = app.terms.active_mut() else {
+        return false;
+    };
+    let mode = term.mode();
+    let m = app.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+    let advance = f64::from(m.advance);
+    let col = ((app.pointer.x - grid.x) / advance).floor().max(0.0) as usize;
+    let row = ((app.pointer.y - grid.y) / viewer::LINE_H).floor().max(0.0) as usize;
+    let lines = (dy / viewer::LINE_H).round() as i32;
+    if mode.intersects(TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+    {
+        let btn: u8 = if dy < 0.0 { 64 } else { 65 };
+        if let Some(bytes) = term::encode_mouse_report(&mode, btn, col, row, false) {
+            term.key_input(&bytes);
+        }
+        return true;
+    }
+    // Wheel up (dy < 0) scrolls into history; wheel down returns to the edge.
+    term.scroll_display(-lines);
+    true
+}
+
+/// M4 damage contract for viewer scrolls (wheel): convert the wheel's pixel
+/// delta into whole lines, scroll the viewer, and mark ONLY the viewer pane
+/// rect (the status line carries no viewer scroll info). Returns whether
+/// anything was damaged.
+fn route_wheel_viewer(
+    viewer: &mut Viewer,
+    dy: f64,
+    layout: &AppLayout,
+    scale: f64,
+    canvas: &Canvas,
+    damage: &mut Damage,
+) -> bool {
+    let viewport_lines = (layout.viewer_pane.h / LINE_H).floor() as usize;
+    let dy_lines = (dy / LINE_H).round() as i64;
+    if !viewer.scroll_by_lines(dy_lines, viewport_lines) {
+        return false;
+    }
+    let (cw, ch) = (canvas.width(), canvas.height());
+    damage.mark(damage_rect(layout.viewer_pane, scale, cw, ch));
+    true
+}
+
+/// Per-window render state. `Arc<Window>` clones keep the `Surface` (which
+/// owns softbuffer's display/window handles) alive independently of `window`.
+struct App {
+    root: PathBuf,
+    /// Wake proxy: fs watcher + terminal reader threads send app wake-ups.
+    /// `None` only in tests (no event loop).
+    proxy: Option<EventLoopProxy<Wake>>,
+    /// Project dir name for the window title and the frame header.
+    title: String,
+    theme: Theme,
+    text: TextSystem,
+    scale: f64,
+    window: Option<Arc<Window>>,
+    context: Option<Context<Arc<Window>>>,
+    surface: Option<Surface<Arc<Window>, Arc<Window>>>,
+    canvas: Canvas,
+    /// Size the surface buffer was last resized to, to skip redundant
+    /// reallocations on Wayland resize event storms.
+    surface_size: (u32, u32),
+    damage: Damage,
+    /// Logical pointer position + button state for the current frame. The
+    /// click flag is armed by a completed press→release and consumed by the
+    /// next render pass.
+    pointer: Pointer,
+    /// The lazy file tree (root listed eagerly at startup).
+    tree: FileTree,
+    split: Split,
+    split_drag: SplitDrag,
+    scrollbar: Scrollbar,
+    /// LRU cache of open viewers (bounded, M4).
+    buffers: BufferCache,
+    /// The currently viewed file, if any (always `buffers`-resident).
+    open_path: Option<PathBuf>,
+    /// Most recent failed open attempt (rendered in the pane, logged).
+    viewer_error: Option<String>,
+    viewer_scrollbar: Scrollbar,
+    /// Shared regex highlighter (compiled once, bounded).
+    highlighter: Highlighter,
+    /// Active keyboard modifiers (Ctrl+C copy routing).
+    modifiers: winit::event::Modifiers,
+    /// Last armed click (time + position) for double-click detection.
+    last_click: Option<(Instant, f64, f64)>,
+    /// Armed with the click flag when that click completes a double-click.
+    pending_dbl: bool,
+    /// Live-refresh watcher (M5); `None` only if watching failed to start
+    /// (logged at startup — the app runs without live refresh).
+    watcher: Option<Watcher>,
+    /// Terminal tabs (M6); the right pane shows them while open.
+    terms: term::TerminalTabs,
+    /// Terminal pane focused (keys route to the shell).
+    term_focused: bool,
+    /// Last full-scene raster (30fps terminal budget reference).
+    last_render: Option<Instant>,
+    /// A terminal-area repaint was deferred past the frame budget.
+    term_paint_due: bool,
+    /// Retained terminal tab-strip widget (labels synced with the tabs).
+    term_tabbar: ui::TabBar,
+    /// "Changed on disk" flash deadline (cleared by a scheduled redraw).
+    flash_until: Option<Instant>,
+    /// Last tree re-list (debounce reference point).
+    last_tree_refresh: Option<Instant>,
+    /// fs activity arrived while the tree refresh was debounced away.
+    fs_dirty: bool,
+    /// Smoke-test mode (`ARK_SMOKE=1`): exit cleanly after the first
+    /// successful present so automated verification never blocks on a human.
+    smoke: bool,
+    pending_exit: bool,
+}
+
+impl App {
+    fn new(
+        root: PathBuf,
+        smoke: bool,
+        watcher: Option<Watcher>,
+        proxy: Option<EventLoopProxy<Wake>>,
+    ) -> Self {
+        let title = root.file_name().and_then(|n| n.to_str()).unwrap_or("ark").to_owned();
+        let tree = FileTree::new(&root);
+        if let Some(err) = &tree.last_error {
+            // No silent failures: logged here AND shown in the status line.
+            error!("tree: {err}");
+        }
+        Self {
+            root,
+            title,
+            theme: Theme { ..Theme::DARK },
+            text: TextSystem::new(),
+            scale: 1.0,
+            window: None,
+            context: None,
+            surface: None,
+            canvas: Canvas::new(1, 1),
+            surface_size: (0, 0),
+            damage: Damage::new(64),
+            pointer: Pointer::default(),
+            proxy,
+            tree,
+            split: Split { position: 280.0 },
+            split_drag: SplitDrag::default(),
+            scrollbar: Scrollbar::default(),
+            buffers: BufferCache::new(BUFFER_CACHE_CAP),
+            open_path: None,
+            viewer_error: None,
+            viewer_scrollbar: Scrollbar::default(),
+            highlighter: Highlighter::new(),
+            modifiers: winit::event::Modifiers::default(),
+            last_click: None,
+            pending_dbl: false,
+            watcher,
+            terms: term::TerminalTabs::default(),
+            term_focused: false,
+            last_render: None,
+            term_paint_due: false,
+            term_tabbar: ui::TabBar::default(),
+            flash_until: None,
+            last_tree_refresh: None,
+            fs_dirty: false,
+            smoke,
+            pending_exit: false,
+        }
+    }
+
+    /// Request one redraw when a window exists.
+    fn request_redraw(&self) {
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Current frame layout from the window's logical size, or `None` before
+    /// the window exists / while collapsed.
+    fn app_layout(&self) -> Option<AppLayout> {
+        let window = self.window.as_ref()?;
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return None;
+        }
+        Some(frame::app_layout(
+            size.width as f64 / self.scale,
+            size.height as f64 / self.scale,
+            self.split.position,
+        ))
+    }
+
+    /// Whether the tracked pointer is inside the window (logical px) — for
+    /// arming the click flag on release.
+    fn pointer_in_window(&self) -> bool {
+        let Some(window) = &self.window else { return false };
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return false;
+        }
+        let (lw, lh) = (size.width as f64 / self.scale, size.height as f64 / self.scale);
+        self.pointer.x >= 0.0 && self.pointer.y >= 0.0 && self.pointer.x < lw && self.pointer.y < lh
+    }
+
+    /// Present one frame: raster pending damage onto the persistent canvas,
+    /// blit into the softbuffer buffer, present with damage rects.
+    fn render(&mut self) {
+        // app_layout borrows all of self; it must finish before the surface
+        // borrow below.
+        let Some(layout) = self.app_layout() else { return };
+        let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
+            return;
+        };
+        // The window size is guaranteed non-zero here (app_layout checked).
+        let size = window.inner_size();
+        if self.surface_size != (size.width, size.height) {
+            if let Err(e) = surface.resize(
+                NonZeroU32::new(size.width.max(1)).expect("nonzero width"),
+                NonZeroU32::new(size.height.max(1)).expect("nonzero height"),
+            ) {
+                error!("surface resize to {}x{} failed: {e}", size.width, size.height);
+                return;
+            }
+            self.surface_size = (size.width, size.height);
+            self.canvas.resize(size.width, size.height);
+            self.damage.mark_full();
+            info!("surface resized to {}x{}", size.width, size.height);
+        }
+        let Some(rects) = self.damage.take(self.canvas.width(), self.canvas.height()) else {
+            return; // nothing changed since the last present
+        };
+
+        // Raster the full scene per damage wave (partial damage bounds the
+        // PRESENT, not the raster). The frame consumes the armed click and
+        // double-click flags exactly once.
+        let pointer = self.pointer;
+        self.pointer.click = false;
+        let dbl = std::mem::take(&mut self.pending_dbl);
+        // The open viewer (right pane) — borrowed from the LRU cache; the
+        // open file is always most-recently-used, so the cache never evicts
+        // it mid-frame.
+        let viewer = match self.open_path.as_deref() {
+            Some(p) => self.buffers.get_or_open(Path::new(p)).ok(),
+            None => None,
+        };
+        let viewer_error = self.viewer_error.as_deref();
+        let effects = frame::draw_frame(
+            &mut Frame {
+                canvas: &mut self.canvas,
+                text: &mut self.text,
+                theme: &self.theme,
+                scale: self.scale,
+                title: &self.title,
+                pointer,
+                dbl_click: dbl,
+                viewer,
+                viewer_error,
+                viewer_flash: self.flash_until.is_some_and(|d| Instant::now() < d),
+                highlighter: &self.highlighter,
+                terms: Some(&mut self.terms),
+                term_focused: self.term_focused,
+                tabbar: &mut self.term_tabbar,
+            },
+            &layout,
+            &mut self.tree,
+            &mut self.split,
+            &mut self.split_drag,
+            &mut self.scrollbar,
+            &mut self.viewer_scrollbar,
+        );
+        // Post-raster damage for state changes made during the frame (the
+        // marks schedule the next present).
+        if effects.tree_changed {
+            self.damage.mark_full();
+        }
+        if effects.scrolled {
+            let (cw, ch) = (self.canvas.width(), self.canvas.height());
+            self.damage.mark(damage_rect(layout.tree_panel, self.scale, cw, ch));
+            self.damage.mark(damage_rect(layout.status, self.scale, cw, ch));
+        }
+        if effects.viewer_scrolled {
+            let (cw, ch) = (self.canvas.width(), self.canvas.height());
+            self.damage.mark(damage_rect(layout.viewer_pane, self.scale, cw, ch));
+        }
+        let mut need_redraw = false;
+        if let Some(path) = effects.opened {
+            // Double-click open: goes through the LRU cache; a failure (Io /
+            // binary refusal) surfaces in the pane and the log, never silent.
+            match self.buffers.get_or_open(&path) {
+                Ok(_) => {
+                    self.open_path = Some(path);
+                    self.viewer_error = None;
+                }
+                Err(e) => {
+                    error!("viewer: {e}");
+                    self.viewer_error = Some(e.to_string());
+                }
+            }
+            self.damage.mark_full();
+            need_redraw = true;
+        }
+
+        // Blit + present (failures are logged, never silent).
+        if render::present(surface, &self.canvas, &rects) && self.smoke {
+            self.pending_exit = true;
+        }
+        self.last_render = Some(Instant::now());
+        // The redraw for the just-opened file waits until the surface borrow
+        // has ended (request_redraw borrows all of self).
+        if need_redraw {
+            self.request_redraw();
+        }
+    }
+
+    /// Open a new terminal tab (registry's default shell, root cwd).
+    fn open_terminal_tab(&mut self) {
+        let Some(proxy) = self.proxy.clone() else {
+            error!("terminal open failed: no wake proxy");
+            return;
+        };
+        let Some(layout) = self.app_layout() else {
+            return;
+        };
+        let grid = frame::term_grid_rect(layout.viewer_pane);
+        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+        let advance = f64::from(m.advance);
+        let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
+        match self.terms.open(&self.root, size, proxy) {
+            Ok(()) => {
+                self.term_focused = true;
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+            Err(e) => error!("terminal open failed: {e}"),
+        }
+    }
+
+    /// Encode + write a mouse report to the active terminal when the running
+    /// app has enabled mouse reporting. Returns whether a report was sent.
+    fn term_mouse_report(&mut self, state: ElementState) -> bool {
+        let Some(layout) = self.app_layout() else {
+            return false;
+        };
+        let grid = frame::term_grid_rect(layout.viewer_pane);
+        if !grid.contains(self.pointer.x, self.pointer.y) {
+            return false;
+        }
+        let Some(term) = self.terms.active_mut() else {
+            return false;
+        };
+        let mode = term.mode();
+        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+        let advance = f64::from(m.advance);
+        let col = ((self.pointer.x - grid.x) / advance).floor().max(0.0) as usize;
+        let row = ((self.pointer.y - grid.y) / viewer::LINE_H).floor().max(0.0) as usize;
+        let press = matches!(state, ElementState::Pressed);
+        let Some(bytes) = term::encode_mouse_report(&mode, 0, col, row, !press) else {
+            return false;
+        };
+        term.key_input(&bytes);
+        true
+    }
+
+    /// PTY data ready: drain every tab (bounded), paint the terminal area at
+    /// the frame budget (~30fps under output storms).
+    fn on_pty_data(&mut self, event_loop: &ActiveEventLoop) {
+        let parsed = self.terms.drain_all(64);
+        if !parsed {
+            return;
+        }
+        let now = Instant::now();
+        let due = self.last_render.is_none_or(|t| now.duration_since(t) >= TERM_FRAME_BUDGET);
+        if let Some(layout) = self.app_layout() {
+            let (cw, ch) = (self.canvas.width(), self.canvas.height());
+            self.damage.mark(damage_rect(
+                frame::term_grid_rect(layout.viewer_pane),
+                self.scale,
+                cw,
+                ch,
+            ));
+        }
+        if due {
+            self.term_paint_due = false;
+            self.request_redraw();
+        } else {
+            // Stay within the frame budget: schedule the paint.
+            self.term_paint_due = true;
+            if let Some(t) = self.last_render {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(t + TERM_FRAME_BUDGET));
+            }
+        }
+    }
+
+    /// Handle one coalesced fs-activity signal (M5). The open viewer
+    /// refreshes immediately (leading-edge stat check — also minimizes the
+    /// truncated-mmap exposure window); the tree re-list is debounced to the
+    /// next due point (`refresh_tree_if_due`, completed in `about_to_wait`).
+    /// Returns whether the viewer changed.
+    fn process_fs_change(&mut self) -> bool {
+        self.fs_dirty = true;
+        let mut viewer_changed = false;
+        if let Some(p) = self.open_path.clone() {
+            let disk_changed = self
+                .buffers
+                .get_or_open(&p)
+                .map(|v| v.changed_on_disk())
+                .unwrap_or(false);
+            if disk_changed {
+                match self.buffers.refresh(&p) {
+                    Ok(_) => {
+                        info!("viewer refreshed (changed on disk): {}", p.display());
+                        self.flash_until = Some(Instant::now() + FLASH_DURATION);
+                        viewer_changed = true;
+                    }
+                    Err(e) => {
+                        // Keep the old view: a vanished/binary file never
+                        // blanks the pane.
+                        error!("viewer refresh failed (keeping the old view): {e}");
+                    }
+                }
+            }
+        }
+        viewer_changed
+    }
+
+    /// Re-list the tree if the debounce window has elapsed and fs activity
+    /// happened since the last refresh. Returns whether it ran.
+    fn refresh_tree_if_due(&mut self, now: Instant) -> bool {
+        if !self.fs_dirty {
+            return false;
+        }
+        let due = self
+            .last_tree_refresh
+            .map(|t| now.duration_since(t) >= TREE_REFRESH_DEBOUNCE)
+            .unwrap_or(true);
+        if !due {
+            return false;
+        }
+        self.fs_dirty = false;
+        self.last_tree_refresh = Some(now);
+        self.tree.refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+        true
+    }
+
+    /// Schedule wake-ups for the pending follow-ups (flash clear + debounced
+    /// tree refresh).
+    fn schedule_followups(&mut self, event_loop: &ActiveEventLoop) {
+        let mut earliest: Option<Instant> = self.flash_until;
+        if self.fs_dirty {
+            let at = self.last_tree_refresh.unwrap_or_else(Instant::now) + TREE_REFRESH_DEBOUNCE;
+            earliest = Some(earliest.map_or(at, |d| d.min(at)));
+        }
+        if let Some(d) = earliest {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(d));
+        }
+    }
+}
+
+impl ApplicationHandler<Wake> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return; // already bootstrapped
+        }
+        let attrs = Window::default_attributes()
+            .with_title(format!("ark — {}", self.title))
+            .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(400.0, 300.0));
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                error!("window creation failed: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        let context = match Context::new(window.clone()) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                error!("softbuffer context creation failed: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        match Surface::new(&context, window.clone()) {
+            Ok(surface) => {
+                self.scale = window.scale_factor();
+                info!("window ready (root: {}, scale {:.2}x)", self.root.display(), self.scale);
+                self.context = Some(context);
+                self.surface = Some(surface);
+                self.window = Some(window);
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+            Err(e) => {
+                error!("surface creation failed: {e}");
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
+        match event {
+            Wake::FsChanged => {
+                let changed = self.watcher.as_ref().map(Watcher::take_pending).unwrap_or(false);
+                if !changed {
+                    return;
+                }
+                if self.process_fs_change() {
+                    self.damage.mark_full();
+                }
+                // Schedule the flash-clear frame (and any debounced tree refresh).
+                self.schedule_followups(event_loop);
+                self.request_redraw();
+            }
+            Wake::PtyData => self.on_pty_data(event_loop),
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pending_exit {
+            info!("smoke present ok — exiting");
+            event_loop.exit();
+            return;
+        }
+        let now = Instant::now();
+        // Flash clear frame: one full redraw without the strip, then back to
+        // waiting for events.
+        if let Some(d) = self.flash_until {
+            if now >= d {
+                self.flash_until = None;
+                self.damage.mark_full();
+                self.request_redraw();
+            } else {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(d));
+            }
+        }
+        // Debounced tree refresh due → run it (and reschedule if still dirty).
+        if self.refresh_tree_if_due(now) || self.fs_dirty {
+            self.schedule_followups(event_loop);
+        }
+        // Deferred terminal paint due → raster now.
+        if self.term_paint_due {
+            let due = self.last_render.is_none_or(|t| now.duration_since(t) >= TERM_FRAME_BUDGET);
+            if due {
+                self.term_paint_due = false;
+                self.request_redraw();
+            } else if let Some(t) = self.last_render {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(t + TERM_FRAME_BUDGET));
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                info!("close requested — exiting");
+                event_loop.exit();
+            }
+            WindowEvent::Resized(_) => self.request_redraw(),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.scale = scale_factor;
+                self.damage.mark_full();
+                info!("scale factor changed to {scale_factor:.2}x");
+                self.request_redraw();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                // Full repaint on pointer movement: hover backgrounds and the
+                // split divider react to position; simple and correct in M3.
+                let logical = position.to_logical(self.scale);
+                self.pointer.x = logical.x;
+                self.pointer.y = logical.y;
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+            WindowEvent::MouseInput { state, .. } => {
+                // Terminal grid: a click focuses the pane; when the running
+                // app enables mouse reporting, press/release are encoded to
+                // the shell instead of local interaction.
+                let over_grid = self
+                    .app_layout()
+                    .map(|l| {
+                        frame::term_grid_rect(l.viewer_pane)
+                            .contains(self.pointer.x, self.pointer.y)
+                    })
+                    .unwrap_or(false);
+                if self.terms.is_open() && over_grid {
+                    self.term_focused = true;
+                    if self.term_mouse_report(state) {
+                        self.damage.mark_full();
+                        self.request_redraw();
+                    }
+                }
+                match state {
+                    ElementState::Pressed => self.pointer.down = true,
+                    ElementState::Released => {
+                        // A completed press→release arms `pointer.click` for
+                        // the next render pass (render clears it). A click
+                        // completing a double-click (same spot, inside the
+                        // time window) arms `pending_dbl` alongside.
+                        let was_down = self.pointer.down;
+                        self.pointer.down = false;
+                        if was_down && self.pointer_in_window() {
+                            self.pointer.click = true;
+                            let now = Instant::now();
+                            let (x, y) = (self.pointer.x, self.pointer.y);
+                            self.pending_dbl = match self.last_click {
+                                Some((t, lx, ly)) => {
+                                    now.duration_since(t).as_millis() < DBL_CLICK_MS
+                                        && (lx - x).abs() < DBL_CLICK_SLOP
+                                        && (ly - y).abs() < DBL_CLICK_SLOP
+                                }
+                                None => false,
+                            };
+                            self.last_click = Some((now, x, y));
+                        }
+                    }
+                }
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let Some(dy) = wheel_scroll_px(&delta) else { return };
+                let Some(layout) = self.app_layout() else { return };
+                // Wheel scrolling applies over the whole panel under the
+                // pointer (its scrollbar track scrolls too, matching editors).
+                let (x, y) = (self.pointer.x, self.pointer.y);
+                let grid = frame::term_grid_rect(layout.viewer_pane);
+                let (scale, canvas, damage) = (self.scale, &self.canvas, &mut self.damage);
+                let scrolled = if layout.tree_panel.contains(x, y) {
+                    route_wheel_scroll(&mut self.tree, dy, &layout, scale, canvas, damage)
+                } else if grid.contains(x, y) && self.terms.is_open() {
+                    route_wheel_term(self, dy, &grid)
+                } else if layout.viewer_pane.contains(x, y) {
+                    match self.open_path.as_deref() {
+                        Some(p) => match self.buffers.get_or_open(Path::new(p)) {
+                            Ok(v) => route_wheel_viewer(v, dy, &layout, scale, canvas, damage),
+                            Err(_) => false,
+                        },
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+                if scrolled {
+                    self.request_redraw();
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                let ctrl = self.modifiers.state().control_key();
+                // App-level shortcuts: work whether or not the shell has focus.
+                if ctrl {
+                    if let winit::keyboard::Key::Character(s) = &event.logical_key {
+                        match s.as_str() {
+                            "t" | "T" => {
+                                self.open_terminal_tab();
+                                return;
+                            }
+                            "w" | "W" => {
+                                self.terms.close_active();
+                                if !self.terms.is_open() {
+                                    self.term_focused = false;
+                                }
+                                self.damage.mark_full();
+                                self.request_redraw();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // Focused terminal: every other key goes to the shell (Ctrl+C
+                // included — it is SIGINT there, not copy).
+                if self.terms.is_open() && self.term_focused {
+                    if let Some(term) = self.terms.active_mut() {
+                        let mode = term.mode();
+                        let bytes = term::encode_key(
+                            &event.logical_key,
+                            event.text.as_deref(),
+                            &self.modifiers.state(),
+                            &mode,
+                        );
+                        if !bytes.is_empty() {
+                            term.key_input(&bytes);
+                        }
+                    }
+                    return;
+                }
+                // M4 keyboard surface: Ctrl+C copies the viewer selection.
+                if !ctrl {
+                    return;
+                }
+                let is_c = matches!(&event.logical_key, winit::keyboard::Key::Character(s) if s == "c");
+                if !is_c {
+                    return;
+                }
+                let copied = self
+                    .open_path
+                    .as_deref()
+                    .and_then(|p| self.buffers.get_or_open(Path::new(p)).ok())
+                    .and_then(|v| v.selection_text())
+                    .map(|text| {
+                        let n = text.chars().count();
+                        viewer::copy_to_clipboard(&text).map(|_| n)
+                    });
+                match copied {
+                    Some(Ok(n)) => info!("copied {n} chars to the clipboard"),
+                    Some(Err(e)) => error!("copy failed: {e}"),
+                    None => info!("nothing selected to copy"),
+                }
+            }
+            WindowEvent::RedrawRequested => self.render(),
+            _ => {}
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .init();
+
+    let cli = Cli::parse();
+
+    let root: &Path = cli.path.as_deref().unwrap_or(Path::new("."));
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("cannot open project path {}", root.display()))?;
+    if !root.is_dir() {
+        bail!("{} is not a directory", root.display());
+    }
+
+    info!("ark {} starting (root: {})", env!("CARGO_PKG_VERSION"), root.display());
+
+    // Automated-verification hook: `ARK_SMOKE=1` exits after the first frame
+    // is presented (see App::render / about_to_wait).
+    let smoke = std::env::var("ARK_SMOKE").is_ok();
+    if smoke {
+        info!("smoke mode enabled — will exit after first present");
+    }
+
+    let event_loop = EventLoop::<Wake>::with_user_event()
+        .build()
+        .context("event loop creation")?;
+    let proxy: EventLoopProxy<Wake> = event_loop.create_proxy();
+    let watcher = match Watcher::new(&root, proxy.clone()) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            // Live refresh is a feature, not a dependency: log and continue.
+            error!("fs watcher disabled (no live refresh): {e}");
+            None
+        }
+    };
+    let mut app = App::new(root, smoke, watcher, Some(proxy));
+    event_loop.run_app(&mut app).context("event loop error")?;
+    Ok(())
+}
+
+// Crate-root tests live in their own file (the 400-line gate).
+#[cfg(test)]
+mod tests;
