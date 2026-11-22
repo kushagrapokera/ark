@@ -246,6 +246,109 @@ fn live_status_tracks_worktree_index_and_untracked() {
     assert!(matches!(status(plain.path()), Err(GitError::NotARepo)));
 }
 
+// ---- M8: commit/push command builders ----
+
+#[test]
+fn shell_quote_neutralizes_every_shell_metacharacter() {
+    assert_eq!(shell_quote("plain"), "'plain'");
+    assert_eq!(shell_quote(""), "''");
+    assert_eq!(shell_quote("two words"), "'two words'");
+    assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+    assert_eq!(shell_quote("a;b|c&&d>e"), "'a;b|c&&d>e'");
+    assert_eq!(shell_quote("weiß λ"), "'weiß λ'");
+}
+
+#[test]
+fn stage_and_commit_command_quotes_paths_and_message() {
+    let paths = vec![PathBuf::from("src/main.rs"), PathBuf::from("two words.txt"), PathBuf::from("it's.txt")];
+    assert_eq!(
+        stage_and_commit_command(&paths, "fix: it's done"),
+        "git add -- 'src/main.rs' 'two words.txt' 'it'\\''s.txt' && git commit -m 'fix: it'\\''s done'"
+    );
+    assert_eq!(PUSH_COMMAND, "git push");
+}
+
+#[test]
+fn live_commit_command_stages_only_selected_paths() {
+    let (d, f) = init_repo_with_file("live-commit");
+    // Edit the tracked file and add an untracked file with a space.
+    thread::sleep(Duration::from_millis(20));
+    std::fs::write(&f, "line 1\nCHANGED\n").expect("edit");
+    let spaced = d.path().join("two words.txt");
+    std::fs::write(&spaced, "new file\n").expect("create");
+    let st = status(d.path()).expect("status");
+    assert_eq!(st.changed_count(), 2);
+
+    // Select only the tracked file; the untracked file must stay out.
+    let selected: Vec<PathBuf> = st
+        .entries
+        .iter()
+        .filter(|e| e.path == Path::new("f.txt"))
+        .map(|e| e.path.clone())
+        .collect();
+    let cmd = stage_and_commit_command(&selected, "feat: it's selected");
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .current_dir(d.path())
+        .output()
+        .expect("sh runs");
+    assert!(
+        out.status.success(),
+        "command failed: {cmd}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]).trim(), "feat: it's selected");
+    assert_eq!(git(d.path(), &["show", "HEAD:f.txt"]), "line 1\nCHANGED\n");
+    let after = status(d.path()).expect("status after commit");
+    assert_eq!(after.changed_count(), 1, "only the untracked file remains");
+    assert!(after.entries[0].untracked);
+    assert_eq!(after.entries[0].path, PathBuf::from("two words.txt"));
+}
+
+#[test]
+fn live_push_command_updates_the_remote() {
+    let d = temp_dir("live-push");
+    let remote = d.path().join("remote.git");
+    let work = d.path().join("work");
+    std::fs::create_dir(&work).expect("create work");
+    git(d.path(), &["init", "--bare", "-q", remote.to_str().expect("utf8")]);
+    git(&work, &["init", "-q"]);
+    git(&work, &["config", "user.email", "test@ark"]);
+    git(&work, &["config", "user.name", "test"]);
+    std::fs::write(work.join("f.txt"), "one\n").expect("write");
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "one"]);
+    git(&work, &["remote", "add", "origin", remote.to_str().expect("utf8")]);
+    git(&work, &["push", "-q", "-u", "origin", "HEAD"]);
+
+    // A second commit goes up with the plain push command.
+    std::fs::write(work.join("f.txt"), "two\n").expect("edit");
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "two"]);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(PUSH_COMMAND)
+        .current_dir(&work)
+        .output()
+        .expect("sh runs");
+    assert!(
+        out.status.success(),
+        "push failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let local = git(&work, &["rev-parse", "HEAD"]);
+    let remote_head = Command::new("git")
+        .args(["--git-dir", remote.to_str().expect("utf8"), "rev-parse", "HEAD"])
+        .output()
+        .expect("git runs");
+    assert!(remote_head.status.success());
+    assert_eq!(String::from_utf8_lossy(&remote_head.stdout), local, "remote head is the local head");
+}
+
 #[test]
 fn live_diff_marks_edits_deletions_and_appends() {
     let (d, f) = init_repo_with_file("live-diff");

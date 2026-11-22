@@ -124,6 +124,9 @@ pub fn default_shell() -> PathBuf {
 /// One terminal tab: PTY + model + bounded output channel.
 pub struct Terminal {
     shell: PathBuf,
+    /// Tab label: the shell's file name for interactive tabs, or the action
+    /// name for command tabs ("git commit", "git push").
+    label: String,
     /// Kept for `resize`; dropped FIRST on close (SIGHUP to the group).
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Box<dyn Write + Send>,
@@ -225,11 +228,55 @@ impl Terminal {
         })
     }
 
+    /// Spawn `shell -c command` in a PTY rooted at `root` — the M8 git
+    /// action tabs. Output streams through the same reader thread as an
+    /// interactive shell; the tab carries an action `label`.
+    pub fn spawn_command(
+        root: &Path,
+        shell: &Path,
+        label: &str,
+        command: &str,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<Terminal, TermError> {
+        let args = ["-c", command];
+        Self::spawn_inner(root, shell, Some(label), size, &args, move || {
+            let _ = proxy.send_event(Wake::PtyData);
+        })
+    }
+
     /// The spawn core with a pluggable wake (tests pass a no-op).
     fn spawn_with(
         root: &Path,
         shell: &Path,
         size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Terminal, TermError> {
+        Self::spawn_inner(root, shell, None, size, &[], wake)
+    }
+
+    /// Test-only command spawn (no event-loop proxy).
+    #[cfg(test)]
+    fn spawn_command_with(
+        root: &Path,
+        shell: &Path,
+        label: &str,
+        command: &str,
+        size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Terminal, TermError> {
+        let args = ["-c", command];
+        Self::spawn_inner(root, shell, Some(label), size, &args, wake)
+    }
+
+    /// The shared PTY spawn: `args` empty = interactive shell; otherwise the
+    /// shell runs the command and exits (the tab keeps the output).
+    fn spawn_inner(
+        root: &Path,
+        shell: &Path,
+        label: Option<&str>,
+        size: GridSize,
+        args: &[&str],
         wake: impl Fn() + Send + 'static,
     ) -> Result<Terminal, TermError> {
         let pair = portable_pty::native_pty_system()
@@ -241,6 +288,9 @@ impl Terminal {
             })
             .map_err(TermError::Pty)?;
         let mut cmd = CommandBuilder::new(shell);
+        if !args.is_empty() {
+            cmd.args(args);
+        }
         cmd.cwd(root);
         // TERM/COLORTERM: running apps need them for colors + capabilities.
         cmd.env("TERM", "xterm-256color");
@@ -280,8 +330,15 @@ impl Terminal {
 
         let config = Config { scrolling_history: SCROLLBACK_LINES, ..Config::default() };
         let term = Term::new(config, &size, NoopListener);
+        let label = label.map(str::to_owned).unwrap_or_else(|| {
+            shell
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "shell".into())
+        });
         Ok(Terminal {
             shell: shell.to_path_buf(),
+            label,
             master: Some(pair.master),
             writer,
             child,
@@ -299,6 +356,11 @@ impl Terminal {
             .file_name()
             .map(|n| n.to_str().unwrap_or("?"))
             .unwrap_or("?")
+    }
+
+    /// The tab-strip label (shell name or the action label for command tabs).
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     #[allow(dead_code)] // test/inspection surface; the frame drives resize directly
@@ -808,10 +870,37 @@ impl TerminalTabs {
     ) -> Result<(), TermError> {
         let shell = default_shell();
         let term = Terminal::spawn(root, &shell, size, proxy)?;
-        log::info!("terminal tab opened ({} @ {}×{})", term.shell_name(), size.cols, size.rows);
+        self.push_tab(term);
+        Ok(())
+    }
+
+    /// Spawn a command tab (`shell -c command`) — the M8 git actions stream
+    /// their output here. Becomes active.
+    pub fn open_command(
+        &mut self,
+        root: &Path,
+        label: &str,
+        command: &str,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<(), TermError> {
+        let shell = default_shell();
+        let term = Terminal::spawn_command(root, &shell, label, command, size, proxy)?;
+        self.push_tab(term);
+        Ok(())
+    }
+
+    /// Append a spawned tab, log it, and make it active.
+    fn push_tab(&mut self, term: Terminal) {
+        log::info!(
+            "terminal tab opened ({}: {} @ {}×{})",
+            term.label(),
+            term.shell_name(),
+            term.size.cols,
+            term.size.rows
+        );
         self.tabs.push(term);
         self.active = self.tabs.len() - 1;
-        Ok(())
     }
 
     /// Close the active tab: the Terminal's Drop tears down the PTY (SIGHUP
@@ -1021,11 +1110,40 @@ mod tests {
     }
 
     #[test]
+    fn command_tab_streams_output_and_carries_its_label() {
+        let d = temp_dir("cmd-tab");
+        let mut term = Terminal::spawn_command_with(
+            d.path(),
+            &default_shell(),
+            "git commit",
+            "echo ark-command-ok",
+            GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn the command tab");
+
+        assert_eq!(term.label(), "git commit", "the tab carries the action label");
+        assert!(
+            wait_for_text(&mut term, "ark-command-ok", Duration::from_secs(5)),
+            "command output missing: {:?}",
+            visible_text(&term)
+        );
+    }
+
+    #[test]
     fn pty_round_trip_echo_and_group_kill() {
         let d = temp_dir("pty");
         let size = GridSize::new(80, 24);
+        // This test exercises the PTY + process-group teardown, not the user's
+        // shell dialect: `$!` and `&` are POSIX, while fish (a common $SHELL)
+        // spells the last pid `$last_pid`. Use /bin/sh when present.
+        let shell = if Path::new("/bin/sh").is_file() {
+            PathBuf::from("/bin/sh")
+        } else {
+            default_shell()
+        };
         let mut term =
-            Terminal::spawn_with(d.path(), &default_shell(), size, || {}).expect("spawn the shell");
+            Terminal::spawn_with(d.path(), &shell, size, || {}).expect("spawn the shell");
 
         // A real command echoes into the grid.
         term.key_input(b"echo ark-pty-ok\r");

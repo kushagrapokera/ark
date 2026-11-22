@@ -71,6 +71,14 @@ fn text_input_caps_growth() {
     assert!(ti.backspace(), "editing still works at the cap");
     assert!(ti.insert("z"), "room again after backspace");
     assert_eq!(ti.text.chars().count(), TEXT_INPUT_MAX_CHARS);
+
+    // M9: caller-chosen caps (config values are longer than UI fields).
+    let mut value = TextInput::default();
+    assert!(value.insert_with_cap("12345", 5));
+    assert!(!value.insert_with_cap("6", 5), "custom cap enforced");
+    assert!(value.handle_key_with_cap(TextInputKey::Backspace, 5));
+    assert!(value.handle_key_with_cap(TextInputKey::Char('6'), 5));
+    assert_eq!(value.text, "12346");
 }
 
 // ---- TextInput cursor drawing (acceptance 6) ----

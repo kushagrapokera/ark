@@ -14,30 +14,25 @@
 //!   render nothing: no panic, no pixels. `draw_button` reports `Idle`,
 //!   `draw_checkbox` returns the unchanged value (see `renderable`).
 
-// Widgets with no production consumer yet (the M3 frame uses only Split and
-// Scrollbar) are test-gated: the demo scene exercises them in test builds,
-// and the milestones that wire them (M6 tabs, M8 commit panel, M9 config
-// editor) un-gate the declarations. Gating keeps dead code out of the
-// production binary instead of allowing it.
+// Widgets with no production consumer yet are test-gated: the demo scene
+// exercises them in test builds, and the milestones that wire them (M9
+// config editor) un-gate the declarations. M8's commit panel consumes the
+// checkbox + single-line text input, so both are live now. Gating keeps dead
+// code out of the production binary instead of allowing it.
 mod button;
-#[cfg(test)]
 mod checkbox;
 mod scrollbar;
 mod split;
 mod tabbar;
-#[cfg(test)]
 mod text_input;
 
 // The re-export block preserves the pre-split `crate::ui::{...}` paths for
-// every call site (production consumers today: Scrollbar + Split; the rest
-// are demo-scene consumers in test builds only).
+// every call site.
 pub use scrollbar::Scrollbar;
 pub use split::Split;
 pub use button::{draw_button, Press};
-#[cfg(test)]
 pub use checkbox::draw_checkbox;
 pub use tabbar::{TabBar, TAB_HEIGHT};
-#[cfg(test)]
 pub use text_input::{TextInput, TextInputKey};
 
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};

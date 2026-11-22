@@ -105,6 +105,135 @@ pub fn read_dir_sorted(dir: &Path) -> io::Result<DirListing> {
     read_dir_sorted_with_cap(dir, MAX_ENTRIES_PER_DIR)
 }
 
+// ---- M9 config-editor boundary: bounded reads + enforced atomic writes ----
+
+/// Config files are human-edited text; cap them so the editor's in-memory
+/// text, line index and undo deltas stay bounded.
+pub const MAX_CONFIG_BYTES: usize = 256 * 1024;
+
+/// Errors from the human-write boundary. `NotWhitelisted`/`OutsideRoot` are
+/// enforcement failures — the caller must surface them, never swallow them.
+#[derive(Debug)]
+pub enum EditError {
+    OutsideRoot,
+    NotWhitelisted(std::path::PathBuf),
+    TooLarge { len: usize },
+    Io(io::Error),
+}
+
+impl std::fmt::Display for EditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditError::OutsideRoot => write!(f, "path is outside the project root"),
+            EditError::NotWhitelisted(p) => {
+                write!(f, "{} is not a whitelisted config file", p.display())
+            }
+            EditError::TooLarge { len } => {
+                write!(f, "config file is too large ({len} bytes)")
+            }
+            EditError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for EditError {}
+
+impl From<io::Error> for EditError {
+    fn from(e: io::Error) -> Self {
+        EditError::Io(e)
+    }
+}
+
+/// Read a config file as UTF-8 text, capped. Refuses binary data (NUL) and
+/// invalid UTF-8 — the editor is a text surface only.
+pub fn read_bounded(path: &Path, cap: usize) -> Result<String, EditError> {
+    let meta = fs::metadata(path)?;
+    if meta.len() > cap as u64 {
+        return Err(EditError::TooLarge { len: meta.len() as usize });
+    }
+    let bytes = fs::read(path)?;
+    if bytes.len() > cap {
+        return Err(EditError::TooLarge { len: bytes.len() });
+    }
+    if bytes.contains(&0) {
+        return Err(EditError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "refusing binary config file",
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        EditError::Io(io::Error::new(io::ErrorKind::InvalidData, "config file is not UTF-8"))
+    })
+}
+
+/// THE human-write boundary (feature 3): canonicalize the target, require it
+/// to live inside `root`, require the whitelist match, then write a
+/// same-directory temp file and rename it over the target. Symlinks are
+/// resolved first (a link escaping the root is rejected). Permissions of an
+/// existing target are preserved.
+pub fn write_editable_atomic(
+    root: &Path,
+    path: &Path,
+    contents: &str,
+    patterns: &[String],
+) -> Result<(), EditError> {
+    let root = fs::canonicalize(root)?;
+    let requested = if path.is_absolute() { path.to_path_buf() } else { root.join(path) };
+    let parent = requested.parent().ok_or(EditError::OutsideRoot)?;
+    let parent = fs::canonicalize(parent)?;
+    if !parent.starts_with(&root) {
+        return Err(EditError::OutsideRoot);
+    }
+    let name = requested.file_name().ok_or(EditError::OutsideRoot)?;
+    // Existing symlinks are followed: never write through a link that
+    // escapes the project root. New files use the lexically-checked target.
+    let target = match fs::canonicalize(parent.join(name)) {
+        Ok(real) => {
+            if !real.starts_with(&root) {
+                return Err(EditError::OutsideRoot);
+            }
+            real
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => parent.join(name),
+        Err(e) => return Err(EditError::Io(e)),
+    };
+    if !crate::config::is_editable(&root, &target, patterns) {
+        return Err(EditError::NotWhitelisted(target));
+    }
+    if contents.len() > MAX_CONFIG_BYTES {
+        return Err(EditError::TooLarge { len: contents.len() });
+    }
+    if target.is_dir() {
+        return Err(EditError::Io(io::Error::new(
+            io::ErrorKind::IsADirectory,
+            "target is a directory",
+        )));
+    }
+    let target_parent = target.parent().ok_or(EditError::OutsideRoot)?;
+    let existing_perms = fs::metadata(&target).ok().map(|m| m.permissions());
+    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = target_parent.join(format!(
+        ".ark-tmp-{}-{id}",
+        std::process::id()
+    ));
+    let result = (|| -> io::Result<()> {
+        use std::io::Write as _;
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if let Some(perms) = existing_perms {
+            fs::set_permissions(&tmp, perms)?;
+        }
+        fs::rename(&tmp, &target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(EditError::Io)
+}
+
 /// Shared scratch-directory helper for the fs/tree unit tests: unique per
 /// call, removed (best effort) on drop so failed assertions don't leak
 /// trees into the OS temp dir.
@@ -285,7 +414,6 @@ mod tests {
     }
 
     // ---- 6. (milestone acceptance) the frozen 50k cap truncates with flag ----
-
     /// Slow: materializes MAX_ENTRIES_PER_DIR + 1 scratch files. Run
     /// explicitly via `cargo test -- --ignored` (excluded from normal runs).
     #[test]
@@ -303,5 +431,122 @@ mod tests {
         assert_eq!(small.entries.len(), 7);
         assert!(small.truncated);
         assert_eq!(small.entries[0].name, "f000000.txt", "sorted prefix preserved");
+    }
+
+    // ---- 7. M9: the enforced human-write boundary ----
+
+    fn patterns() -> Vec<String> {
+        crate::config::Config::default().editable
+    }
+
+    #[test]
+    fn write_editable_atomic_allows_whitelisted_and_rejects_code() {
+        let d = temp_dir("edit-boundary");
+        let env = d.path().join(".env");
+        fs::write(&env, "A=1\n").expect("seed");
+        write_editable_atomic(d.path(), &env, "A=2\n# note\n", &patterns()).expect("allowed");
+        assert_eq!(fs::read_to_string(&env).expect("read"), "A=2\n# note\n");
+
+        // A hand-written `main.rs` cannot be written even when the UI layer
+        // is bypassed entirely — and even with a broad custom whitelist.
+        let code = d.path().join("main.rs");
+        fs::write(&code, "fn main() {}\n").expect("seed");
+        for patterns in [patterns(), vec!["*".to_string()]] {
+            let err = write_editable_atomic(d.path(), &code, "hacked\n", &patterns)
+                .expect_err("non-whitelisted must fail");
+            assert!(matches!(err, EditError::NotWhitelisted(_)), "{err}");
+        }
+        assert_eq!(fs::read_to_string(&code).expect("read"), "fn main() {}\n", "unchanged");
+
+        // An explicitly empty whitelist disables every write.
+        let err = write_editable_atomic(d.path(), &env, "A=3\n", &[])
+            .expect_err("empty whitelist");
+        assert!(matches!(err, EditError::NotWhitelisted(_)));
+        assert_eq!(fs::read_to_string(&env).expect("read"), "A=2\n# note\n");
+    }
+
+    #[test]
+    fn write_editable_atomic_rejects_escape_paths_and_oversize() {
+        let d = temp_dir("edit-escape");
+        let outside = temp_dir("edit-outside");
+        let target = outside.path().join("secret.env");
+        fs::write(&target, "keep\n").expect("seed");
+        let err = write_editable_atomic(
+            d.path(),
+            &outside.path().join("secret.env"),
+            "changed\n",
+            &patterns(),
+        )
+        .expect_err("absolute outside");
+        assert!(matches!(err, EditError::OutsideRoot), "{err}");
+        assert_eq!(fs::read_to_string(&target).expect("read"), "keep\n");
+
+        let err = write_editable_atomic(d.path(), Path::new("../escape.env"), "x\n", &patterns())
+            .expect_err("relative escape");
+        assert!(matches!(err, EditError::OutsideRoot), "{err}");
+        assert!(!d.path().parent().expect("parent").join("escape.env").exists());
+
+        let big = d.path().join("big.yaml");
+        fs::write(&big, "a: 1\n").expect("seed");
+        let contents = "x".repeat(MAX_CONFIG_BYTES + 1);
+        let err = write_editable_atomic(d.path(), &big, &contents, &patterns())
+            .expect_err("oversize");
+        assert!(matches!(err, EditError::TooLarge { .. }), "{err}");
+        assert_eq!(fs::read_to_string(&big).expect("read"), "a: 1\n");
+    }
+
+    #[test]
+    fn write_editable_atomic_leaves_no_temp_files_and_preserves_mode() {
+        let d = temp_dir("edit-atomic");
+        let cfg = d.path().join("config.toml");
+        fs::write(&cfg, "a = 1\n").expect("seed");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&cfg, fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        write_editable_atomic(d.path(), &cfg, "a = 2\n", &patterns()).expect("write");
+        assert_eq!(fs::read_to_string(&cfg).expect("read"), "a = 2\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&cfg).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "existing file mode preserved");
+        }
+        let leftovers: Vec<_> = fs::read_dir(d.path())
+            .expect("dir")
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".ark-tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "atomic write must not leave temp files");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_editable_atomic_refuses_symlinks_escaping_the_root() {
+        let d = temp_dir("edit-symlink-root");
+        let outside = temp_dir("edit-symlink-target");
+        let real = outside.path().join("real.env");
+        fs::write(&real, "outside\n").expect("seed");
+        let link = d.path().join("link.env");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let err = write_editable_atomic(d.path(), &link, "changed\n", &patterns())
+            .expect_err("escaping symlink");
+        assert!(matches!(err, EditError::OutsideRoot), "{err}");
+        assert_eq!(fs::read_to_string(&real).expect("read"), "outside\n");
+    }
+
+    #[test]
+    fn read_bounded_caps_size_and_refuses_binary_or_non_utf8() {
+        let d = temp_dir("read-bounded");
+        let p = d.path().join("config.yaml");
+        fs::write(&p, "a: 1\n").expect("seed");
+        assert_eq!(read_bounded(&p, 100).expect("read"), "a: 1\n");
+        assert!(matches!(read_bounded(&p, 3), Err(EditError::TooLarge { .. })));
+
+        fs::write(&p, b"a\0b").expect("write binary");
+        assert!(matches!(read_bounded(&p, 100), Err(EditError::Io(_))));
+        fs::write(&p, [0xffu8, 0xfe, 0xfd]).expect("write invalid utf8");
+        assert!(matches!(read_bounded(&p, 100), Err(EditError::Io(_))));
     }
 }

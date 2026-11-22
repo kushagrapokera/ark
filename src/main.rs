@@ -24,6 +24,9 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod commit;
+mod config;
+mod configed;
 mod frame;
 mod fs;
 mod git;
@@ -52,6 +55,7 @@ use tree::FileTree;
 use ui::{Pointer, Rect, Scrollbar, Split};
 use viewer::{Viewer, LINE_H};
 use watch::{Wake, Watcher};
+use configed::ConfigEditor;
 
 /// Logical px scrolled per wheel notch.
 const WHEEL_PX: f64 = 40.0;
@@ -67,6 +71,17 @@ const TREE_REFRESH_DEBOUNCE: Duration = Duration::from_millis(400);
 const FLASH_DURATION: Duration = Duration::from_millis(900);
 /// Terminal raster floor under output storms (~30fps).
 const TERM_FRAME_BUDGET: Duration = Duration::from_millis(33);
+
+/// Which surface owns the right pane. Terminal tabs keep running while
+/// hidden; the explicit mode makes config editing (M9) reachable even when a
+/// terminal tab exists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PaneMode {
+    #[default]
+    Viewer,
+    Terminals,
+    Config,
+}
 
 /// Parsed command line: `ark [PATH]` — the `code .`-style entry point.
 #[derive(Parser, Debug)]
@@ -119,6 +134,20 @@ fn route_wheel_scroll(
     damage.mark(damage_rect(layout.tree_panel, scale, cw, ch));
     damage.mark(damage_rect(layout.status, scale, cw, ch));
     true
+}
+
+/// M8 wheel over the commit panel: convert the wheel's pixel delta into
+/// whole changed-file rows and scroll the viewport-only list. Returns
+/// whether the window moved.
+fn route_wheel_commit(
+    panel: &mut commit::CommitPanel,
+    dy: f64,
+    rect: Rect,
+    total: usize,
+) -> bool {
+    let visible = commit::layout(rect).rows;
+    let rows = (dy / commit::ROW_H).round() as i64;
+    panel.scroll_by(rows, visible, total)
 }
 
 /// M6 wheel over the terminal grid: mouse-reporting apps receive encoded
@@ -236,6 +265,18 @@ struct App {
     git: Option<Arc<GitStatus>>,
     /// One open-file diff (bounded: replaced, never accumulated).
     file_diff: Option<(PathBuf, Arc<GitFileDiff>)>,
+    /// Commit & push panel state (M8; checked-path set + message).
+    commit: commit::CommitPanel,
+    /// Right-pane mode (M9): viewer vs hidden-terminal config editing.
+    pane: PaneMode,
+    /// Human-writable whitelist from `ark.toml` (defaults on absence).
+    settings: config::Config,
+    /// The open config editor (one at a time; M9).
+    config_edits: Option<ConfigEditor>,
+    /// Most recent config-open failure (rendered in the pane).
+    config_error: Option<String>,
+    /// Window IME state (follows PaneMode::Config).
+    ime_allowed: bool,
     /// A git status subprocess is running (one at a time).
     git_inflight: bool,
     /// fs activity arrived while the status was in flight.
@@ -259,6 +300,15 @@ impl App {
             // No silent failures: logged here AND shown in the status line.
             error!("tree: {err}");
         }
+        let settings = match config::load(&root) {
+            Ok(c) => c,
+            Err(e) => {
+                // Never silently widen/shrink the write whitelist: log the
+                // broken ark.toml and continue with defaults.
+                error!("ark.toml: {e} — using default editable whitelist");
+                config::Config::default()
+            }
+        };
         Self {
             root,
             title,
@@ -296,6 +346,12 @@ impl App {
             fs_dirty: false,
             git: None,
             file_diff: None,
+            commit: commit::CommitPanel::default(),
+            pane: PaneMode::Viewer,
+            settings,
+            config_edits: None,
+            config_error: None,
+            ime_allowed: false,
             git_inflight: false,
             git_pending: false,
             smoke,
@@ -318,11 +374,20 @@ impl App {
         if size.width == 0 || size.height == 0 {
             return None;
         }
-        Some(frame::app_layout(
-            size.width as f64 / self.scale,
-            size.height as f64 / self.scale,
-            self.split.position,
-        ))
+        Some(match &self.git {
+            // M8: a repo root gets the commit panel under the tree.
+            Some(_) => frame::app_layout_with_commit(
+                size.width as f64 / self.scale,
+                size.height as f64 / self.scale,
+                self.split.position,
+                true,
+            ),
+            None => frame::app_layout(
+                size.width as f64 / self.scale,
+                size.height as f64 / self.scale,
+                self.split.position,
+            ),
+        })
     }
 
     /// Whether the tracked pointer is inside the window (logical px) — for
@@ -340,6 +405,8 @@ impl App {
     /// Present one frame: raster pending damage onto the persistent canvas,
     /// blit into the softbuffer buffer, present with damage rects.
     fn render(&mut self) {
+        // The config editor is the only IME surface (M9).
+        self.sync_ime();
         // app_layout borrows all of self; it must finish before the surface
         // borrow below.
         let Some(layout) = self.app_layout() else { return };
@@ -373,10 +440,25 @@ impl App {
         let dbl = std::mem::take(&mut self.pending_dbl);
         // The open viewer (right pane) — borrowed from the LRU cache; the
         // open file is always most-recently-used, so the cache never evicts
-        // it mid-frame.
-        let viewer = match self.open_path.as_deref() {
-            Some(p) => self.buffers.get_or_open(Path::new(p)).ok(),
-            None => None,
+        // it mid-frame. Only the explicit Viewer pane borrows it.
+        let viewer = match (self.pane, self.open_path.as_deref()) {
+            (PaneMode::Viewer, Some(p)) => self.buffers.get_or_open(Path::new(p)).ok(),
+            _ => None,
+        };
+        let terms = if self.pane == PaneMode::Terminals {
+            Some(&mut self.terms)
+        } else {
+            None
+        };
+        let config = if self.pane == PaneMode::Config {
+            self.config_edits.as_mut()
+        } else {
+            None
+        };
+        let config_error = if self.pane == PaneMode::Config {
+            self.config_error.as_deref()
+        } else {
+            None
         };
         let viewer_error = self.viewer_error.as_deref();
         let git = self.git.as_deref();
@@ -400,7 +482,10 @@ impl App {
                 highlighter: &self.highlighter,
                 git,
                 file_diff,
-                terms: Some(&mut self.terms),
+                commit: &mut self.commit,
+                config,
+                config_error,
+                terms,
                 term_focused: self.term_focused,
                 tabbar: &mut self.term_tabbar,
             },
@@ -426,20 +511,32 @@ impl App {
             self.damage.mark(damage_rect(layout.viewer_pane, self.scale, cw, ch));
         }
         let mut need_redraw = false;
+        let mut pending_config: Option<PathBuf> = None;
         if let Some(path) = effects.opened {
-            // Double-click open: goes through the LRU cache; a failure (Io /
-            // binary refusal) surfaces in the pane and the log, never silent.
-            match self.buffers.get_or_open(&path) {
-                Ok(_) => {
-                    self.open_path = Some(path);
-                    self.viewer_error = None;
+            if config::is_editable(&self.root, &path, &self.settings.editable) {
+                // Whitelisted config → open the enforced editor AFTER the
+                // present (the method needs &mut self, which the surface
+                // borrow above still holds).
+                pending_config = Some(path);
+            } else {
+                // Double-click open: goes through the LRU cache; a failure
+                // (Io / binary refusal) surfaces in the pane and logs.
+                match self.buffers.get_or_open(&path) {
+                    Ok(_) => {
+                        self.open_path = Some(path);
+                        self.viewer_error = None;
+                        self.pane = PaneMode::Viewer;
+                        self.term_focused = false;
+                        self.commit.message.focused = false;
+                    }
+                    Err(e) => {
+                        error!("viewer: {e}");
+                        self.viewer_error = Some(e.to_string());
+                        self.pane = PaneMode::Viewer;
+                    }
                 }
-                Err(e) => {
-                    error!("viewer: {e}");
-                    self.viewer_error = Some(e.to_string());
-                }
+                self.damage.mark_full();
             }
-            self.damage.mark_full();
             need_redraw = true;
         }
 
@@ -448,6 +545,23 @@ impl App {
             self.pending_exit = true;
         }
         self.last_render = Some(Instant::now());
+        // M8 submit actions run AFTER the raster pass that detected them
+        // (they open a PTY tab and schedule a fresh frame).
+        if effects.commit_clicked {
+            self.commit_now();
+        }
+        if effects.push_clicked {
+            self.push_now();
+        }
+        if effects.config_save {
+            self.save_config();
+        }
+        if effects.config_reload {
+            self.reload_config();
+        }
+        if let Some(path) = pending_config {
+            self.open_config(path);
+        }
         // The redraw for the just-opened file waits until the surface borrow
         // has ended (request_redraw borrows all of self).
         if need_redraw {
@@ -496,6 +610,10 @@ impl App {
     fn apply_git_status(&mut self, status: Option<Arc<GitStatus>>) {
         self.git_inflight = false;
         self.git = status;
+        if let Some(status) = &self.git {
+            // M8: prune unchecks/scroll against the new snapshot (bounded).
+            self.commit.retain(status);
+        }
         self.request_diff_refresh();
         self.damage.mark_full();
         self.request_redraw();
@@ -518,12 +636,13 @@ impl App {
             self.file_diff = None;
             return;
         }
+        let root = self.root.clone();
         match self.proxy.clone() {
             Some(proxy) => {
                 let spawned = thread::Builder::new()
                     .name("ark-git-diff".into())
                     .spawn(move || {
-                        let diff = git::diff_file(&p, &p).unwrap_or_default();
+                        let diff = git::diff_file(&root, &p).unwrap_or_default();
                         let _ = proxy.send_event(Wake::GitDiff { path: p, diff: Arc::new(diff) });
                     });
                 if spawned.is_err() {
@@ -531,7 +650,7 @@ impl App {
                 }
             }
             None => {
-                let diff = git::diff_file(&p, &p).unwrap_or_default();
+                let diff = git::diff_file(&root, &p).unwrap_or_default();
                 self.file_diff = Some((p, Arc::new(diff)));
             }
         }
@@ -552,12 +671,185 @@ impl App {
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.open(&self.root, size, proxy) {
             Ok(()) => {
+                self.pane = PaneMode::Terminals;
                 self.term_focused = true;
+                self.commit.message.focused = false;
                 self.damage.mark_full();
                 self.request_redraw();
             }
             Err(e) => error!("terminal open failed: {e}"),
         }
+    }
+
+    /// Open a whitelisted config file in the enforced editor. Failures render
+    /// in the pane (never a silent viewer fallback).
+    fn open_config(&mut self, path: PathBuf) {
+        match ConfigEditor::open(&self.root, &path, &self.settings.editable) {
+            Ok(editor) => {
+                info!("config editor: {} ({:?})", path.display(), editor.kind());
+                self.config_edits = Some(editor);
+                self.config_error = None;
+                self.pane = PaneMode::Config;
+                self.term_focused = false;
+                self.commit.message.focused = false;
+                self.viewer_error = None;
+            }
+            Err(e) => {
+                error!("config editor: {e}");
+                self.config_edits = None;
+                self.config_error = Some(e.to_string());
+                self.pane = PaneMode::Config;
+                self.term_focused = false;
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Close the config editor and return to the last viewed file.
+    fn close_config(&mut self) {
+        self.config_edits = None;
+        self.config_error = None;
+        self.pane = PaneMode::Viewer;
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Save the open config through the enforced atomic boundary.
+    fn save_config(&mut self) {
+        let mut saved_path = None;
+        if let Some(editor) = &mut self.config_edits {
+            match editor.save() {
+                Ok(()) => info!("config saved: {}", editor.path().display()),
+                Err(e) => error!("config save failed: {e}"),
+            }
+            saved_path = Some(editor.path().to_path_buf());
+        }
+        // Editing ark.toml itself applies the new whitelist immediately.
+        if saved_path.as_deref() == Some(self.root.join("ark.toml").as_path()) {
+            match config::load(&self.root) {
+                Ok(settings) => {
+                    self.settings = settings;
+                    info!("ark.toml reloaded: {} editable pattern(s)", self.settings.editable.len());
+                }
+                Err(e) => error!("ark.toml reload failed (keeping old whitelist): {e}"),
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn reload_config(&mut self) {
+        let Some(editor) = &mut self.config_edits else {
+            return;
+        };
+        match editor.reload() {
+            Ok(()) => info!("config reloaded: {}", editor.path().display()),
+            Err(e) => error!("config reload failed: {e}"),
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Keep the window IME state in sync with the config pane (M9).
+    fn sync_ime(&mut self) {
+        let want = self.pane == PaneMode::Config;
+        if want == self.ime_allowed {
+            return;
+        }
+        if let Some(window) = &self.window {
+            window.set_ime_allowed(want);
+        }
+        self.ime_allowed = want;
+    }
+
+    /// Pane to show after the last terminal tab closes (config wins if open).
+    fn pane_after_terminals(&self) -> PaneMode {
+        if self.config_edits.is_some() || self.config_error.is_some() {
+            PaneMode::Config
+        } else {
+            PaneMode::Viewer
+        }
+    }
+
+    /// M8: run an exact git action in a terminal tab so its output streams
+    /// (the M6 PTY reader does the streaming — ark keeps no capture buffer).
+    /// Returns whether the tab opened.
+    fn run_git_command(&mut self, label: &str, command: &str) -> bool {
+        let Some(proxy) = self.proxy.clone() else {
+            error!("{label}: cannot run without an event-loop proxy");
+            self.commit.error = Some(format!("{label}: no event loop"));
+            self.damage.mark_full();
+            self.request_redraw();
+            return false;
+        };
+        let Some(layout) = self.app_layout() else {
+            return false;
+        };
+        let grid = frame::term_grid_rect(layout.viewer_pane);
+        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+        let advance = f64::from(m.advance);
+        let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
+        match self.terms.open_command(&self.root, label, command, size, proxy) {
+            Ok(()) => {
+                info!("{label}: command tab opened (output streams there)");
+                self.pane = PaneMode::Terminals;
+                self.term_focused = true;
+                self.commit.message.focused = false;
+                self.damage.mark_full();
+                self.request_redraw();
+                true
+            }
+            Err(e) => {
+                error!("{label}: command tab failed: {e}");
+                self.commit.error = Some(format!("{label}: {e}"));
+                self.damage.mark_full();
+                self.request_redraw();
+                false
+            }
+        }
+    }
+
+    /// M8 Commit: validate the panel, then stage the checked paths and commit
+    /// with the typed message in a streaming terminal tab.
+    fn commit_now(&mut self) {
+        let Some(status) = self.git.clone() else {
+            self.commit.error = Some("not a git repository".into());
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        };
+        match self.commit.commit_command(&status) {
+            Ok(command) => {
+                let n = self.commit.selected_paths(&status).len();
+                if self.run_git_command("git commit", &command) {
+                    info!("commit: staged {n} selected path(s)");
+                    self.commit.message.text.clear();
+                    self.commit.message.cursor = 0;
+                    self.commit.error = None;
+                    self.damage.mark_full();
+                    self.request_redraw();
+                }
+            }
+            Err(e) => {
+                // No silent failure: the panel title shows the reason.
+                error!("commit blocked: {e}");
+                self.commit.error = Some(e.to_string());
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// M8 Push: `git push` in a streaming terminal tab.
+    fn push_now(&mut self) {
+        if self.git.is_none() {
+            self.commit.error = Some("not a git repository".into());
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        }
+        self.run_git_command("git push", git::PUSH_COMMAND);
     }
 
     /// Encode + write a mouse report to the active terminal when the running
@@ -593,6 +885,11 @@ impl App {
         if !parsed {
             return;
         }
+        // Hidden terminals keep their scrollback current but do not repaint
+        // another pane (M9: the right pane can be a config editor/viewer).
+        if self.pane != PaneMode::Terminals {
+            return;
+        }
         let now = Instant::now();
         let due = self.last_render.is_none_or(|t| now.duration_since(t) >= TERM_FRAME_BUDGET);
         if let Some(layout) = self.app_layout() {
@@ -625,6 +922,16 @@ impl App {
         self.fs_dirty = true;
         self.request_git_refresh();
         let mut viewer_changed = false;
+        if let Some(ed) = &mut self.config_edits {
+            if ed.refresh_if_clean() {
+                if ed.external_change() {
+                    info!("config changed on disk while dirty (edits kept)");
+                } else {
+                    info!("config reloaded (changed on disk): {}", ed.path().display());
+                }
+                viewer_changed = true;
+            }
+        }
         if let Some(p) = self.open_path.clone() {
             let disk_changed = self
                 .buffers
@@ -826,15 +1133,32 @@ impl ApplicationHandler<Wake> for App {
                 // Terminal grid: a click focuses the pane; when the running
                 // app enables mouse reporting, press/release are encoded to
                 // the shell instead of local interaction.
-                let over_grid = self
-                    .app_layout()
+                let layout = self.app_layout();
+                let over_commit = layout
+                    .as_ref()
+                    .map(|l| l.commit_panel.contains(self.pointer.x, self.pointer.y))
+                    .unwrap_or(false);
+                let over_grid = layout
+                    .as_ref()
                     .map(|l| {
                         frame::term_grid_rect(l.viewer_pane)
                             .contains(self.pointer.x, self.pointer.y)
                     })
                     .unwrap_or(false);
-                if self.terms.is_open() && over_grid {
+                if over_commit {
+                    // A commit-panel click never leaves the shell keyboard-
+                    // focused (the message field / buttons own this surface).
+                    self.term_focused = false;
+                }
+                if self.pane == PaneMode::Config {
+                    // Config-pane clicks (textarea/env form) never focus the
+                    // hidden shell either.
+                    self.term_focused = false;
+                    self.commit.message.focused = false;
+                }
+                if self.pane == PaneMode::Terminals && self.terms.is_open() && over_grid {
                     self.term_focused = true;
+                    self.commit.message.focused = false;
                     if self.term_mouse_report(state) {
                         self.damage.mark_full();
                         self.request_redraw();
@@ -874,6 +1198,30 @@ impl ApplicationHandler<Wake> for App {
                 // Wheel scrolling applies over the whole panel under the
                 // pointer (its scrollbar track scrolls too, matching editors).
                 let (x, y) = (self.pointer.x, self.pointer.y);
+                // M8: wheel over the commit panel scrolls its changed-file
+                // list (rows, viewport-only); no other surface is damaged.
+                if layout.commit_panel.contains(x, y) && self.git.is_some() {
+                    let total = self.git.as_ref().map_or(0, |g| g.entries.len());
+                    if route_wheel_commit(&mut self.commit, dy, layout.commit_panel, total) {
+                        let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                        let rect = damage_rect(layout.commit_panel, self.scale, cw, ch);
+                        self.damage.mark(rect);
+                        self.request_redraw();
+                    }
+                    return;
+                }
+                // M9: wheel over the config pane scrolls its list/textarea.
+                if self.pane == PaneMode::Config && layout.viewer_pane.contains(x, y) {
+                    if let Some(editor) = &mut self.config_edits {
+                        if editor.scroll_by(dy) {
+                            let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                            let rect = damage_rect(layout.viewer_pane, self.scale, cw, ch);
+                            self.damage.mark(rect);
+                            self.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 let grid = frame::term_grid_rect(layout.viewer_pane);
                 let (scale, canvas, damage) = (self.scale, &self.canvas, &mut self.damage);
                 let scrolled = if layout.tree_panel.contains(x, y) {
@@ -898,6 +1246,24 @@ impl ApplicationHandler<Wake> for App {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
             }
+            WindowEvent::Ime(ime) => {
+                if self.pane != PaneMode::Config {
+                    return;
+                }
+                let changed = match ime {
+                    winit::event::Ime::Commit(text) => {
+                        self.config_edits.as_mut().is_some_and(|e| e.on_ime_commit(&text))
+                    }
+                    winit::event::Ime::Preedit(text, _) => {
+                        self.config_edits.as_mut().is_some_and(|e| e.on_ime_preedit(&text))
+                    }
+                    _ => false,
+                };
+                if changed {
+                    self.damage.mark_full();
+                    self.request_redraw();
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
                     return;
@@ -912,17 +1278,48 @@ impl ApplicationHandler<Wake> for App {
                                 return;
                             }
                             "w" | "W" => {
+                                if self.pane == PaneMode::Config {
+                                    self.close_config();
+                                    return;
+                                }
                                 self.terms.close_active();
                                 if !self.terms.is_open() {
+                                    self.pane = self.pane_after_terminals();
                                     self.term_focused = false;
                                 }
                                 self.damage.mark_full();
                                 self.request_redraw();
                                 return;
                             }
+                            "s" | "S" if self.pane == PaneMode::Config => {
+                                self.save_config();
+                                return;
+                            }
                             _ => {}
                         }
                     }
+                }
+                // M8: the focused commit-message field consumes editing keys
+                // (Escape blurs). It sits in the left panel and can hold focus
+                // while a config editor is shown on the right.
+                if self.commit.message.focused {
+                    if self.commit.handle_key(&event.logical_key, event.text.as_deref()) {
+                        self.damage.mark_full();
+                        self.request_redraw();
+                    }
+                    return;
+                }
+                // M9: the config editor owns the keyboard while its pane is
+                // active (Ctrl+Z/Y/A/C are handled inside).
+                if self.pane == PaneMode::Config {
+                    let mods = self.modifiers.state();
+                    if let Some(editor) = &mut self.config_edits {
+                        if editor.handle_key(&event.logical_key, event.text.as_deref(), &mods) {
+                            self.damage.mark_full();
+                            self.request_redraw();
+                        }
+                    }
+                    return;
                 }
                 // Focused terminal: every other key goes to the shell (Ctrl+C
                 // included — it is SIGINT there, not copy).

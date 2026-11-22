@@ -1,11 +1,12 @@
 //! The M2 widget-kit demo scene, kept as a test-only verification surface.
 //!
 //! The M3 frame replaced this scene in production, but the widgets it
-//! exercises (button, checkbox, tab bar, text input) have no real consumer
-//! until the milestones that wire them (M6 tabs, M8 commit panel, M9 config
-//! editor). Until then the demo keeps every widget and every `icons::Icon`
-//! variant referenced by test builds, and its pins stay green (AGENTS.md:
-//! previous tests never regress).
+//! exercises (button, checkbox, tab bar, text input) are pinned here for
+//! test builds. Production consumers now include the M6 tab strip/buttons and
+//! the M8 commit panel (checkbox + text input); the M9 config editor extends
+//! the same kit. The demo keeps every widget and every `icons::Icon` variant
+//! referenced, and its pins stay green (AGENTS.md: previous tests never
+//! regress).
 
 use cosmic_text::Weight;
 

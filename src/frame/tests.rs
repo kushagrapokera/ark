@@ -23,6 +23,29 @@ fn app_layout_matches_spec() {
     assert!(tiny.tree_panel.w >= 0.0 && tiny.tree_panel.h >= 0.0);
     assert!(tiny.viewer_pane.w >= 0.0 && tiny.status.y >= 0.0);
     assert_eq!(app_layout(1024.0, 768.0, 8.0).tree_panel.w, 0.0, "split at the margin");
+    assert_eq!(l.commit_panel, Rect { x: 8.0, y: 720.0, w: 264.0, h: 0.0 }, "hidden by default");
+}
+
+#[test]
+fn app_layout_commit_panel_splits_the_sidebar() {
+    let l = app_layout_with_commit(1024.0, 768.0, 280.0, true);
+    // 632px content − 236px panel = a 396px tree; the right pane is unchanged.
+    assert_eq!(l.tree_panel, Rect { x: 8.0, y: 88.0, w: 264.0, h: 396.0 });
+    assert_eq!(l.scroll_track, Rect { x: 264.0, y: 88.0, w: 8.0, h: 396.0 });
+    assert_eq!(
+        l.commit_panel,
+        Rect { x: 8.0, y: 484.0, w: 264.0, h: crate::commit::PANEL_H }
+    );
+    assert_eq!(l.viewer_pane, Rect { x: 296.0, y: 88.0, w: 720.0, h: 632.0 });
+
+    // Tiny windows: the panel caps at 60% of the content area, never negative.
+    let tiny = app_layout_with_commit(400.0, 300.0, 160.0, true);
+    assert!((tiny.commit_panel.h - 98.4).abs() < 1e-9, "60% of 164px");
+    assert!((tiny.tree_panel.h - 65.6).abs() < 1e-9);
+    // No repo → full-height tree, zero-height panel.
+    let no_git = app_layout_with_commit(1024.0, 768.0, 280.0, false);
+    assert_eq!(no_git.tree_panel.h, 632.0);
+    assert_eq!(no_git.commit_panel.h, 0.0);
 }
 
 // ---- status line ----
@@ -34,7 +57,7 @@ fn frame_status_formats_tree_state() {
     fs::File::create(d.path().join("b.txt")).expect("create b.txt");
     let mut tree = FileTree::new(d.path());
     assert_eq!(
-        frame_status(&tree, None, None, None, 66.0),
+        frame_status(&tree, None, None, None, None, 66.0),
         "visible 2 · expanded 0 · selected none · scroll 0% · no git"
     );
 
@@ -42,7 +65,7 @@ fn frame_status_formats_tree_state() {
     // content (44px) still fits the 66px viewport → 0%.
     tree.toggle(&tree.root.join("A"), true);
     assert_eq!(
-        frame_status(&tree, None, None, None, 66.0),
+        frame_status(&tree, None, None, None, None, 66.0),
         "visible 2 · expanded 1 · selected none · scroll 0% · no git"
     );
 
@@ -56,19 +79,19 @@ fn frame_status_formats_tree_state() {
     let mut big = FileTree::new(d2.path());
     assert!(big.scroll_by(1000.0, 66.0), "10 rows in a 3-row viewport overflows");
     assert_eq!(big.offset, 154.0, "clamped to the max offset");
-    assert!(frame_status(&big, None, None, None, 66.0).contains("scroll 100% · no git"), "max offset → 100%");
+    assert!(frame_status(&big, None, None, None, None, 66.0).contains("scroll 100% · no git"), "max offset → 100%");
     big.select(&big.root.join("f3.txt"));
     assert!(
-        frame_status(&big, None, None, None, 66.0).contains("selected f3.txt"),
+        frame_status(&big, None, None, None, None, 66.0).contains("selected f3.txt"),
         "{}",
-        frame_status(&big, None, None, None, 66.0)
+        frame_status(&big, None, None, None, None, 66.0)
     );
 
     // A listing failure replaces the status line (error surface).
     let missing = temp_dir("status-missing");
     let gone = missing.path().join("gone");
     let err_tree = FileTree::new(&gone);
-    assert!(frame_status(&err_tree, None, None, None, 66.0).contains("cannot list"), "error surfaces");
+    assert!(frame_status(&err_tree, None, None, None, None, 66.0).contains("cannot list"), "error surfaces");
 }
 
 #[test]
@@ -81,7 +104,7 @@ fn frame_status_formats_viewer_state() {
 
     // Viewer segment: name, line count, no selection → none.
     assert_eq!(
-        frame_status(&tree, Some(&viewer), None, None, 632.0),
+        frame_status(&tree, Some(&viewer), None, None, None, 632.0),
         "visible 1 · expanded 0 · scroll 0% · sample.txt 3 lines · sel none · no git"
     );
 
@@ -90,9 +113,9 @@ fn frame_status_formats_viewer_state() {
     v.select_at(0, 0);
     v.extend_select(0, 5);
     assert!(
-        frame_status(&tree, Some(&v), None, None, 632.0).contains("sel 5 chars"),
+        frame_status(&tree, Some(&v), None, None, None, 632.0).contains("sel 5 chars"),
         "{}",
-        frame_status(&tree, Some(&v), None, None, 632.0)
+        frame_status(&tree, Some(&v), None, None, None, 632.0)
     );
 
     // A truncated view carries the flag.
@@ -101,9 +124,9 @@ fn frame_status_formats_viewer_state() {
     let trunc = Viewer::open_with_cap(&big, 50).expect("opens");
     assert!(trunc.truncated());
     assert!(
-        frame_status(&tree, Some(&trunc), None, None, 632.0).contains("big.txt 25 lines · truncated"),
+        frame_status(&tree, Some(&trunc), None, None, None, 632.0).contains("big.txt 25 lines · truncated"),
         "{}",
-        frame_status(&tree, Some(&trunc), None, None, 632.0)
+        frame_status(&tree, Some(&trunc), None, None, None, 632.0)
     );
 }
 
@@ -169,6 +192,9 @@ fn frame_scene_renders_spec_surfaces() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: &mut CommitPanel::default(),
+            config: None,
+            config_error: None,
             terms: None,
             term_focused: false,
             tabbar: &mut TabBar::default(),
@@ -231,6 +257,9 @@ fn frame_viewer_pane_renders_over_placeholder() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: &mut CommitPanel::default(),
+            config: None,
+            config_error: None,
             terms: None,
             term_focused: false,
             tabbar: &mut TabBar::default(),
@@ -294,6 +323,9 @@ fn frame_interactions_report_effects() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
+        commit: &mut CommitPanel::default(),
+        config: None,
+        config_error: None,
         terms: None,
         term_focused: false,
         tabbar: &mut TabBar::default(),
@@ -375,6 +407,9 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
+        commit: &mut CommitPanel::default(),
+        config: None,
+        config_error: None,
         terms: None,
         term_focused: false,
         tabbar: &mut TabBar::default(),
@@ -455,6 +490,7 @@ fn viewer_flash_paints_accent_strip() {
         let layout = app_layout(1024.0, 768.0, 280.0);
         let mut split = Split { position: 280.0 };
         let mut split_drag = SplitDrag::default();
+        let mut commit = CommitPanel::default();
         draw_frame(
             &mut Frame {
                 canvas,
@@ -470,6 +506,9 @@ fn viewer_flash_paints_accent_strip() {
                 highlighter: &Highlighter::new(),
                 git: None,
                 file_diff: None,
+                commit: &mut commit,
+                config: None,
+                config_error: None,
                 terms: None,
                 term_focused: false,
                 tabbar,
@@ -494,6 +533,225 @@ fn viewer_flash_paints_accent_strip() {
         0,
         "no flash → no strip"
     );
+}
+
+#[test]
+fn frame_draws_commit_panel_and_reports_clicks() {
+    let (_d, mut tree) = scene_fixture("commit-frame");
+    let status = crate::git::parse_status(
+        "? new.txt\n1 .M N... 000000 100644 100644 111 222 src/main.rs\n",
+    )
+    .rooted(tree.root.as_path());
+    let theme = frame_theme();
+    let layout = app_layout_with_commit(1024.0, 768.0, 280.0, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let mut split = Split { position: 280.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+
+    // One full frame with the panel: title, checked boxes and buttons paint.
+    let effects = draw_frame(
+        &mut Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            pointer: Pointer::default(),
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: Some(&status),
+            file_diff: None,
+            commit: &mut CommitPanel::default(),
+            config: None,
+            config_error: None,
+            terms: None,
+            term_focused: false,
+            tabbar: &mut TabBar::default(),
+        },
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(!effects.commit_toggled && !effects.commit_clicked && !effects.push_clicked);
+    // Panel title ink (8..272 × 484..514), two checked boxes + badge letters
+    // in the list (rows start at 514), two button fills at 688..712.
+    assert!(count_color_in(&canvas, theme.fg_dim, 8, 484, 272, 514) > 0, "panel title");
+    assert!(
+        count_color_in(&canvas, theme.accent, 8, 514, 272, 648) >= 2 * 100,
+        "both changed files start checked"
+    );
+    assert!(count_color_in(&canvas, theme.git_untracked, 8, 514, 272, 534) > 0, "U badge row");
+    assert!(count_color_in(&canvas, theme.git_modified, 8, 534, 272, 554) > 0, "M badge row");
+    assert!(count_color_in(&canvas, theme.bg_elevated, 16, 688, 256, 712) > 1000, "buttons");
+
+    // Interactions: row toggle, Commit, Push, then message-field focus.
+    let mut commit = CommitPanel::default();
+    let mut frame = Frame {
+        canvas: &mut canvas,
+        text: &mut text,
+        theme: &theme,
+        scale: 1.0,
+        title: "ark",
+        pointer: Pointer::default(),
+        dbl_click: false,
+        viewer: None,
+        viewer_error: None,
+        viewer_flash: false,
+        highlighter: &Highlighter::new(),
+        git: Some(&status),
+        file_diff: None,
+        commit: &mut commit,
+        config: None,
+        config_error: None,
+        terms: None,
+        term_focused: false,
+        tabbar: &mut TabBar::default(),
+    };
+    {
+        let mut draw = |frame: &mut Frame, pointer: Pointer| {
+            frame.pointer = pointer;
+            draw_frame(
+                frame,
+                &layout,
+                &mut tree,
+                &mut split,
+                &mut split_drag,
+                &mut scrollbar,
+                &mut viewer_scrollbar,
+            )
+        };
+        let row_click = Pointer { x: 100.0, y: 524.0, down: false, click: true };
+        assert!(draw(&mut frame, row_click).commit_toggled, "file row toggles");
+        let commit_click = Pointer { x: 70.0, y: 700.0, down: false, click: true };
+        let effects = draw(&mut frame, commit_click);
+        assert!(effects.commit_clicked && !effects.push_clicked, "Commit button");
+        let push_click = Pointer { x: 200.0, y: 700.0, down: false, click: true };
+        let effects = draw(&mut frame, push_click);
+        assert!(effects.push_clicked && !effects.commit_clicked, "Push button");
+        let field_click = Pointer { x: 100.0, y: 668.0, down: false, click: true };
+        let _ = draw(&mut frame, field_click);
+    }
+    assert!(commit.message.focused, "message field takes keyboard focus");
+    assert!(!commit.is_checked(&status.entries[0].path), "row click unchecked it");
+}
+
+#[test]
+fn term_tabbar_syncs_a_newly_opened_tab() {
+    let mut bar = TabBar { tabs: vec!["fish".into()], active: 0 };
+    // Opening the M8 push tab: the model's active index must win over the
+    // bar's retained index.
+    sync_term_tabbar(&mut bar, vec!["fish".into(), "git push".into()], 1);
+    assert_eq!(bar.tabs.len(), 2);
+    assert_eq!(bar.active, 1, "newly opened tab becomes active");
+
+    // An unchanged list keeps the user's bar-click selection.
+    bar.active = 0;
+    sync_term_tabbar(&mut bar, vec!["fish".into(), "git push".into()], 1);
+    assert_eq!(bar.active, 0, "unchanged labels never reset the active tab");
+
+    // Closing a tab carries the model's clamped index.
+    sync_term_tabbar(&mut bar, vec!["fish".into()], 0);
+    assert_eq!(bar.active, 0);
+}
+
+#[test]
+fn frame_config_pane_renders_and_reports_save_click() {
+    let (_d, mut tree) = scene_fixture("config-frame");
+    let cd = temp_dir("config-frame-file");
+    let yaml = cd.path().join("config.yaml");
+    fs::write(&yaml, "alpha: 1\nbeta: 2\n").expect("write");
+    let mut editor =
+        ConfigEditor::open(cd.path(), &yaml, &crate::config::Config::default().editable)
+            .expect("open config");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 280.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let mut split = Split { position: 280.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+
+    let effects = draw_frame(
+        &mut Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            pointer: Pointer::default(),
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
+            commit: &mut CommitPanel::default(),
+            config: Some(&mut editor),
+            config_error: None,
+            terms: None,
+            term_focused: false,
+            tabbar: &mut TabBar::default(),
+        },
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(!effects.config_save && !effects.config_reload);
+    // Header title + textarea ink inside the right pane.
+    assert!(count_color_in(&canvas, theme.fg, 296, 88, 1016, 200) > 0, "config ink");
+    assert!(
+        frame_status(&tree, None, Some(&editor), None, None, 632.0)
+            .contains("config config.yaml"),
+        "{}",
+        frame_status(&tree, None, Some(&editor), None, None, 632.0)
+    );
+
+    // Header Save button (panel right edge) reports the effect.
+    let save_click = Pointer { x: 977.0, y: 107.0, down: false, click: true };
+    let effects = draw_frame(
+        &mut Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            pointer: save_click,
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
+            commit: &mut CommitPanel::default(),
+            config: Some(&mut editor),
+            config_error: None,
+            terms: None,
+            term_focused: false,
+            tabbar: &mut TabBar::default(),
+        },
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(effects.config_save && !effects.config_reload);
 }
 
 #[test]
@@ -529,6 +787,9 @@ fn viewer_offset_self_heals_before_hit_testing() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: &mut CommitPanel::default(),
+            config: None,
+            config_error: None,
             terms: None,
             term_focused: false,
             tabbar: &mut TabBar::default(),

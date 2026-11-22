@@ -456,8 +456,8 @@ pub fn draw_tree_panel(
     }
 }
 
-/// Badge letter + color per kind.
-fn badge_glyph(b: Badge, theme: &Theme) -> (&'static str, crate::render::ColorRgb) {
+/// Badge letter + color per kind (shared with the M8 commit panel).
+pub(crate) fn badge_glyph(b: Badge, theme: &Theme) -> (&'static str, crate::render::ColorRgb) {
     match b {
         Badge::Modified => ("M", theme.git_modified),
         Badge::Added => ("A", theme.git_added),

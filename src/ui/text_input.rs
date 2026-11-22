@@ -74,11 +74,18 @@ impl TextInput {
     /// Insert `s` at the caret. Returns whether the text changed. Empty
     /// strings and inserts that would exceed [`TEXT_INPUT_MAX_CHARS`] are
     /// no-ops.
+    #[allow(dead_code)] // frozen M2 surface; M8/M9 use the capped variants
     pub fn insert(&mut self, s: &str) -> bool {
+        self.insert_with_cap(s, TEXT_INPUT_MAX_CHARS)
+    }
+
+    /// Insert with a caller-chosen cap (M9 config values can be longer than
+    /// one-line UI fields; the cap is still enforced per insert).
+    pub fn insert_with_cap(&mut self, s: &str, max_chars: usize) -> bool {
         if s.is_empty() {
             return false;
         }
-        if self.text.chars().count() + s.chars().count() > TEXT_INPUT_MAX_CHARS {
+        if self.text.chars().count() + s.chars().count() > max_chars {
             return false;
         }
         let cursor = self.bounded_cursor();
@@ -102,13 +109,18 @@ impl TextInput {
     /// Apply one key to the field; returns whether the field changed.
     /// Control characters never insert.
     pub fn handle_key(&mut self, key: TextInputKey) -> bool {
+        self.handle_key_with_cap(key, TEXT_INPUT_MAX_CHARS)
+    }
+
+    /// [`handle_key`](Self::handle_key) with a caller-chosen char cap.
+    pub fn handle_key_with_cap(&mut self, key: TextInputKey, max_chars: usize) -> bool {
         match key {
             TextInputKey::Char(c) => {
                 if c.is_control() {
                     return false;
                 }
                 let mut buf = [0u8; 4];
-                self.insert(c.encode_utf8(&mut buf))
+                self.insert_with_cap(c.encode_utf8(&mut buf), max_chars)
             }
             TextInputKey::Backspace => self.backspace(),
             TextInputKey::Left => {

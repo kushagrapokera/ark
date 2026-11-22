@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use cosmic_text::Weight;
 
+use crate::commit::CommitPanel;
+use crate::configed::ConfigEditor;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::render::{Canvas, Theme};
@@ -40,6 +42,8 @@ pub const FLASH_STRIP_H: f64 = 3.0;
 pub struct AppLayout {
     pub tree_panel: Rect,
     pub scroll_track: Rect,
+    /// Commit & push panel (M8) under the tree; zero-height when hidden.
+    pub commit_panel: Rect,
     pub split_area: Rect,
     /// The right pane: terminals (M6) while tabs are open, else the viewer /
     /// placeholder.
@@ -51,16 +55,35 @@ pub struct AppLayout {
 }
 
 pub fn app_layout(w: f64, h: f64, split_x: f64) -> AppLayout {
+    app_layout_with_commit(w, h, split_x, false)
+}
+
+/// [`app_layout`] with the M8 commit panel shown under the tree. The panel
+/// takes its preferred height capped at 60% of the content area, so a tiny
+/// window still keeps tree rows visible.
+pub fn app_layout_with_commit(w: f64, h: f64, split_x: f64, show_commit: bool) -> AppLayout {
     let area = Rect { x: 0.0, y: CONTENT_TOP, w: w.max(0.0), h: (h - BOTTOM_INSET - CONTENT_TOP).max(0.0) };
     let panel_w = (split_x - 16.0).max(0.0);
+    let commit_h = if show_commit {
+        crate::commit::PANEL_H.min(area.h * 0.6).max(0.0)
+    } else {
+        0.0
+    };
+    let tree_h = (area.h - commit_h).max(0.0);
     AppLayout {
-        tree_panel: Rect { x: LEFT_MARGIN, y: CONTENT_TOP, w: panel_w, h: area.h },
+        tree_panel: Rect { x: LEFT_MARGIN, y: CONTENT_TOP, w: panel_w, h: tree_h },
         // The 8px scrollbar track occupies the tree panel's right edge.
         scroll_track: Rect {
             x: LEFT_MARGIN + (panel_w - tree::TRACK_W).max(0.0),
             y: CONTENT_TOP,
             w: tree::TRACK_W,
-            h: area.h,
+            h: tree_h,
+        },
+        commit_panel: Rect {
+            x: LEFT_MARGIN,
+            y: CONTENT_TOP + tree_h,
+            w: panel_w,
+            h: commit_h,
         },
         viewer_pane: Rect {
             x: split_x + 16.0,
@@ -127,7 +150,15 @@ pub struct Frame<'a> {
     pub git: Option<&'a GitStatus>,
     /// The open file's diff marks (gutter strip).
     pub file_diff: Option<&'a FileDiff>,
-    /// Terminal tabs (M6) — the right pane shows them while open.
+    /// Commit & push panel state (M8; drawn when `git` is Some).
+    pub commit: &'a mut CommitPanel,
+    /// The open config editor (M9), shown in the right pane instead of the
+    /// viewer while the App's pane mode is Config.
+    pub config: Option<&'a mut ConfigEditor>,
+    /// Most recent config-open failure (rendered instead of the editor).
+    pub config_error: Option<&'a str>,
+    /// Terminal tabs to draw (M6): Some only while the App's pane mode is
+    /// Terminals; tabs keep running while hidden.
     pub terms: Option<&'a mut TerminalTabs>,
     /// Terminal pane focused (keys route to the shell; cursor visible).
     pub term_focused: bool,
@@ -154,6 +185,17 @@ pub struct FrameEffects {
     pub open_terminal: bool,
     /// The "×" button closed the active terminal tab.
     pub close_terminal: bool,
+    /// A commit-panel file row toggled (panel repaint).
+    pub commit_toggled: bool,
+    /// The Commit button was clicked (the App dispatches after the frame).
+    pub commit_clicked: bool,
+    /// The Push button was clicked.
+    pub push_clicked: bool,
+    /// Config editor header Save/Reload clicked.
+    pub config_save: bool,
+    pub config_reload: bool,
+    /// The config body changed (env add/remove/apply).
+    pub config_changed: bool,
 }
 
 /// Compose and raster one app frame (M3 layout + M4 viewer pane). State
@@ -257,6 +299,16 @@ pub fn draw_frame(
         scrollbar.draw(f.canvas, layout.scroll_track, content, viewport, f.theme, f.scale);
     }
 
+    // Commit & push panel (M8) under the tree when a repo is open.
+    if let Some(git) = f.git {
+        let panel = f
+            .commit
+            .draw(f.canvas, f.text, f.theme, f.scale, layout.commit_panel, git, f.pointer);
+        effects.commit_toggled |= panel.toggled;
+        effects.commit_clicked |= panel.commit;
+        effects.push_clicked |= panel.push;
+    }
+
     // Right pane: terminal tabs (M6) while open, else the viewer /
     // placeholder.
     if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
@@ -266,11 +318,10 @@ pub fn draw_frame(
         let close = Rect { x: pane.x + pane.w - 28.0, y: pane.y + 3.0, w: 24.0, h: 24.0 };
 
         // Sync the retained widget bar with the terminal tabs, process the
-        // frame's click, then draw.
-        let labels: Vec<String> = terms.tabs.iter().map(|t| t.shell_name().to_string()).collect();
-        if f.tabbar.tabs != labels {
-            f.tabbar.tabs = labels;
-        }
+        // frame's click, then draw. A tab-list change (open/close, including
+        // the M8 git command tabs) carries the model's active index into the
+        // widget, which is the per-frame source of truth for clicks.
+        sync_term_tabbar(f.tabbar, terms.tabs.iter().map(|t| t.label().to_string()).collect(), terms.active);
         f.tabbar.on_pointer(tabbar_rect, f.pointer);
         terms.active = f.tabbar.active.min(terms.tabs.len().saturating_sub(1));
         f.tabbar.draw(f.canvas, tabbar_rect, f.theme, f.text, f.scale);
@@ -292,6 +343,25 @@ pub fn draw_frame(
             t.resize(term::GridSize::fit(grid.w, grid.h, advance, LINE_H));
             t.draw(f.canvas, f.text, f.theme, f.scale, grid, f.term_focused);
         }
+    } else if let Some(config) = f.config.as_deref_mut() {
+        let fx = config.draw(
+            f.canvas,
+            f.text,
+            f.theme,
+            f.scale,
+            layout.viewer_pane,
+            f.pointer,
+        );
+        effects.config_save |= fx.save;
+        effects.config_reload |= fx.reload;
+        effects.config_changed |= fx.changed;
+    } else if let Some(err) = f.config_error {
+        draw_pane_message(
+            f,
+            layout.viewer_pane,
+            "config editor failed —",
+            &truncate_chars(err, 60),
+        );
     } else if f.viewer.is_some() {
         let viewer = f.viewer.as_deref_mut().expect("checked");
             let pane = layout.viewer_pane;
@@ -359,7 +429,7 @@ pub fn draw_frame(
     // Status line (mono 12px, dim).
     f.text.draw_line(
         f.canvas,
-        &frame_status(tree, f.viewer.as_deref(), f.terms.as_deref(), f.git, layout.tree_panel.h),
+        &frame_status(tree, f.viewer.as_deref(), f.config.as_deref(), f.terms.as_deref(), f.git, layout.tree_panel.h),
         (LEFT_MARGIN * f.scale) as f32,
         ((lh - STATUS_BASELINE_INSET) * f.scale) as f32,
         TextStyle { color: f.theme.fg_dim, font_size: status_size, weight: Weight::NORMAL },
@@ -383,6 +453,17 @@ fn pane_scroll_track(pane: Rect) -> Rect {
 /// With one open: `visible N · expanded M · scroll <pct>% · <file> <L>
 /// lines[ · truncated] · sel <K chars|none>`. A tree listing failure
 /// replaces the whole line (the tree's error surface).
+/// Sync the retained tab bar when the terminal tab list changed (open/close,
+/// including M8's git command tabs). Carrying `active` in is essential: the
+/// bar's index is the per-frame source of truth for clicks, so a freshly
+/// opened tab must win over the bar's previous index.
+fn sync_term_tabbar(tabbar: &mut TabBar, labels: Vec<String>, active: usize) {
+    if tabbar.tabs != labels {
+        tabbar.tabs = labels;
+        tabbar.active = active;
+    }
+}
+
 /// Terminal status segment: `term <shell> <k>/<n>[ · exited]` while tabs
 /// are open; `None` otherwise.
 fn terms_status(terms: Option<&TerminalTabs>) -> Option<String> {
@@ -392,13 +473,14 @@ fn terms_status(terms: Option<&TerminalTabs>) -> Option<String> {
     }
     let exited = terms.active().map(|t| t.exited()).unwrap_or(false);
     let exit = if exited { " · exited" } else { "" };
-    let shell = terms.active().map(|t| t.shell_name()).unwrap_or("?");
+    let shell = terms.active().map(|t| t.label()).unwrap_or("?");
     Some(format!("term {shell} {}/{n}{exit}", terms.active + 1, n = terms.tabs.len()))
 }
 
 fn frame_status(
     tree: &FileTree,
     viewer: Option<&Viewer>,
+    config: Option<&ConfigEditor>,
     terms: Option<&TerminalTabs>,
     git: Option<&GitStatus>,
     viewport: f64,
@@ -428,6 +510,10 @@ fn frame_status(
     if terms_status(terms).is_some() {
         return format!("{head} · scroll {pct:.0}% · {}{git_tail}", terms_status(terms).expect("checked above"));
     }
+    if let Some(c) = config {
+        let state = if c.is_dirty() { " · modified" } else { "" };
+        return format!("{head} · scroll {pct:.0}% · config {}{state}{git_tail}", c.display_name());
+    }
     match viewer {
         None => {
             let selected = tree
@@ -452,6 +538,15 @@ fn frame_status(
 /// Bordered placeholder with two centered dim lines (or the open-failure
 /// message when the last attempt errored).
 fn draw_placeholder(f: &mut Frame, rect: Rect, error: Option<&str>) {
+    let lines: (String, &str) = match error {
+        Some(err) => (truncate_chars(err, 44), "double-click a text file in the tree"),
+        None => ("M4 viewer lands here —".to_string(), "double-click a file in the tree"),
+    };
+    draw_pane_message(f, rect, &lines.0, lines.1);
+}
+
+/// Bordered pane message used by the placeholder and config-open errors.
+fn draw_pane_message(f: &mut Frame, rect: Rect, top: &str, bottom: &str) {
     if rect.w <= 2.0 || rect.h <= 2.0 {
         return;
     }
@@ -461,20 +556,17 @@ fn draw_placeholder(f: &mut Frame, rect: Rect, error: Option<&str>) {
     let cx = (rect.x + rect.w / 2.0) * f.scale;
     let cy = (rect.y + rect.h / 2.0) * f.scale;
     let style = TextStyle { color: f.theme.fg_dim, font_size, weight: Weight::NORMAL };
-    let lines: (&str, &str) = match error {
-        Some(err) => {
-            // Char-boundary truncation (byte slicing could split a codepoint).
-            let cut = err.char_indices().nth(44).map(|(i, _)| i).unwrap_or(err.len());
-            (&err[..cut], "double-click a text file in the tree")
-        }
-        None => ("M4 viewer lands here —", "double-click a file in the tree"),
-    };
-    for (dy, line) in [(-0.5, lines.0), (0.5, lines.1)] {
+    for (dy, line) in [(-0.5, top), (0.5, bottom)] {
         // Monospace advance: width = chars × advance; center horizontally.
         let x = cx - f64::from(m.advance) * line.chars().count() as f64 / 2.0;
         let baseline = cy + dy * f64::from(m.line_height) + f64::from(m.ascent - m.descent) / 2.0;
         f.text.draw_line(f.canvas, line, x as f32, baseline as f32, style);
     }
+}
+
+/// Char-boundary-safe truncation (byte slicing could split a codepoint).
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 // The frame tests live in the module subdirectory (impl + tests together

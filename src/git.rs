@@ -323,6 +323,46 @@ fn unquote_path(raw: &str) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+// ---- commit/push command builders (M8) ----
+//
+// The commands run in a PTY shell tab so their output streams into ark. The
+// only inputs are repo-relative paths (porcelain output) and the typed
+// commit message; both are single-quoted so the shell can never interpret
+// them as syntax.
+
+/// Quote one argument for a POSIX shell: wrap in single quotes; an embedded
+/// `'` is emitted as `'\''` (close, escaped quote, reopen). Empty strings
+/// become `''`.
+pub fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for (i, part) in s.split('\'').enumerate() {
+        if i > 0 {
+            out.push_str("'\\''");
+        }
+        out.push_str(part);
+    }
+    out.push('\'');
+    out
+}
+
+/// The Commit action's shell command: stage exactly `paths` (repo-relative,
+/// per-file granularity) and commit them with `message`.
+pub fn stage_and_commit_command(paths: &[PathBuf], message: &str) -> String {
+    debug_assert!(!paths.is_empty(), "the panel validates an empty selection");
+    let mut cmd = String::from("git add --");
+    for p in paths {
+        cmd.push(' ');
+        cmd.push_str(&shell_quote(&p.to_string_lossy()));
+    }
+    cmd.push_str(" && git commit -m ");
+    cmd.push_str(&shell_quote(message));
+    cmd
+}
+
+/// The Push action's shell command.
+pub const PUSH_COMMAND: &str = "git push";
+
 // ---- unified=0 diff parsing ----
 
 pub fn parse_diff(out: &str) -> FileDiff {
