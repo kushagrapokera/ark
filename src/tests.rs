@@ -496,6 +496,7 @@ fn app_new_item_uses_the_selected_folder_as_its_target() {
         app.new_item.as_ref().expect("prompt").parent,
         parent
     );
+    assert!(app.tree.is_expanded(&parent), "inline prompt expands its target folder");
     let prompt = app.new_item.as_mut().expect("prompt");
     prompt.input.text = "notes.txt".into();
     prompt.input.cursor = prompt.input.text.len();
@@ -504,6 +505,20 @@ fn app_new_item_uses_the_selected_folder_as_its_target() {
     assert!(parent.join("notes.txt").is_file());
     assert!(!d.path().join("notes.txt").exists());
     assert!(app.tree.is_expanded(&parent), "target folder expands to reveal the new file");
+}
+
+#[test]
+fn app_root_prompt_returns_the_tree_to_the_top() {
+    let d = temp_dir("app-explorer-root-inline");
+    for i in 0..40 {
+        fs::write(d.path().join(format!("f{i:02}.txt")), "x\n").expect("write");
+    }
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    assert!(app.tree.set_offset(100.0, 100.0));
+
+    app.request_new_item(NewItemKind::File);
+    assert_eq!(app.tree.offset, 0.0, "root inline field is visible at the top");
+    assert_eq!(app.new_item.as_ref().expect("prompt").parent, d.path());
 }
 
 #[test]

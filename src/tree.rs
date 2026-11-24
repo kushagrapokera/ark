@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use cosmic_text::Weight;
 
@@ -133,6 +133,31 @@ impl FileTree {
         self.expanded.contains(path)
     }
 
+    /// Expand `path` and every ancestor so a selected nested directory is
+    /// visible. Returns false for paths outside the root or an unreadable
+    /// directory; the underlying listing error remains in `last_error`.
+    pub fn expand_to(&mut self, path: &Path) -> bool {
+        if path == self.root {
+            return true;
+        }
+        let Ok(relative) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        let mut current = self.root.clone();
+        for component in relative.components() {
+            match component {
+                Component::Normal(name) => {
+                    current.push(name);
+                    if !self.expanded.contains(&current) && !self.toggle(&current, true) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// Status-line + memory-test surface: user-expanded directories (root
     /// excluded — it is always implicitly expanded).
     #[allow(dead_code)] // retained for future explorer/status detail
@@ -240,12 +265,18 @@ impl FileTree {
 
     /// Set the offset (clamped like `scroll_by`); returns whether it moved.
     pub fn set_offset(&mut self, v: f64, viewport: f64) -> bool {
+        self.set_offset_with_extra(v, viewport, 0)
+    }
+
+    /// Set the offset while accounting for temporary virtual rows (such as an
+    /// inline creation field) that are not part of the cached listing.
+    pub fn set_offset_with_extra(&mut self, v: f64, viewport: f64, extra_rows: usize) -> bool {
         if !v.is_finite() {
             return false;
         }
         let before = self.offset;
         self.offset = v;
-        self.clamp_offset(viewport);
+        self.clamp_offset_with_extra(viewport, extra_rows);
         self.offset != before
     }
 
@@ -253,7 +284,13 @@ impl FileTree {
     /// when there is no overflow. Mirrors `ui::Scrollbar::clamp` (whose
     /// non-finite discipline the pub offset field needs too).
     fn clamp_offset(&mut self, viewport: f64) {
-        let max = self.visible_count() as f64 * ROW_H - viewport;
+        self.clamp_offset_with_extra(viewport, 0);
+    }
+
+    /// Clamp with room for temporary, non-cached rows such as an inline
+    /// creation field. No listing or row cache is added.
+    fn clamp_offset_with_extra(&mut self, viewport: f64, extra_rows: usize) {
+        let max = (self.visible_count() + extra_rows) as f64 * ROW_H - viewport;
         if !max.is_finite() || max <= 0.0 {
             self.offset = 0.0;
         } else {
@@ -384,6 +421,7 @@ pub fn handle_pointer(tree: &mut FileTree, panel: Rect, pointer: Pointer, double
 /// edge and is left unclipped (no horizontal scroll in M3). Hovered rows
 /// paint `bg_elevated`, selected rows `selection` (selection wins).
 #[allow(clippy::too_many_arguments)] // git snapshot joins raster borrows; bundling would obscure the call
+#[cfg(test)]
 pub fn draw_tree_panel(
     canvas: &mut Canvas,
     text: &mut TextSystem,
@@ -394,6 +432,23 @@ pub fn draw_tree_panel(
     pointer: Pointer,
     git: Option<&GitStatus>,
 ) {
+    draw_tree_panel_with_insertion(canvas, text, theme, scale, panel, tree, pointer, git, None);
+}
+
+/// Render with a temporary virtual row inserted before `insert_before`. The
+/// cached listing is unchanged; rows after the insertion shift down one row.
+#[allow(clippy::too_many_arguments)] // git snapshot joins raster borrows; bundling would obscure the call
+pub fn draw_tree_panel_with_insertion(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    scale: f64,
+    panel: Rect,
+    tree: &FileTree,
+    pointer: Pointer,
+    git: Option<&GitStatus>,
+    insert_before: Option<usize>,
+) {
     if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
         return; // degenerate panel or scale: nothing to raster
     }
@@ -403,16 +458,23 @@ pub fn draw_tree_panel(
     }
     let rows = tree.visible_rows();
     // Viewport-only: iterate just the rows the offset exposes (+1 covers a
-    // fractional offset straddling two rows).
+    // fractional offset straddling two rows). An insertion can move the first
+    // visible source row one index earlier, so start one row higher.
     let first = ((tree.offset / ROW_H).floor().max(0.0)) as usize;
-    let band_rows = ((panel.h / ROW_H).ceil() as usize) + 1;
-    let hovered = row_at(panel, pointer.x, pointer.y, tree).map(|hit| hit.row.path);
+    let first = first.saturating_sub(usize::from(insert_before.is_some()));
+    let band_rows = ((panel.h / ROW_H).ceil() as usize) + 2;
+    let hovered = if insert_before.is_none() {
+        row_at(panel, pointer.x, pointer.y, tree).map(|hit| hit.row.path)
+    } else {
+        None
+    };
     let selected = tree.selected();
     let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let row_w = (panel.w - TRACK_W).max(0.0);
     for (i, row) in rows.iter().enumerate().skip(first).take(band_rows) {
-        let row_y = panel.y + i as f64 * ROW_H - tree.offset;
+        let display_index = i + usize::from(insert_before.is_some_and(|at| i >= at));
+        let row_y = panel.y + display_index as f64 * ROW_H - tree.offset;
         if row_y + ROW_H <= panel.y || row_y >= panel.y + panel.h {
             continue; // straddler outside the vertical span
         }

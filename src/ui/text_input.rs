@@ -167,7 +167,45 @@ impl TextInput {
         // 1px border ring: accent while focused, border otherwise.
         let ring = if self.focused { theme.accent } else { theme.border };
         stroke_rect_inset(canvas.pixmap_mut(), rect.scaled(scale), ring, scale as f32);
+        self.draw_contents(canvas, rect, theme, text, scale);
+    }
 
+    /// Draw the field with a rounded border, used by inline tree-row prompts.
+    pub fn draw_rounded(
+        &self,
+        canvas: &mut Canvas,
+        rect: Rect,
+        theme: &Theme,
+        text: &mut TextSystem,
+        scale: f64,
+        radius: f64,
+    ) {
+        if !renderable(rect, scale) {
+            return;
+        }
+        let ring = if self.focused { theme.accent } else { theme.border };
+        let radius = radius.clamp(0.0, rect.w.min(rect.h) / 2.0);
+        canvas.fill_round_rect(rect.x, rect.y, rect.w, rect.h, radius, ring, scale);
+        canvas.fill_round_rect(
+            rect.x + 1.0,
+            rect.y + 1.0,
+            rect.w - 2.0,
+            rect.h - 2.0,
+            (radius - 1.0).max(0.0),
+            theme.bg_elevated,
+            scale,
+        );
+        self.draw_contents(canvas, rect, theme, text, scale);
+    }
+
+    fn draw_contents(
+        &self,
+        canvas: &mut Canvas,
+        rect: Rect,
+        theme: &Theme,
+        text: &mut TextSystem,
+        scale: f64,
+    ) {
         let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
         let metrics = text.mono_metrics(font_size, (font_size * 1.35).round());
         let pad = 8.0; // logical px of horizontal text padding

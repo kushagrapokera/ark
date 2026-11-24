@@ -2,7 +2,7 @@
 //! module split — zero assertion edits).
 
 use super::*;
-use crate::ui::testutil::{count_color_in, count_not_color, ink_bbox_in};
+use crate::ui::testutil::{count_color_in, count_not_color, count_not_color_in, ink_bbox_in};
 use crate::ui::TabBar;
 
 // ---- TextInput editing model (acceptance 5) ----
@@ -172,6 +172,31 @@ fn text_input_draw_cursor_when_focused() {
     assert!(
         count_color_in(&canvas2, theme.border, 10, 10, 210, 44) > 0,
         "unfocused input still draws its border ring"
+    );
+}
+
+#[test]
+fn text_input_rounded_draw_keeps_corners_clear() {
+    let theme = Theme { ..Theme::DARK };
+    let mut text = TextSystem::new();
+    let rect = Rect { x: 10.0, y: 10.0, w: 100.0, h: 24.0 };
+    let mut canvas = Canvas::new(240, 80);
+    canvas.fill(theme.bg);
+    TextInput { focused: true, ..TextInput::default() }
+        .draw_rounded(&mut canvas, rect, &theme, &mut text, 2.0, 4.0);
+
+    assert_eq!(
+        count_not_color_in(&canvas, theme.bg, 20, 20, 21, 21),
+        0,
+        "rounded corner stays outside the field"
+    );
+    assert!(
+        count_color_in(&canvas, theme.accent, 100, 20, 140, 23) > 0,
+        "top edge keeps the focused accent border"
+    );
+    assert!(
+        count_color_in(&canvas, theme.bg_elevated, 100, 30, 140, 50) > 0,
+        "interior keeps the elevated field fill"
     );
 }
 

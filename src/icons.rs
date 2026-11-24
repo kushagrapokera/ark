@@ -35,6 +35,7 @@ pub enum Icon {
     Collapse,
     NewFile,
     NewFolder,
+    DragHandle,
     Bell,
     Check,
     Sync,
@@ -413,6 +414,14 @@ pub fn draw(
             pb.close();
             pb.finish().expect("valid panel path")
         }
+        Icon::DragHandle => {
+            let mut pb = PathBuilder::new();
+            for (dy, half) in [(-0.26, 0.32), (0.0, 0.20), (0.26, 0.32)] {
+                pb.move_to(cx - half * s, cy + dy * s);
+                pb.line_to(cx + half * s, cy + dy * s);
+            }
+            pb.finish().expect("valid drag handle path")
+        }
         Icon::ChevronUp => {
             let mut pb = PathBuilder::new();
             pb.move_to(cx - 0.3 * s, cy + 0.2 * s);
@@ -449,6 +458,7 @@ pub fn draw(
         | Icon::Collapse
         | Icon::NewFile
         | Icon::NewFolder
+        | Icon::DragHandle
         | Icon::Bell
         | Icon::Check
         | Icon::Sync

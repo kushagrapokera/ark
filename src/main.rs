@@ -426,12 +426,53 @@ impl App {
     }
 
     fn request_new_item(&mut self, kind: NewItemKind) {
-        self.new_item = Some(NewItemPrompt::new(kind, self.new_item_parent()));
+        let parent = self.new_item_parent();
+        if parent != self.root && !self.tree.expand_to(&parent) {
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        }
+        let viewport = self.app_layout().map(|layout| layout.tree_panel.h);
+        if parent == self.root {
+            self.tree.set_offset(0.0, viewport.unwrap_or(0.0));
+        } else if let Some(viewport) = viewport {
+            let rows = self.tree.visible_rows();
+            if let Some(index) = rows.iter().position(|row| row.path == parent) {
+                let top = index as f64 * tree::ROW_H - self.tree.offset;
+                let prompt_bottom = (index + 2) as f64 * tree::ROW_H - self.tree.offset;
+                if top < 0.0 {
+                    self.tree.set_offset_with_extra(
+                        index as f64 * tree::ROW_H,
+                        viewport,
+                        1,
+                    );
+                } else if prompt_bottom > viewport {
+                    self.tree.set_offset_with_extra(prompt_bottom - viewport, viewport, 1);
+                }
+            }
+        }
+        self.new_item = Some(NewItemPrompt::new(kind, parent));
         self.activity = frame::ActivityPanel::Explorer;
         self.term_focused = false;
         self.commit.message.focused = false;
         self.damage.mark_full();
         self.request_redraw();
+    }
+
+    fn reveal_new_item_error(&mut self, parent: &Path) {
+        let Some(viewport) = self.app_layout().map(|layout| layout.tree_panel.h) else {
+            return;
+        };
+        let rows = self.tree.visible_rows();
+        let Some(index) = rows.iter().position(|row| row.path == parent) else {
+            return;
+        };
+        // Parent row + inline field + error line.
+        let error_bottom = (index + 3) as f64 * tree::ROW_H - self.tree.offset;
+        if error_bottom > viewport {
+            self.tree
+                .set_offset_with_extra(error_bottom - viewport, viewport, 2);
+        }
     }
 
     fn handle_new_item_key(&mut self, key: &Key, text: Option<&str>) -> bool {
@@ -497,6 +538,7 @@ impl App {
                 if let Some(prompt) = self.new_item.as_mut() {
                     prompt.set_error(&e.to_string());
                 }
+                self.reveal_new_item_error(&parent);
                 self.damage.mark_full();
                 self.request_redraw();
             }
@@ -869,12 +911,6 @@ impl App {
         }
         if effects.collapse_tree {
             self.collapse_explorer();
-        }
-        if effects.new_item_submit {
-            self.submit_new_item();
-        }
-        if effects.new_item_cancel {
-            self.cancel_new_item();
         }
         if effects.commit_clicked {
             self.commit_now();

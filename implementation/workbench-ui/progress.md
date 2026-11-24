@@ -253,30 +253,27 @@ five open viewers, two shells + fake agent tab):
 
 ## Explorer root actions
 
-- New File and New Folder open a capped in-card name prompt (128 chars,
-  160-char error cap), support Enter/Create and Escape/Cancel, and create
-  root-contained, no-overwrite entries through a dedicated Rust filesystem
-  boundary.
+- New File and New Folder open a capped inline tree-row field (128 chars,
+  160-char error cap) inside the target folder, matching the supplied reference:
+  drag handle, rounded accent border, no card/title/buttons/placeholder. Enter
+  creates; Escape cancels; validation errors appear below the field.
 - The prompt targets the selected folder (or a selected file's parent; project
-  root when nothing is selected), opens directly below that row with matching
-  nesting indentation, and expands the target after creation so the new entry is
-  visible. Symlink rows are treated as files; the filesystem boundary also
-  rejects symlinked or non-directory parents.
+  root when nothing is selected), expands its ancestors, and inserts a virtual
+  child row so existing entries shift down. Symlink rows are treated as files;
+  the filesystem boundary also rejects symlinked or non-directory parents.
 - New code files open read-only; newly created whitelisted config files open in
   the enforced config editor. Existing symlinks are never followed or replaced.
 - Refresh re-lists the tree. Collapse All uses in-place `retain` to free every
   expanded listing without allocating.
 - The prompt is the only new retained state and exists only while open. Stress
-  with five viewers, two shells, and a contextual 128-char prompt measured
-  **65,476 → 65,600 KiB RSS** and **57,525 → 57,571 KiB PSS** while opening the
-  prompt (+124/+46 KiB); after cancel RSS stayed at 65,600 KiB and PSS at
-  57,571 KiB, still far below the 100 MiB budget. `smem` and `/usr/bin/time` are
-  unavailable in this environment, so measurements use `/proc` status and
-  `smaps_rollup`.
-- Verification: `cargo test` **295 passed, 0 failed, 3 ignored**, 5/5 CLI;
-  clippy and release build clean. Live smoke created `src/inside.txt` and
-  `src/nested/child` from their selected folder rows, collapsed expanded
-  directories, and refreshed an external file.
+  with five viewers, two shells, and a contextual 128-char inline field measured
+  **0 KiB RSS change** (65,588 KiB before/during/after; PSS
+  57,591/57,590/57,591 KiB). `smem` and `/usr/bin/time` are unavailable in this
+  environment, so measurements use `/proc` status and `smaps_rollup`.
+- Verification: `cargo test` **300 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live release smoke created `tests/notes.txt`
+  and `tests/nested/child` from inline fields while preserving visible sibling
+  rows, collapsed expanded directories, and refreshed an external file.
 
 ## Notes
 

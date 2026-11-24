@@ -18,13 +18,6 @@ impl NewItemKind {
             Self::Folder => "New Folder",
         }
     }
-
-    pub fn placeholder(self) -> &'static str {
-        match self {
-            Self::File => "untitled.txt",
-            Self::Folder => "New Folder",
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -82,14 +75,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompts_start_empty_with_a_placeholder() {
+    fn prompts_start_empty_and_focused() {
         let file = NewItemPrompt::new(NewItemKind::File, PathBuf::from("/repo"));
         assert!(file.input.text.is_empty());
         assert_eq!(file.input.cursor, 0);
         assert!(file.input.focused);
-        assert_eq!(file.kind.placeholder(), "untitled.txt");
         let folder = NewItemPrompt::new(NewItemKind::Folder, PathBuf::from("/repo"));
-        assert_eq!(folder.kind.placeholder(), "New Folder");
+        assert!(folder.input.text.is_empty());
     }
 
     #[test]

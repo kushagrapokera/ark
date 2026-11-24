@@ -256,6 +256,41 @@ fn long_tree_names_stay_inside_the_panel() {
 }
 
 #[test]
+fn inserted_tree_row_shifts_existing_rows_down() {
+    let (_d, mut tree) = panel_fixture("inserted-row");
+    let a = tree.root.join("A");
+    let c = a.join("C");
+    assert!(tree.toggle(&a, true));
+    tree.select(&c);
+    let theme = panel_theme();
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(220, 108);
+    canvas.fill(theme.bg);
+
+    draw_tree_panel_with_insertion(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        PANEL,
+        &tree,
+        Pointer::default(),
+        None,
+        Some(1),
+    );
+
+    assert_eq!(
+        count_color_in(&canvas, theme.selection, 10, 32, 210, 54),
+        0,
+        "the first child no longer occupies the insertion row"
+    );
+    assert!(
+        count_color_in(&canvas, theme.selection, 10, 54, 210, 76) > 0,
+        "the first child shifts below the inserted row"
+    );
+}
+
+#[test]
 fn viewport_only_rendering() {
     let (_d, mut tree) = wide_fixture("viewport");
     assert_eq!(tree.visible_count(), 100);

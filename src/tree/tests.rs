@@ -224,6 +224,32 @@ fn scroll_nan_inf_inputs_are_noops() {
 // ---- 6. selection semantics ----
 
 #[test]
+fn offset_clamp_accounts_for_a_virtual_row() {
+    let (_d, mut tree) = tree_fixture("virtual-row-offset");
+    let viewport = 44.0;
+    let normal_max = tree.visible_count() as f64 * ROW_H - viewport;
+    assert!(tree.set_offset_with_extra(normal_max + ROW_H, viewport, 1));
+    assert_eq!(tree.offset, normal_max + ROW_H);
+    assert!(tree.set_offset(tree.offset, viewport));
+    assert_eq!(tree.offset, normal_max, "removing the virtual row re-clamps");
+}
+
+#[test]
+fn expand_to_reveals_a_nested_directory_and_its_ancestors() {
+    let (d, mut tree) = tree_fixture("expand-to");
+    let a = d.path().join("A");
+    let c = a.join("C");
+    assert!(tree.toggle(&a, true));
+    assert!(tree.toggle(&c, true));
+    assert!(tree.toggle(&a, true), "collapse the ancestor");
+
+    assert!(tree.expand_to(&c));
+    assert!(tree.is_expanded(&a));
+    assert!(tree.is_expanded(&c));
+    assert!(tree.visible_rows().iter().any(|row| row.path == c));
+}
+
+#[test]
 fn selection_semantics() {
     let (d, mut tree) = tree_fixture("select");
     let a = d.path().join("A");

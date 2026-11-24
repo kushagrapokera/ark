@@ -305,30 +305,42 @@ fn compact_terminal_plus_button_opens_the_first_shell() {
 }
 
 #[test]
-fn new_item_prompt_anchors_to_the_selected_folder_row() {
-    let (_d, mut tree) = scene_fixture("new-item-anchor");
+fn new_item_prompt_is_an_inline_child_row() {
+    let (_d, mut tree) = scene_fixture("new-item-inline");
     let layout = app_layout(1024.0, 768.0, 304.0);
     let parent = tree.root.join("A");
     tree.select(&parent);
     let anchored = chrome::new_item_layout(&layout, &tree, &parent).expect("prompt layout");
-    assert_eq!(anchored.panel.y, 130.0, "prompt opens directly below the folder row");
+    assert_eq!(
+        anchored.input,
+        Rect {
+            x: 108.0,
+            y: 131.0,
+            w: 176.0,
+            h: 20.0,
+        },
+        "field occupies the first child row below the selected folder"
+    );
+    assert_eq!(anchored.handle.x, 92.0, "drag handle precedes the field");
+    assert_eq!(anchored.handle.y, anchored.input.y);
 
     let nested = parent.join("C");
     assert!(tree.toggle(&parent, true));
     tree.select(&nested);
     let nested_layout = chrome::new_item_layout(&layout, &tree, &nested).expect("nested layout");
-    assert_eq!(nested_layout.panel.y, 152.0);
-    assert!(nested_layout.panel.x > anchored.panel.x, "nested prompt follows the row indent");
+    assert_eq!(nested_layout.input.y, 153.0);
+    assert_eq!(nested_layout.input.x, 124.0, "nested field follows the row indent");
+
+    let root_layout = chrome::new_item_layout(&layout, &tree, &tree.root).expect("root layout");
+    assert_eq!(root_layout.input.y, 109.0, "root field is the first tree row");
 }
 
 #[test]
-fn new_item_prompt_reports_create_and_cancel() {
-    let (_d, mut tree) = scene_fixture("new-item-prompt");
+fn new_item_prompt_draws_an_inline_field_without_buttons() {
+    let (_d, mut tree) = scene_fixture("new-item-inline-draw");
     let theme = frame_theme();
     let layout = app_layout(1024.0, 768.0, 304.0);
     let mut prompt = NewItemPrompt::new(NewItemKind::File, tree.root.clone());
-    prompt.input.text = "notes.txt".into();
-    prompt.input.cursor = prompt.input.text.len();
     let mut canvas = Canvas::new(1024, 768);
     let mut text = TextSystem::new();
     let mut split = Split { position: 304.0 };
@@ -379,29 +391,18 @@ fn new_item_prompt_reports_create_and_cancel() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    frame.pointer = Pointer { x: 130.0, y: 206.0, down: false, click: true };
-    let effects = draw_frame(
-        &mut frame,
-        &layout,
-        &mut tree,
-        &mut split,
-        &mut split_drag,
-        &mut scrollbar,
-        &mut viewer_scrollbar,
+    let field = chrome::new_item_layout(&layout, &tree, &tree.root).expect("field").input;
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.accent,
+            field.x as u32,
+            field.y as u32,
+            (field.x + field.w) as u32,
+            (field.y + field.h) as u32,
+        ) > 0,
+        "inline focused field paints its accent border"
     );
-    assert!(effects.new_item_submit);
-
-    frame.pointer = Pointer { x: 238.0, y: 206.0, down: false, click: true };
-    let effects = draw_frame(
-        &mut frame,
-        &layout,
-        &mut tree,
-        &mut split,
-        &mut split_drag,
-        &mut scrollbar,
-        &mut viewer_scrollbar,
-    );
-    assert!(effects.new_item_cancel);
 }
 
 #[test]

@@ -773,10 +773,6 @@ pub struct FrameEffects {
     pub toggle_split: bool,
     /// The editor-group divider moved.
     pub group_split_moved: bool,
-    /// The New File/New Folder prompt's Create button was clicked.
-    pub new_item_submit: bool,
-    /// The prompt's Cancel button was clicked.
-    pub new_item_cancel: bool,
 }
 
 /// Draw the existing per-file Commit & Push panel in the active Source
@@ -952,7 +948,20 @@ pub fn draw_frame(
         effects.refresh_tree = fx.refresh;
         effects.collapse_tree = fx.collapse;
 
-        // Tree panel: the modal name prompt blocks clicks/hover underneath it.
+        // Tree panel: the inline name field blocks clicks/hover underneath it
+        // and inserts one virtual row at the target folder's child position.
+        let new_item_row = f
+            .new_item
+            .as_ref()
+            .and_then(|prompt| chrome::new_item_row(tree, &prompt.parent))
+            .map(|(index, _)| index);
+        let extra_rows = if new_item_row.is_some() {
+            f.new_item
+                .as_ref()
+                .map_or(0, |prompt| 1 + usize::from(prompt.error.is_some()))
+        } else {
+            0
+        };
         let tree_pointer = if f.new_item.is_some() {
             Pointer::default()
         } else {
@@ -963,10 +972,12 @@ pub fn draw_frame(
             tree::TreeAction::Toggled | tree::TreeAction::Selected => effects.tree_changed = true,
             tree::TreeAction::Opened(path) => effects.opened = Some(path),
         }
-        if tree.set_offset(tree.offset, layout.tree_panel.h) && !effects.tree_changed {
+        if tree.set_offset_with_extra(tree.offset, layout.tree_panel.h, extra_rows)
+            && !effects.tree_changed
+        {
             effects.scrolled = true;
         }
-        tree::draw_tree_panel(
+        tree::draw_tree_panel_with_insertion(
             f.canvas,
             f.text,
             f.theme,
@@ -975,10 +986,11 @@ pub fn draw_frame(
             tree,
             tree_pointer,
             f.git,
+            new_item_row,
         );
         if layout.tree_panel.w > tree::TRACK_W {
             let viewport = layout.tree_panel.h;
-            let content = tree.visible_count() as f64 * ROW_H;
+            let content = (tree.visible_count() + extra_rows) as f64 * ROW_H;
             scrollbar.offset = tree.offset;
             if scrollbar.on_pointer(layout.scroll_track, tree_pointer, content, viewport) {
                 tree.set_offset(scrollbar.offset, viewport);
@@ -1203,9 +1215,7 @@ pub fn draw_frame(
     f.group_split = group_split;
     f.group_split_drag = group_split_drag;
 
-    let (new_item_submit, new_item_cancel) = chrome::draw_new_item_prompt(f, layout, tree);
-    effects.new_item_submit = new_item_submit;
-    effects.new_item_cancel = new_item_cancel;
+    chrome::draw_new_item_prompt(f, layout, tree);
 
     chrome::draw_status_bar(f, layout);
     effects

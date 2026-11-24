@@ -9,7 +9,7 @@ use cosmic_text::Weight;
 use crate::icons::{self, Icon};
 use crate::render::ColorRgb;
 use crate::text::TextStyle;
-use crate::tree::{FileTree, INDENT_PX, ROW_H};
+use crate::tree::{FileTree, CHEVRON_ZONE, INDENT_PX, ROW_H, TRACK_W};
 use crate::ui::{draw_button, Press, Rect};
 
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, CARD_RADIUS};
@@ -492,10 +492,20 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
 }
 
 pub(super) struct NewItemLayout {
-    pub(super) panel: Rect,
+    pub(super) handle: Rect,
     pub(super) input: Rect,
-    pub(super) create: Rect,
-    pub(super) cancel: Rect,
+}
+
+pub(super) fn new_item_row(tree: &FileTree, parent: &Path) -> Option<(usize, usize)> {
+    if parent == tree.root {
+        return Some((0, 0));
+    }
+    let rows = tree.visible_rows();
+    let (index, row) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.path == parent)?;
+    Some((index + 1, row.depth + 1))
 }
 
 pub(super) fn new_item_layout(
@@ -503,116 +513,71 @@ pub(super) fn new_item_layout(
     tree: &FileTree,
     parent: &Path,
 ) -> Option<NewItemLayout> {
-    let explorer = layout.explorer_card;
-    if explorer.w <= 0.0 || explorer.h < 132.0 {
+    let panel = layout.tree_panel;
+    if panel.w <= TRACK_W + 48.0 || panel.h < ROW_H {
         return None;
     }
-    let (anchor_y, depth) = if parent == tree.root {
-        (layout.explorer_root.y + layout.explorer_root.h + 8.0, 0)
-    } else if let Some((index, row)) = tree
-        .visible_rows()
-        .iter()
-        .enumerate()
-        .find(|(_, row)| row.path == parent)
-    {
-        (
-            layout.tree_panel.y + index as f64 * ROW_H - tree.offset + ROW_H,
-            row.depth,
-        )
-    } else {
-        (layout.explorer_root.y + layout.explorer_root.h + 8.0, 0)
-    };
-    let panel_h = 116.0;
-    let min_y = explorer.y + 8.0;
-    let max_y = explorer.y + explorer.h - 8.0 - panel_h;
-    let panel_x = explorer.x + 8.0 + (depth as f64 * INDENT_PX).min(48.0);
-    let panel = Rect {
-        x: panel_x,
-        y: anchor_y.clamp(min_y, max_y),
-        w: (explorer.x + explorer.w - 8.0 - panel_x).max(0.0),
-        h: panel_h,
-    };
-    let inner_w = (panel.w - 16.0).max(0.0);
-    let button_w = ((inner_w - 8.0) / 2.0).max(0.0);
+    let (row_index, depth) = new_item_row(tree, parent)?;
+    let row_y = panel.y + row_index as f64 * ROW_H - tree.offset;
+    if row_y < panel.y || row_y + ROW_H > panel.y + panel.h {
+        return None;
+    }
+    let input_x = panel.x + depth as f64 * INDENT_PX + CHEVRON_ZONE + 4.0;
+    let input_w = (panel.x + panel.w - TRACK_W - 4.0 - input_x).max(0.0);
+    if input_w < 40.0 {
+        return None;
+    }
     Some(NewItemLayout {
-        panel,
+        handle: Rect {
+            x: input_x - CHEVRON_ZONE,
+            y: row_y + 1.0,
+            w: CHEVRON_ZONE,
+            h: ROW_H - 2.0,
+        },
         input: Rect {
-            x: panel.x + 8.0,
-            y: panel.y + 32.0,
-            w: inner_w,
-            h: 24.0,
-        },
-        create: Rect {
-            x: panel.x + 8.0,
-            y: panel.y + 82.0,
-            w: button_w,
-            h: 24.0,
-        },
-        cancel: Rect {
-            x: panel.x + 16.0 + button_w,
-            y: panel.y + 82.0,
-            w: button_w,
-            h: 24.0,
+            x: input_x,
+            y: row_y + 1.0,
+            w: input_w,
+            h: ROW_H - 2.0,
         },
     })
 }
 
-pub(super) fn draw_new_item_prompt(
-    f: &mut Frame,
-    layout: &AppLayout,
-    tree: &FileTree,
-) -> (bool, bool) {
+pub(super) fn draw_new_item_prompt(f: &mut Frame, layout: &AppLayout, tree: &FileTree) {
     let Some(prompt) = f.new_item.take() else {
-        return (false, false);
+        return;
     };
     let Some(l) = new_item_layout(layout, tree, &prompt.parent) else {
         f.new_item = Some(prompt);
-        return (false, false);
+        return;
     };
-    card(f, l.panel);
-    text(
+    icon(
         f,
-        prompt.kind.title(),
-        l.panel.x + 10.0,
-        l.panel.y + 10.0,
-        11.0,
-        f.theme.fg,
-        true,
+        Icon::DragHandle,
+        l.handle.x + l.handle.w / 2.0,
+        l.handle.y + l.handle.h / 2.0,
+        12.0,
+        f.theme.text_muted,
     );
     prompt
         .input
-        .draw(f.canvas, l.input, f.theme, f.text, f.scale);
-    if prompt.input.text.is_empty() {
-        text(
-            f,
-            prompt.kind.placeholder(),
-            l.input.x + 10.0,
-            l.input.y + (l.input.h - 11.0) / 2.0,
-            11.0,
-            f.theme.fg_dim,
-            false,
-        );
-    }
+        .draw_rounded(f.canvas, l.input, f.theme, f.text, f.scale, 4.0);
     if let Some(error) = &prompt.error {
-        let max_chars = ((l.panel.w - 20.0) / 6.0).floor().max(1.0) as usize;
-        text(
-            f,
-            &super::truncate_chars(error, max_chars),
-            l.panel.x + 10.0,
-            l.panel.y + 62.0,
-            9.0,
-            f.theme.git_deleted,
-            false,
-        );
+        let error_y = l.input.y + l.input.h + 2.0;
+        if error_y + 12.0 <= layout.tree_panel.y + layout.tree_panel.h {
+            let max_chars = (l.input.w / 6.0).floor().max(1.0) as usize;
+            text(
+                f,
+                &super::truncate_chars(error, max_chars),
+                l.input.x,
+                error_y,
+                9.0,
+                f.theme.git_deleted,
+                false,
+            );
+        }
     }
-    let create = draw_button(
-        f.canvas, "Create", l.create, f.theme, f.text, f.pointer, f.scale,
-    ) == Press::Clicked;
-    let cancel = draw_button(
-        f.canvas, "Cancel", l.cancel, f.theme, f.text, f.pointer, f.scale,
-    ) == Press::Clicked;
     f.new_item = Some(prompt);
-    (create, cancel)
 }
 
 pub(super) fn draw_source_control_breadcrumb(f: &mut Frame, pane: Rect) {
