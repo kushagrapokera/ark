@@ -294,6 +294,10 @@ struct App {
     pane: PaneMode,
     /// Active workbench activity panel (M12; focus/highlight only).
     activity: frame::ActivityPanel,
+    /// Title-bar panel visibility (responsive auto-hide still applies).
+    layout_visibility: frame::LayoutVisibility,
+    /// Title-bar More menu visibility.
+    layout_menu_open: bool,
     /// Human-writable whitelist from `ark.toml` (defaults on absence).
     settings: config::Config,
     /// The open config editor (one at a time; M9).
@@ -384,6 +388,8 @@ impl App {
             commit: commit::CommitPanel::default(),
             pane: PaneMode::Viewer,
             activity: frame::ActivityPanel::Explorer,
+            layout_visibility: frame::LayoutVisibility::default(),
+            layout_menu_open: false,
             settings,
             config_edits: None,
             config_error: None,
@@ -663,14 +669,13 @@ impl App {
         if size.width == 0 || size.height == 0 {
             return None;
         }
-        Some(frame::app_layout_with_groups_and_terminal(
+        Some(frame::app_layout_with_visibility(
             size.width as f64 / self.scale,
             size.height as f64 / self.scale,
             self.split.position,
-            self.git.is_some(),
-            true,
             self.editor_groups.divider,
             self.editor_groups.groups.len(),
+            self.layout_visibility,
             self.term_height,
         ))
     }
@@ -851,6 +856,8 @@ impl App {
                 theme: &self.theme,
                 scale: self.scale,
                 activity_pulse,
+                layout_visibility: self.layout_visibility,
+                layout_menu_open: self.layout_menu_open,
                 animation_time,
                 title: &self.title,
                 root: &self.root,
@@ -957,6 +964,19 @@ impl App {
                     self.open_terminal_profile(profile)
                 }
             }
+        }
+        if let Some(action) = effects.layout_action {
+            self.apply_layout_action(action);
+        }
+        if effects.layout_menu_toggle {
+            self.layout_menu_open = !self.layout_menu_open;
+            self.damage.mark_full();
+            self.request_redraw();
+        }
+        if effects.layout_menu_dismiss && self.layout_menu_open {
+            self.layout_menu_open = false;
+            self.damage.mark_full();
+            self.request_redraw();
         }
         if effects.new_file {
             self.request_new_item(NewItemKind::File);
@@ -1105,6 +1125,7 @@ impl App {
 
     /// Open a new terminal tab (registry's default shell, root cwd).
     fn open_terminal_tab(&mut self) {
+        self.layout_visibility.terminal = true;
         let Some(proxy) = self.proxy.clone() else {
             error!("terminal open failed: no wake proxy");
             return;
@@ -1123,6 +1144,7 @@ impl App {
 
     /// `+` clones the active terminal; with no tabs it opens the default shell.
     fn duplicate_terminal_tab(&mut self) {
+        self.layout_visibility.terminal = true;
         if !self.terms.is_open() {
             self.open_terminal_tab();
             return;
@@ -1144,6 +1166,7 @@ impl App {
     }
 
     fn open_terminal_profile(&mut self, profile: term::TerminalProfile) {
+        self.layout_visibility.terminal = true;
         let Some(program) = profile.program() else {
             error!("terminal profile {} is unavailable", profile.label());
             return;
@@ -1256,6 +1279,45 @@ impl App {
             }
             frame::ActivityPanel::SourceControl => {
                 self.term_focused = false;
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn apply_layout_action(&mut self, action: frame::LayoutAction) {
+        self.layout_menu_open = false;
+        match action {
+            frame::LayoutAction::ToggleExplorer => {
+                self.layout_visibility.explorer = !self.layout_visibility.explorer;
+                if !self.layout_visibility.explorer {
+                    self.cancel_new_item();
+                }
+            }
+            frame::LayoutAction::ToggleTerminal => {
+                self.layout_visibility.terminal = !self.layout_visibility.terminal;
+                if !self.layout_visibility.terminal {
+                    self.terms.menu_open = false;
+                    self.term_focused = false;
+                }
+            }
+            frame::LayoutAction::ToggleMinimap => {
+                self.layout_visibility.minimap = !self.layout_visibility.minimap;
+            }
+            frame::LayoutAction::ToggleSplit => {
+                self.toggle_editor_split();
+                return;
+            }
+            frame::LayoutAction::ResetLayout => {
+                self.layout_visibility = frame::LayoutVisibility::default();
+                self.split.position = 304.0;
+                self.editor_groups.divider = 0.5;
+                self.term_height = None;
+                self.term_drag = TerminalDrag::default();
+                if self.editor_groups.is_split() {
+                    self.toggle_editor_split();
+                    return;
+                }
             }
         }
         self.damage.mark_full();
@@ -1576,6 +1638,7 @@ impl App {
     /// (the M6 PTY reader does the streaming — ark keeps no capture buffer).
     /// Returns whether the tab opened.
     fn run_git_command(&mut self, label: &str, command: &str) -> bool {
+        self.layout_visibility.terminal = true;
         let Some(proxy) = self.proxy.clone() else {
             error!("{label}: cannot run without an event-loop proxy");
             self.commit.error = Some(format!("{label}: no event loop"));
@@ -2190,6 +2253,12 @@ impl ApplicationHandler<Wake> for App {
                         self.damage.mark_full();
                         self.request_redraw();
                     }
+                    return;
+                }
+                if self.layout_menu_open {
+                    self.layout_menu_open = false;
+                    self.damage.mark_full();
+                    self.request_redraw();
                     return;
                 }
                 if self.terms.menu_open {

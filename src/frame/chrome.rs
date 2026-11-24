@@ -13,7 +13,7 @@ use crate::text::{TextStyle, TextSystem};
 use crate::tree::{FileTree, CHEVRON_ZONE, INDENT_PX, ROW_H, TRACK_W};
 use crate::ui::Rect;
 
-use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, CARD_RADIUS};
+use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, LayoutAction, CARD_RADIUS};
 
 fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, bold: bool) {
     let font_size = (size * f.scale) as f32;
@@ -68,15 +68,85 @@ fn card(f: &mut Frame, rect: Rect) {
     );
 }
 
-pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TitleBarActions {
+    pub explorer: Rect,
+    pub terminal: Rect,
+    pub minimap: Rect,
+    pub more: Rect,
+}
+
+impl Default for TitleBarActions {
+    fn default() -> Self {
+        let empty = Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
+        Self {
+            explorer: empty,
+            terminal: empty,
+            minimap: empty,
+            more: empty,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct TitleBarEffects {
+    pub action: Option<LayoutAction>,
+    pub menu_toggle: bool,
+    pub menu_dismiss: bool,
+}
+
+pub(super) fn title_bar_actions(layout: &AppLayout) -> TitleBarActions {
+    let bar = layout.title_bar;
+    let y = 8.0;
+    let more = Rect {
+        x: bar.w - 42.0,
+        y,
+        w: 20.0,
+        h: 20.0,
+    };
+    if bar.w < 720.0 {
+        return TitleBarActions { more, ..TitleBarActions::default() };
+    }
+    TitleBarActions {
+        explorer: Rect { x: bar.w - 118.0, y, w: 20.0, h: 20.0 },
+        terminal: Rect { x: bar.w - 94.0, y, w: 20.0, h: 20.0 },
+        minimap: Rect { x: bar.w - 70.0, y, w: 20.0, h: 20.0 },
+        more,
+    }
+}
+
+pub(super) fn layout_menu_layout(layout: &AppLayout) -> Option<(Rect, Vec<Rect>)> {
+    let actions = title_bar_actions(layout);
+    if actions.more.w <= 0.0 {
+        return None;
+    }
+    let width = 220.0_f64.min(layout.title_bar.w - 16.0).max(120.0);
+    let row_h = 28.0;
+    let panel = Rect {
+        x: (actions.more.x + actions.more.w - width).max(8.0),
+        y: layout.title_bar.y + layout.title_bar.h + 4.0,
+        w: width,
+        h: row_h * 5.0 + 8.0,
+    };
+    let rows = (0..5)
+        .map(|index| Rect {
+            x: panel.x + 4.0,
+            y: panel.y + 4.0 + index as f64 * row_h,
+            w: width - 8.0,
+            h: row_h,
+        })
+        .collect();
+    Some((panel, rows))
+}
+
+pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffects {
+    let mut effects = TitleBarEffects::default();
     let bar = layout.title_bar;
     f.canvas
         .fill_rect(bar.x, bar.y, bar.w, bar.h, f.theme.surface_chrome, f.scale);
     icon(f, Icon::Code, 20.0, 18.0, 16.0, f.theme.accent);
 
-    let full = bar.w >= 1024.0;
-    let medium = bar.w >= 720.0;
-    if full {
+    if bar.w >= 1024.0 {
         let menus = ["File", "Edit", "Selection", "View", "Go"];
         let mut x = 44.0;
         for label in menus {
@@ -88,129 +158,118 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) {
             };
         }
         icon(f, Icon::More, x + 4.0, 18.0, 14.0, f.theme.text_muted);
-        icon(
-            f,
-            Icon::ChevronLeft,
-            x + 42.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
-        icon(
-            f,
-            Icon::ChevronRight,
-            x + 64.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
+        icon(f, Icon::ChevronLeft, x + 42.0, 18.0, 14.0, f.theme.text_muted);
+        icon(f, Icon::ChevronRight, x + 64.0, 18.0, 14.0, f.theme.text_muted);
     }
 
-    let (reserve, left, show_update) = if full {
-        (190.0, 340.0, true)
-    } else if medium {
-        (190.0, 40.0, true)
-    } else if bar.w >= 520.0 {
-        (100.0, 40.0, true)
-    } else if bar.w >= 300.0 {
-        (72.0, 40.0, true)
-    } else {
-        (12.0, 40.0, false)
+    let actions = title_bar_actions(layout);
+    for (glyph, rect, active) in [
+        (Icon::PanelLeft, actions.explorer, f.layout_visibility.explorer),
+        (Icon::PanelBottom, actions.terminal, f.layout_visibility.terminal),
+        (Icon::PanelRight, actions.minimap, f.layout_visibility.minimap),
+        (Icon::More, actions.more, f.layout_menu_open),
+    ] {
+        if rect.w <= 0.0 {
+            continue;
+        }
+        let hovered = rect.contains(f.pointer.x, f.pointer.y);
+        if hovered {
+            f.canvas.fill_round_rect(
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                4.0,
+                f.theme.surface_hover,
+                f.scale,
+            );
+        }
+        icon(
+            f,
+            glyph,
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
+            14.0,
+            if active { f.theme.accent } else { f.theme.text_muted },
+        );
+    }
+    if f.pointer.click {
+        if actions.explorer.w > 0.0 && actions.explorer.contains(f.pointer.x, f.pointer.y) {
+            effects.action = Some(LayoutAction::ToggleExplorer);
+        } else if actions.terminal.w > 0.0 && actions.terminal.contains(f.pointer.x, f.pointer.y) {
+            effects.action = Some(LayoutAction::ToggleTerminal);
+        } else if actions.minimap.w > 0.0 && actions.minimap.contains(f.pointer.x, f.pointer.y) {
+            effects.action = Some(LayoutAction::ToggleMinimap);
+        } else if actions.more.contains(f.pointer.x, f.pointer.y) {
+            effects.menu_toggle = true;
+        }
+    }
+    effects
+}
+
+pub(super) fn draw_layout_menu(
+    f: &mut Frame,
+    layout: &AppLayout,
+    effects: &mut TitleBarEffects,
+) {
+    if !f.layout_menu_open {
+        return;
+    }
+    let Some((panel, rows)) = layout_menu_layout(layout) else {
+        return;
     };
-    let command_w = (bar.w - left - reserve).clamp(0.0, 320.0);
-    if command_w > 0.0 {
-        let command_x = left + (bar.w - left - reserve - command_w) / 2.0;
-        let command = Rect {
-            x: command_x,
-            y: 6.0,
-            w: command_w,
-            h: 24.0,
-        };
-        f.canvas.fill_round_rect(
-            command.x,
-            command.y,
-            command.w,
-            command.h,
-            4.0,
-            f.theme.surface,
-            f.scale,
-        );
-        f.canvas.stroke_rect_strips(
-            command.x,
-            command.y,
-            command.w,
-            command.h,
-            f.theme.border,
-            f.scale,
-        );
-        icon(
-            f,
-            Icon::Search,
-            command.x + 14.0,
-            18.0,
-            13.0,
-            f.theme.text_muted,
-        );
-        let max_chars = ((command.w - 38.0) / 6.6).floor().max(1.0) as usize;
-        let title = super::truncate_chars(f.title, max_chars);
-        text(f, &title, command.x + 28.0, 9.0, 11.0, f.theme.fg, false);
-    }
-
-    if show_update {
-        let update = Rect {
-            x: bar.w - reserve + 8.0,
-            y: 7.0,
-            w: 58.0,
-            h: 22.0,
-        };
-        f.canvas.fill_round_rect(
-            update.x,
-            update.y,
-            update.w,
-            update.h,
-            3.0,
-            f.theme.accent,
-            f.scale,
-        );
+    let split_label = if f.groups.is_some_and(|groups| groups.len() > 1) {
+        "Join Editor"
+    } else {
+        "Split Editor"
+    };
+    let options = [
+        ("Explorer", LayoutAction::ToggleExplorer, f.layout_visibility.explorer),
+        ("Terminal", LayoutAction::ToggleTerminal, f.layout_visibility.terminal),
+        ("Minimap", LayoutAction::ToggleMinimap, f.layout_visibility.minimap),
+        (split_label, LayoutAction::ToggleSplit, f.groups.is_some_and(|groups| groups.len() > 1)),
+        ("Reset Layout", LayoutAction::ResetLayout, false),
+    ];
+    card(f, panel);
+    for ((label, action, checked), row) in options.into_iter().zip(rows.iter().copied()) {
+        let hovered = row.contains(f.pointer.x, f.pointer.y);
+        if hovered {
+            f.canvas
+                .fill_rect(row.x, row.y, row.w, row.h, f.theme.surface_hover, f.scale);
+        }
+        if checked {
+            icon(
+                f,
+                Icon::Check,
+                row.x + 14.0,
+                row.y + row.h / 2.0,
+                11.0,
+                f.theme.accent,
+            );
+        }
         text(
             f,
-            "Update",
-            update.x + 10.0,
-            11.0,
+            label,
+            row.x + 30.0,
+            row.y + (row.h - 10.0) / 2.0,
             10.0,
-            f.theme.on_accent,
-            true,
+            f.theme.fg,
+            false,
         );
+        if f.pointer.click && hovered {
+            effects.action = Some(action);
+        }
     }
-
-    if full {
-        icon(
-            f,
-            Icon::PanelLeft,
-            bar.w - 108.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
-        icon(
-            f,
-            Icon::PanelBottom,
-            bar.w - 84.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
-        icon(
-            f,
-            Icon::PanelRight,
-            bar.w - 60.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
-        icon(f, Icon::More, bar.w - 32.0, 18.0, 14.0, f.theme.text_muted);
-    } else if bar.w >= 520.0 {
-        icon(f, Icon::More, bar.w - 20.0, 18.0, 14.0, f.theme.text_muted);
+    let actions = title_bar_actions(layout);
+    let inside_actions = [actions.explorer, actions.terminal, actions.minimap, actions.more]
+        .iter()
+        .any(|rect| rect.w > 0.0 && rect.contains(f.pointer.x, f.pointer.y));
+    if f.pointer.click
+        && !inside_actions
+        && !rows.iter().any(|row| row.contains(f.pointer.x, f.pointer.y))
+        && effects.action.is_none()
+    {
+        effects.menu_dismiss = true;
     }
 }
 

@@ -354,6 +354,8 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
         theme: &theme,
         scale: 1.0,
         activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
@@ -538,47 +540,112 @@ fn compact_breadcrumb_stays_inside_the_editor_card() {
 }
 
 #[test]
-fn compact_title_bar_keeps_controls_inside_the_window() {
-    let (_d, mut tree) = scene_fixture("compact-title");
+fn title_bar_has_no_update_or_search_field() {
+    let (_d, mut tree) = scene_fixture("title-clean");
     let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.surface = (10, 20, 30);
+    theme.accent = (200, 220, 255);
     theme.text_muted = (77, 77, 77);
-
-    let narrow = app_layout_with_commit(400.0, 300.0, 304.0, false, true);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
-    let mut canvas = Canvas::new(400, 300);
+    let mut canvas = Canvas::new(1024, 768);
     draw_static_frame(
         &mut canvas,
         &mut text,
         &theme,
         &mut tree,
-        &narrow,
+        &layout,
         Pointer::default(),
         &[],
         None,
     );
     assert_eq!(
-        count_color_in(&canvas, theme.accent, 399, 7, 400, 29),
+        count_color_in(&canvas, theme.surface, 300, 6, 700, 30),
         0,
-        "Update never extends past the title bar"
+        "the top-center search/command field is gone"
     );
+    assert_eq!(
+        count_color_in(&canvas, theme.accent, 700, 6, 900, 30),
+        0,
+        "the Update button is gone"
+    );
+    let actions = chrome::title_bar_actions(&layout);
+    assert!(actions.explorer.contains(916.0, 18.0));
+    assert!(actions.terminal.contains(940.0, 18.0));
+    assert!(actions.minimap.contains(964.0, 18.0));
+    assert!(actions.more.contains(992.0, 18.0));
+}
 
-    let medium = app_layout_with_commit(900.0, 700.0, 304.0, false, true);
-    let mut canvas = Canvas::new(900, 700);
-    draw_static_frame(
+#[test]
+fn title_bar_layout_buttons_report_their_actions() {
+    let (_d, mut tree) = scene_fixture("title-actions");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let actions = chrome::title_bar_actions(&layout);
+    for (rect, expected) in [
+        (actions.explorer, LayoutAction::ToggleExplorer),
+        (actions.terminal, LayoutAction::ToggleTerminal),
+        (actions.minimap, LayoutAction::ToggleMinimap),
+    ] {
+        let effects = draw_static_frame(
+            &mut canvas,
+            &mut text,
+            &theme,
+            &mut tree,
+            &layout,
+            Pointer {
+                x: rect.x + rect.w / 2.0,
+                y: rect.y + rect.h / 2.0,
+                down: false,
+                click: true,
+            },
+            &[],
+            None,
+        );
+        assert_eq!(effects.layout_action, Some(expected));
+    }
+    let effects = draw_static_frame(
         &mut canvas,
         &mut text,
         &theme,
         &mut tree,
-        &medium,
-        Pointer::default(),
+        &layout,
+        Pointer {
+            x: actions.more.x + actions.more.w / 2.0,
+            y: actions.more.y + actions.more.h / 2.0,
+            down: false,
+            click: true,
+        },
         &[],
         None,
     );
-    assert_eq!(
-        count_color_in(&canvas, theme.text_muted, 720, 9, 774, 27),
-        0,
-        "optional title icons do not overlap Update"
+    assert!(effects.layout_menu_toggle);
+}
+
+#[test]
+fn layout_visibility_options_hide_cards_and_minimap() {
+    let hidden = LayoutVisibility {
+        explorer: false,
+        terminal: false,
+        minimap: false,
+    };
+    let layout = app_layout_with_visibility(
+        1024.0,
+        768.0,
+        304.0,
+        0.5,
+        1,
+        hidden,
+        None,
     );
+    assert_eq!(layout.explorer_card.w, 0.0);
+    assert_eq!(layout.term_dock.h, 0.0);
+    assert_eq!(layout.minimap.w, 0.0);
+    assert_eq!(layout.editor_card.x, layout.activity_bar.x + layout.activity_bar.w + 8.0);
+    assert_eq!(layout.editor_card.h, layout.workbench.h);
 }
 
 #[test]
@@ -698,6 +765,8 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 theme: &theme,
                 scale: 1.0,
                 activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: Path::new("/repo"),
@@ -744,6 +813,8 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/repo"),
@@ -937,6 +1008,8 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         theme: &theme,
         scale: 1.0,
         activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
@@ -1250,6 +1323,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
@@ -1312,6 +1387,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
@@ -1392,6 +1469,8 @@ fn terminal_tabs_select_and_close_by_index() {
                 theme: &theme,
                 scale: 1.0,
                 activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: Path::new("/"),
@@ -1625,6 +1704,8 @@ fn draw_static_frame(
             theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/repo"),
@@ -1731,6 +1812,8 @@ fn frame_scene_renders_spec_surfaces() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -1841,6 +1924,8 @@ fn frame_viewer_pane_renders_over_placeholder() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -1918,6 +2003,8 @@ fn frame_interactions_report_effects() {
         theme: &theme,
         scale: 1.0,
         activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: std::path::Path::new("/"),
@@ -2088,6 +2175,8 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         theme: &theme,
         scale: 1.0,
         activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: std::path::Path::new("/"),
@@ -2237,6 +2326,8 @@ fn viewer_flash_paints_accent_strip() {
                 theme,
                 scale: 1.0,
                 activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: std::path::Path::new("/"),
@@ -2331,6 +2422,8 @@ fn frame_config_pane_renders_and_reports_save_click() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2394,6 +2487,8 @@ fn frame_config_pane_renders_and_reports_save_click() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2456,6 +2551,8 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         theme: &theme,
         scale: 1.0,
         activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
@@ -2596,6 +2693,8 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2658,6 +2757,8 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 theme: &theme,
                 scale: 1.0,
                 activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: std::path::Path::new("/"),
@@ -2832,6 +2933,8 @@ fn viewer_offset_self_heals_before_hit_testing() {
             theme: &theme,
             scale: 1.0,
             activity_pulse: 0.0,
+            layout_visibility: LayoutVisibility::default(),
+            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
