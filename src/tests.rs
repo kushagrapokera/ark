@@ -472,6 +472,17 @@ fn app_shift_wheel_scrolls_the_viewer_horizontally() {
 }
 
 #[test]
+fn sidebar_handle_activity_pulse_decays_to_idle() {
+    let now = Instant::now();
+    assert_eq!(handle_activity_pulse(now, now), 1.0);
+    assert!(
+        (handle_activity_pulse(now, now - Duration::from_millis(400)) - 0.5).abs() < 0.001,
+        "pulse fades linearly after input"
+    );
+    assert_eq!(handle_activity_pulse(now, now - HANDLE_PULSE), 0.0);
+}
+
+#[test]
 fn app_close_active_tab_prefers_the_editor_over_terminal_close() {
     let d = temp_dir("app-close-active-tab");
     let a = d.path().join("a.txt");

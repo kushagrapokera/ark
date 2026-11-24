@@ -561,6 +561,8 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 text: &mut text,
                 theme: &theme,
                 scale: 1.0,
+                activity_pulse: 0.0,
+                animation_time: 0.0,
                 title: "ark",
                 root: Path::new("/repo"),
                 open_files: &[],
@@ -604,6 +606,8 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: Path::new("/repo"),
             open_files: &[],
@@ -794,6 +798,8 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         text: &mut text,
         theme: &theme,
         scale: 1.0,
+        activity_pulse: 0.0,
+        animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
         open_files: &[],
@@ -1034,6 +1040,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
             open_files: &[],
@@ -1094,6 +1102,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
             open_files: &[],
@@ -1184,6 +1194,8 @@ fn vertical_terminal_sessions_switch_the_active_pty() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
             open_files: &[],
@@ -1350,6 +1362,8 @@ fn draw_static_frame(
             text,
             theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: Path::new("/repo"),
             open_files,
@@ -1453,6 +1467,8 @@ fn frame_scene_renders_spec_surfaces() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
             open_files: &[],
@@ -1560,6 +1576,8 @@ fn frame_viewer_pane_renders_over_placeholder() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
             open_files: &[],
@@ -1634,6 +1652,8 @@ fn frame_interactions_report_effects() {
         text: &mut text,
         theme: &theme,
         scale: 1.0,
+        activity_pulse: 0.0,
+        animation_time: 0.0,
         title: "ark",
         root: std::path::Path::new("/"),
         open_files: &[],
@@ -1801,6 +1821,8 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         text: &mut text,
         theme: &theme,
         scale: 1.0,
+        activity_pulse: 0.0,
+        animation_time: 0.0,
         title: "ark",
         root: std::path::Path::new("/"),
         open_files: &[],
@@ -1947,6 +1969,8 @@ fn viewer_flash_paints_accent_strip() {
                 text,
                 theme,
                 scale: 1.0,
+                activity_pulse: 0.0,
+                animation_time: 0.0,
                 title: "ark",
                 root: std::path::Path::new("/"),
                 open_files: &[],
@@ -2038,6 +2062,8 @@ fn frame_config_pane_renders_and_reports_save_click() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
             open_files: &[],
@@ -2098,6 +2124,8 @@ fn frame_config_pane_renders_and_reports_save_click() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
             open_files: &[],
@@ -2157,6 +2185,8 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         text: &mut text,
         theme: &theme,
         scale: 1.0,
+        activity_pulse: 0.0,
+        animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
         open_files: &files,
@@ -2282,19 +2312,20 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
     assert_eq!(
         handle,
         Rect {
-            x: 276.0,
-            y: 50.0,
-            w: 16.0,
-            h: 24.0
+            x: 274.0,
+            y: 373.0,
+            w: 20.0,
+            h: 34.0
         }
     );
 
-    draw_frame(
-        &mut Frame {
+    let mut frame = Frame {
             canvas: &mut canvas,
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
             open_files: &[],
@@ -2321,7 +2352,9 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             group_scrollbars: None,
             group_split: None,
             group_split_drag: None,
-        },
+    };
+    draw_frame(
+        &mut frame,
         &layout,
         &mut tree,
         &mut split,
@@ -2329,9 +2362,20 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
+    let dots = crate::ui::testutil::ink_bbox_in(frame.canvas, theme.surface, 274, 373, 294, 407)
+        .expect("three-dot handle ink");
     assert!(
-        count_color_in(&canvas, theme.fg_dim, 276, 50, 292, 74) >= 3,
-        "three-dot handle paints in the header gap"
+        dots.2 - dots.0 >= 3 && dots.3 - dots.1 >= 15,
+        "three bold dots paint at the center of the sidebar divider: {dots:?}"
+    );
+
+    frame.canvas.fill(theme.surface);
+    frame.activity_pulse = 1.0;
+    frame.animation_time = std::f64::consts::FRAC_PI_2 / 10.0;
+    draw_sidebar_handle(&mut frame, handle, false);
+    assert!(
+        count_color_in(frame.canvas, theme.accent, 274, 373, 294, 407) > 0,
+        "recent activity pulses the handle toward the accent color"
     );
 
     let mut draw = |split: &mut Split, pointer: Pointer, dbl: bool| {
@@ -2341,6 +2385,8 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 text: &mut text,
                 theme: &theme,
                 scale: 1.0,
+                activity_pulse: 0.0,
+                animation_time: 0.0,
                 title: "ark",
                 root: std::path::Path::new("/"),
                 open_files: &[],
@@ -2382,7 +2428,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut split,
         Pointer {
             x: 284.0,
-            y: 62.0,
+            y: 390.0,
             down: true,
             click: false,
         },
@@ -2392,7 +2438,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut split,
         Pointer {
             x: 340.0,
-            y: 62.0,
+            y: 390.0,
             down: true,
             click: false,
         },
@@ -2402,7 +2448,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut split,
         Pointer {
             x: 340.0,
-            y: 62.0,
+            y: 390.0,
             down: false,
             click: false,
         },
@@ -2415,7 +2461,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut split,
         Pointer {
             x: 340.0,
-            y: 62.0,
+            y: 390.0,
             down: false,
             click: true,
         },
@@ -2459,7 +2505,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut split,
         Pointer {
             x: 504.0,
-            y: 62.0,
+            y: 390.0,
             down: true,
             click: false,
         },
@@ -2512,6 +2558,8 @@ fn viewer_offset_self_heals_before_hit_testing() {
             text: &mut text,
             theme: &theme,
             scale: 1.0,
+            activity_pulse: 0.0,
+            animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
             open_files: &[],

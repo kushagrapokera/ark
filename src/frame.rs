@@ -11,7 +11,7 @@ use crate::configed::ConfigEditor;
 use crate::editor_groups::EditorGroup;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
-use crate::render::{Canvas, Theme};
+use crate::render::{Canvas, ColorRgb, Theme};
 use crate::term::{self, TerminalTabs};
 use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
 use crate::tree::{self, FileTree, ROW_H};
@@ -39,8 +39,8 @@ const SPLIT_MIN_PX: f64 = 224.0;
 const SPLIT_MAX_MARGIN: f64 = 280.0;
 /// Explorer card right edge (activity card + gap + 240 px explorer).
 const SIDEBAR_DEFAULT_PX: f64 = 64.0 + 240.0;
-const SIDEBAR_HANDLE_W: f64 = 16.0;
-const SIDEBAR_HANDLE_H: f64 = 24.0;
+const SIDEBAR_HANDLE_W: f64 = 20.0;
+const SIDEBAR_HANDLE_H: f64 = 34.0;
 /// Height of the "changed on disk" flash strip (viewer pane top edge).
 pub const FLASH_STRIP_H: f64 = 3.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -461,27 +461,69 @@ fn sidebar_handle(layout: &AppLayout, split_x: f64) -> Option<Rect> {
     }
     Some(Rect {
         x: split_x + layout.split_area.w / 2.0 - SIDEBAR_HANDLE_W / 2.0,
-        y: layout.workbench.y + 6.0,
+        y: layout.workbench.y + (layout.workbench.h - SIDEBAR_HANDLE_H) / 2.0,
         w: SIDEBAR_HANDLE_W,
         h: SIDEBAR_HANDLE_H,
     })
 }
 
+fn mix_rgb(a: ColorRgb, b: ColorRgb, t: f64) -> ColorRgb {
+    let t = t.clamp(0.0, 1.0);
+    (
+        (a.0 as f64 + (b.0 as f64 - a.0 as f64) * t).round() as u8,
+        (a.1 as f64 + (b.1 as f64 - a.1 as f64) * t).round() as u8,
+        (a.2 as f64 + (b.2 as f64 - a.2 as f64) * t).round() as u8,
+    )
+}
+
 fn draw_sidebar_handle(f: &mut Frame, rect: Rect, dragging: bool) {
     let hovered = rect.contains(f.pointer.x, f.pointer.y);
-    let color = if dragging || hovered {
-        f.theme.accent
-    } else {
-        f.theme.fg_dim
-    };
-    let dot = 2.0;
-    let gap = 3.0;
+    // Floating pill keeps the dots legible over both adjacent cards.
+    f.canvas.fill_round_rect(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        rect.w / 2.0,
+        f.theme.border_subtle,
+        f.scale,
+    );
+    f.canvas.fill_round_rect(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        rect.w - 2.0,
+        rect.h - 2.0,
+        (rect.w - 2.0) / 2.0,
+        f.theme.surface_chrome,
+        f.scale,
+    );
+    let pulse = f.activity_pulse.clamp(0.0, 1.0) as f64;
+    let emphasis = if dragging || hovered { 1.0 } else { pulse };
+    let wave = 0.5 + 0.5 * (f.animation_time * 10.0).sin();
+    let dot = 3.0 + emphasis * (0.5 + wave * 0.7);
+    let gap = 4.0;
     let total = dot * 3.0 + gap * 2.0;
     let x = rect.x + (rect.w - dot) / 2.0;
     let y = rect.y + (rect.h - total) / 2.0;
+    let color = if dragging || hovered {
+        f.theme.accent
+    } else {
+        mix_rgb(
+            f.theme.fg_dim,
+            f.theme.accent,
+            emphasis * (0.35 + 0.65 * wave),
+        )
+    };
     for index in 0..3 {
-        f.canvas
-            .fill_rect(x, y + index as f64 * (dot + gap), dot, dot, color, f.scale);
+        f.canvas.fill_round_rect(
+            x,
+            y + index as f64 * (dot + gap),
+            dot,
+            dot,
+            dot / 2.0,
+            color,
+            f.scale,
+        );
     }
 }
 
@@ -622,6 +664,10 @@ pub struct Frame<'a> {
     pub text: &'a mut TextSystem,
     pub theme: &'a Theme,
     pub scale: f64,
+    /// Recent input emphasis in `[0, 1]` for the sidebar handle pulse.
+    pub activity_pulse: f32,
+    /// Monotonic animation phase in seconds.
+    pub animation_time: f64,
     /// Project dir name for the header (App owns it, precomputed).
     pub title: &'a str,
     /// Project root (breadcrumbs strip it from open paths).

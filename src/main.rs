@@ -67,6 +67,13 @@ const BUFFER_CACHE_CAP: usize = 8;
 /// Double-click window (ms) and click slop (logical px).
 const DBL_CLICK_MS: u128 = 400;
 const DBL_CLICK_SLOP: f64 = 6.0;
+/// Duration of the sidebar-handle emphasis pulse after input.
+const HANDLE_PULSE: Duration = Duration::from_millis(800);
+
+fn handle_activity_pulse(now: Instant, last_activity: Instant) -> f32 {
+    (1.0 - now.saturating_duration_since(last_activity).as_secs_f32() / HANDLE_PULSE.as_secs_f32())
+        .clamp(0.0, 1.0)
+}
 /// M5 fs pipeline: tree re-lists coalesce to one per debounce window; the
 /// flash is a bounded two-frame animation (ON for the deadline, one redraw
 /// clears it).
@@ -619,6 +626,12 @@ impl App {
         let pointer = self.pointer;
         self.pointer.click = false;
         let dbl = std::mem::take(&mut self.pending_dbl);
+        let now = Instant::now();
+        let activity_pulse = handle_activity_pulse(now, self.last_activity);
+        let animation_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
         let terms = if self.terms.is_open() {
             Some(&mut self.terms)
         } else {
@@ -651,6 +664,8 @@ impl App {
                 text: &mut self.text,
                 theme: &self.theme,
                 scale: self.scale,
+                activity_pulse,
+                animation_time,
                 title: &self.title,
                 root: &self.root,
                 open_files: &[],
@@ -1619,10 +1634,21 @@ impl ApplicationHandler<Wake> for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(t + TERM_FRAME_BUDGET));
             }
         }
+        // Sidebar-handle pulse: keep painting for a short window after input,
+        // then stop automatically. Redraw events themselves do not extend it.
+        if now
+            .checked_duration_since(self.last_activity)
+            .is_some_and(|elapsed| elapsed < HANDLE_PULSE)
+        {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(33)));
+            self.request_redraw();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        self.last_activity = Instant::now();
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            self.last_activity = Instant::now();
+        }
         match event {
             WindowEvent::CloseRequested => {
                 info!("close requested — exiting");

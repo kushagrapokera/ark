@@ -236,6 +236,21 @@ five open viewers, two shells + fake agent tab):
 - Split stress with five large viewers, two shells, and a resize:
   **65,552 KiB = 64.0 MiB RSS**, **57,806 KiB = 56.4 MiB PSS**.
 
+## Sidebar resize handle
+
+- Moved the three-dot Explorer/editor divider handle to the vertical center of
+  the sidebar edge.
+- Enlarged and rounded the dots, added a contrasting floating pill, and kept
+  the handle visible at idle.
+- Added an 800 ms accent/size pulse after input, with continuous emphasis while
+  hovered or dragged. Redraw events do not extend the pulse, so it settles
+  automatically without retained animation state.
+- Verification: `cargo test` **271 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy clean. Live idle/pulse screenshots confirmed centered visibility and
+  frame-to-frame animation.
+- Split stress with five viewers, two shells, and a resize:
+  **65,748 KiB = 64.2 MiB RSS**, **57,843 KiB = 56.5 MiB PSS**.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal
