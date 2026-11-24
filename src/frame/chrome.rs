@@ -297,6 +297,19 @@ pub(super) struct ExplorerEffects {
     pub collapse: bool,
 }
 
+pub(super) fn explorer_action_rects(layout: &AppLayout) -> [Rect; 4] {
+    let root = layout.explorer_root;
+    let step = super::ui_size(18.0, layout.ui_scale);
+    let hit_h = (root.h - 4.0).max(0.0).min(super::ui_size(20.0, layout.ui_scale));
+    let first = root.x + root.w - 8.0 - 4.0 * step;
+    std::array::from_fn(|index| Rect {
+        x: first + index as f64 * step,
+        y: root.y + (root.h - hit_h) / 2.0,
+        w: step,
+        h: hit_h,
+    })
+}
+
 pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> ExplorerEffects {
     let mut effects = ExplorerEffects::default();
     if layout.explorer_card.w <= 0.0 {
@@ -345,9 +358,15 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
         12.0,
         f.theme.fg,
     );
+    let action_rects = explorer_action_rects(layout);
+    let title_font_size = (super::ui_size(11.0, f.ui_scale) * f.scale) as f32;
+    let title_metrics = f.text.mono_metrics(title_font_size, title_font_size * 1.35);
+    let title_advance = f64::from(title_metrics.advance) / f.scale;
+    let title_right = action_rects[0].x - 8.0;
+    let title_chars = ((title_right - (root.x + 28.0)).max(0.0) / title_advance).floor() as usize;
     text(
         f,
-        f.title,
+        &super::truncate_chars(f.title, title_chars),
         root.x + 28.0,
         root.y + 7.0,
         11.0,
@@ -360,14 +379,7 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
         Icon::Refresh,
         Icon::Collapse,
     ];
-    for (index, glyph) in actions.into_iter().enumerate() {
-        let cx = root.x + root.w - 58.0 + index as f64 * 16.0;
-        let rect = Rect {
-            x: cx - 8.0,
-            y: root.y + 4.0,
-            w: 16.0,
-            h: root.h - 8.0,
-        };
+    for (index, (glyph, rect)) in actions.into_iter().zip(action_rects).enumerate() {
         let hovered = rect.contains(f.pointer.x, f.pointer.y);
         if hovered {
             f.canvas.fill_round_rect(
@@ -383,8 +395,8 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
         icon(
             f,
             glyph,
-            cx,
-            root.y + root.h / 2.0,
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
             12.0,
             if hovered {
                 f.theme.fg
@@ -532,6 +544,20 @@ pub(super) struct EditorGroupEffects {
     pub focus: bool,
 }
 
+pub(super) fn editor_action_icons(width: f64, is_split: bool) -> &'static [Icon] {
+    if is_split {
+        if width >= 240.0 {
+            &[Icon::Close, Icon::Split]
+        } else {
+            &[Icon::Close]
+        }
+    } else if width >= 640.0 {
+        &[Icon::Split]
+    } else {
+        &[]
+    }
+}
+
 pub(super) fn draw_editor_group_chrome(
     f: &mut Frame,
     layout: EditorGroupLayout,
@@ -565,19 +591,7 @@ pub(super) fn draw_editor_group_chrome(
         );
     }
 
-    let actions: &[Icon] = if is_split {
-        if tabs.w >= 360.0 {
-            &[Icon::Close, Icon::Split, Icon::More]
-        } else if tabs.w >= 240.0 {
-            &[Icon::Close, Icon::Split]
-        } else {
-            &[Icon::Close]
-        }
-    } else if tabs.w >= 640.0 {
-        &[Icon::Split, Icon::More]
-    } else {
-        &[]
-    };
+    let actions = editor_action_icons(tabs.w, is_split);
     let reserve = match actions.len() {
         3 => 76.0,
         2 => 58.0,
@@ -1344,8 +1358,8 @@ pub(super) fn draw_status_bar(f: &mut Frame, layout: &AppLayout) {
 #[cfg(test)]
 pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
     let reserve = match editor_action_count(layout.editor_tabs.w) {
-        2 => 58.0,
-        _ => 38.0,
+        1 => 38.0,
+        _ => 0.0,
     };
     Rect {
         x: layout.editor_tabs.x,
@@ -1357,9 +1371,9 @@ pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
 
 #[cfg(test)]
 fn editor_action_count(width: f64) -> usize {
-    if width >= 320.0 {
-        2
-    } else {
+    if width >= 640.0 {
         1
+    } else {
+        0
     }
 }

@@ -501,6 +501,9 @@ pub fn draw_tree_panel_with_insertion(
         // physical and must NOT be scaled again (the M2 fix-round-2 lesson).
         let baseline = (row_y + ROW_H / 2.0) * scale + f64::from(m.ascent - m.descent) / 2.0;
         let badge = git.and_then(|g| g.badge_for(row.path));
+        let name_color = badge
+            .map(|badge| badge_glyph(badge, theme).1)
+            .unwrap_or(theme.fg);
         let text_x = panel.x + indent + 20.0;
         let text_right = panel.x + panel.w - TRACK_W - 4.0
             - if badge.is_some() { BADGE_W + 4.0 } else { 0.0 };
@@ -513,7 +516,7 @@ pub fn draw_tree_panel_with_insertion(
                 &display,
                 (text_x * scale) as f32,
                 baseline as f32,
-                TextStyle { color: theme.fg, font_size, weight: Weight::NORMAL },
+                TextStyle { color: name_color, font_size, weight: Weight::NORMAL },
             );
         }
 

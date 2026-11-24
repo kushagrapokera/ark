@@ -693,12 +693,12 @@ fn app_layout_actions_toggle_explorer_and_terminal() {
     let d = temp_dir("app-layout-actions");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
     assert!(app.layout_visibility.explorer);
-    assert!(app.layout_visibility.terminal);
+    assert!(!app.layout_visibility.terminal, "terminal dock starts hidden");
 
     app.apply_layout_action(frame::LayoutAction::ToggleExplorer);
     app.apply_layout_action(frame::LayoutAction::ToggleTerminal);
     assert!(!app.layout_visibility.explorer);
-    assert!(!app.layout_visibility.terminal);
+    assert!(app.layout_visibility.terminal);
 }
 
 #[test]

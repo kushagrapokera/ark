@@ -233,8 +233,8 @@ fn compact_editor_tabs_stay_clear_of_actions() {
     let full = app_layout(1024.0, 768.0, 304.0);
     assert_eq!(
         chrome::tab_strip(&full).w,
-        646.0,
-        "full layout reserves only the two remaining actions"
+        666.0,
+        "full layout reserves only the Split action"
     );
 }
 
@@ -397,25 +397,42 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
 }
 
 #[test]
+fn explorer_root_actions_fit_without_overlap_or_title_collision() {
+    let layout = app_layout_with_commit(1440.0, 900.0, 304.0, false, false);
+    let actions = chrome::explorer_action_rects(&layout);
+    assert!(actions.windows(2).all(|pair| pair[0].x + pair[0].w <= pair[1].x));
+    assert!(actions[3].x + actions[3].w <= layout.explorer_root.x + layout.explorer_root.w);
+    assert!(layout.explorer_root.x + 28.0 < actions[0].x - 8.0);
+}
+
+#[test]
+fn editor_strip_has_no_more_action() {
+    assert!(!chrome::editor_action_icons(700.0, true).contains(&crate::icons::Icon::More));
+    assert!(!chrome::editor_action_icons(700.0, false).contains(&crate::icons::Icon::More));
+    assert!(chrome::editor_action_icons(700.0, true).contains(&crate::icons::Icon::Split));
+}
+
+#[test]
 fn explorer_root_actions_report_clicks() {
     let (_d, mut tree) = scene_fixture("explorer-actions");
     let theme = frame_theme();
     let layout = app_layout(1024.0, 768.0, 304.0);
     let mut canvas = Canvas::new(1024, 768);
     let mut text = TextSystem::new();
-    for (x, expected) in [
-        (246.0, "file"),
-        (262.0, "folder"),
-        (278.0, "refresh"),
-        (294.0, "collapse"),
-    ] {
+    let action_rects = chrome::explorer_action_rects(&layout);
+    for (rect, expected) in action_rects.into_iter().zip(["file", "folder", "refresh", "collapse"]) {
         let effects = draw_static_frame(
             &mut canvas,
             &mut text,
             &theme,
             &mut tree,
             &layout,
-            Pointer { x, y: 86.0, down: false, click: true },
+            Pointer {
+                x: rect.x + rect.w / 2.0,
+                y: rect.y + rect.h / 2.0,
+                down: false,
+                click: true,
+            },
             &[],
             None,
         );

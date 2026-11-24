@@ -75,7 +75,7 @@ impl Default for LayoutVisibility {
     fn default() -> Self {
         Self {
             explorer: true,
-            terminal: true,
+            terminal: false,
         }
     }
 }

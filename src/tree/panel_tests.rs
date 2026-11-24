@@ -457,6 +457,14 @@ fn git_badges_render_at_the_row_edge() {
         count_color_in(&canvas, theme.git_untracked, zone_x0, 10, zone_x1, 32) > 0,
         "U badge ink next to A's row (dirs badge too — untracked dir)"
     );
+    assert!(
+        count_color_in(&canvas, theme.git_modified, 30, 32, 190, 54) > 0,
+        "b.txt's name uses the same color as its M badge"
+    );
+    assert!(
+        count_color_in(&canvas, theme.git_untracked, 30, 10, 190, 32) > 0,
+        "A's name uses the same color as its U badge"
+    );
     // No badge on rows without a status.
     assert_eq!(
         count_color_in(&canvas, theme.git_added, zone_x0, 10, zone_x1, 54),

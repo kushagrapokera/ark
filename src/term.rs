@@ -107,18 +107,23 @@ impl std::fmt::Display for TermError {
 
 impl std::error::Error for TermError {}
 
-/// Shell registry (M6): `$SHELL` first, then the common shells that exist
-/// on this system. The default is registry[0]; the ark.toml editor (M9)
-/// makes this configurable.
+/// Shell registry (M6): fish first (ark's default), then `$SHELL`, then the
+/// other common shells that exist on this system.
 pub fn shell_registry() -> Vec<PathBuf> {
     let mut shells = Vec::new();
-    if let Ok(s) = std::env::var("SHELL") {
-        let p = PathBuf::from(s);
-        if p.is_file() {
+    for candidate in ["/usr/bin/fish", "/bin/fish"] {
+        let p = PathBuf::from(candidate);
+        if p.is_file() && !shells.contains(&p) {
             shells.push(p);
         }
     }
-    for candidate in ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh", "/usr/bin/fish"] {
+    if let Ok(s) = std::env::var("SHELL") {
+        let p = PathBuf::from(s);
+        if p.is_file() && !shells.contains(&p) {
+            shells.push(p);
+        }
+    }
+    for candidate in ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh"] {
         let p = PathBuf::from(candidate);
         if p.is_file() && !shells.contains(&p) {
             shells.push(p);
@@ -1415,6 +1420,14 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert!(args.windows(2).any(|pair| pair == ["--workdir", "/tmp/ark-terminal-window"]));
+    }
+
+    #[test]
+    fn default_shell_prefers_fish_when_installed() {
+        let fish = Path::new("/usr/bin/fish");
+        if fish.is_file() {
+            assert_eq!(default_shell(), fish);
+        }
     }
 
     #[test]
