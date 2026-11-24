@@ -272,7 +272,11 @@ pub struct Terminal {
     term: Term<NoopListener>,
     processor: ansi::Processor,
     rx: mpsc::Receiver<Vec<u8>>,
+    /// Visible/model grid size; may lead the PTY during a divider drag.
     size: GridSize,
+    /// Last size acknowledged by the PTY. Kept separate so a drag sends one
+    /// SIGWINCH at release instead of one per pointer movement.
+    pty_size: GridSize,
     exited: bool,
 }
 
@@ -520,6 +524,7 @@ impl Terminal {
             processor: ansi::Processor::new(),
             rx,
             size,
+            pty_size: size,
             pgid,
             exited: false,
         })
@@ -551,25 +556,65 @@ impl Terminal {
         self.exited
     }
 
+    /// Size currently acknowledged by the PTY. During a divider drag this
+    /// intentionally lags [`Self::size`] until the final size is flushed.
+    #[allow(dead_code)] // resize contract/inspection surface
+    pub fn pty_size(&self) -> GridSize {
+        self.pty_size
+    }
+
     pub fn mode(&self) -> TermMode {
         *self.term.mode()
     }
 
-    /// Resize the model + the PTY. Returns whether anything changed.
+    /// Resize the model + the PTY immediately. Returns whether anything changed.
+    #[allow(dead_code)] // immediate-resize compatibility API; frame rendering defers explicitly
     pub fn resize(&mut self, size: GridSize) -> bool {
+        let changed = self.resize_visual(size);
+        if changed {
+            self.flush_pty_resize();
+        }
+        changed
+    }
+
+    /// Resize only the visible model. The shell keeps its previous dimensions
+    /// until [`Self::flush_pty_resize`] runs, avoiding a SIGWINCH feedback loop
+    /// while the divider is moving.
+    pub fn resize_visual(&mut self, size: GridSize) -> bool {
         if self.size == size {
             return false;
         }
         self.term.resize(size);
-        if let Some(master) = &self.master {
-            let _ = master.resize(PtySize {
-                rows: size.rows as u16,
-                cols: size.cols as u16,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-        }
         self.size = size;
+        true
+    }
+
+    /// Send the final visual size to the PTY once. Returns whether the kernel
+    /// PTY dimensions changed. Failures are logged and left retryable.
+    pub fn flush_pty_resize(&mut self) -> bool {
+        if self.pty_size == self.size {
+            return false;
+        }
+        let Some(master) = &self.master else {
+            // An exited/reaped PTY has no kernel size left to synchronize.
+            self.pty_size = self.size;
+            return false;
+        };
+        if let Err(e) = master.resize(PtySize {
+            rows: self.size.rows as u16,
+            cols: self.size.cols as u16,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            log::error!(
+                "terminal PTY resize to {}×{} failed: {e}",
+                self.size.cols,
+                self.size.rows
+            );
+            return false;
+        }
+        self.pty_size = self.size;
+        log::debug!("terminal PTY resized to {}×{}", self.size.cols, self.size.rows);
         true
     }
 
@@ -1206,6 +1251,12 @@ impl TerminalTabs {
         self.tabs.get_mut(self.active)
     }
 
+    /// Apply a deferred visual resize to the active PTY. Background tabs are
+    /// resized when they become active and the next frame is composed.
+    pub fn flush_active_resize(&mut self) -> bool {
+        self.active_mut().is_some_and(Terminal::flush_pty_resize)
+    }
+
     /// Drain every tab (background tabs keep their scrollback current).
     /// Returns whether any grid changed.
     pub fn drain_all(&mut self, max_chunks_per_tab: usize) -> bool {
@@ -1526,6 +1577,29 @@ mod tests {
             text.contains(&d.path().to_string_lossy().to_string()),
             "agent runs in the project root; saw {text:?}"
         );
+    }
+
+    #[test]
+    fn visual_resize_defers_and_coalesces_the_pty_resize() {
+        let d = temp_dir("pty-visual-resize");
+        let initial = GridSize::new(80, 24);
+        let mut term = Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            initial,
+            || {},
+        )
+        .expect("spawn test terminal");
+
+        assert!(term.resize_visual(GridSize::new(100, 30)));
+        assert_eq!(term.size(), GridSize::new(100, 30), "the model follows the panel");
+        assert_eq!(term.pty_size(), initial, "fish still sees the old grid during a drag");
+
+        assert!(term.resize_visual(GridSize::new(120, 40)));
+        assert!(term.flush_pty_resize(), "the final drag size reaches the PTY once");
+        assert_eq!(term.pty_size(), GridSize::new(120, 40));
+        assert!(!term.flush_pty_resize(), "an unchanged PTY size is a no-op");
     }
 
     #[test]

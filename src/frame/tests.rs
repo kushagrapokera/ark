@@ -1417,6 +1417,48 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
 }
 
 #[test]
+fn terminal_grid_repaint_leaves_the_rest_of_the_canvas_untouched() {
+    let d = temp_dir("terminal-grid-repaint");
+    let size = term::GridSize::new(80, 24);
+    let mut terms = TerminalTabs::default();
+    terms.tabs.push(
+        term::Terminal::spawn_program_with(d.path(), Path::new("/bin/cat"), "test", size, || {})
+            .expect("spawn test terminal"),
+    );
+    let theme = Theme::DARK_PLUS;
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let sentinel = theme.accent;
+    canvas.fill_rect(0.0, 0.0, 1024.0, 768.0, sentinel, 1.0);
+
+    draw_terminal_grid(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        layout.ui_scale,
+        layout.term_grid,
+        &mut terms,
+        false,
+    );
+
+    assert_eq!(
+        canvas.pixmap().pixel(20, 20),
+        tiny_skia::PremultipliedColorU8::from_rgba(sentinel.0, sentinel.1, sentinel.2, 255),
+        "terminal output must not repaint the title bar or Explorer"
+    );
+    assert_eq!(
+        canvas.pixmap().pixel(
+            (layout.term_grid.x + layout.term_grid.w / 2.0) as u32,
+            (layout.term_grid.y + layout.term_grid.h / 2.0) as u32,
+        ),
+        tiny_skia::PremultipliedColorU8::from_rgba(theme.bg.0, theme.bg.1, theme.bg.2, 255),
+        "the terminal grid itself is painted"
+    );
+}
+
+#[test]
 fn terminal_tabs_select_and_close_by_index() {
     let d = temp_dir("terminal-tabs-frame");
     let size = term::GridSize { cols: 80, rows: 24 };

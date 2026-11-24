@@ -672,6 +672,83 @@ fn app_explorer_refresh_and_collapse_actions_update_the_tree() {
 }
 
 #[test]
+fn terminal_output_selects_a_terminal_only_render_wave() {
+    let d = temp_dir("app-terminal-render-wave");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.canvas.resize(1024, 768);
+    app.layout_visibility.terminal = true;
+    app.terms.tabs.push(
+        term::Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            term::GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn test terminal"),
+    );
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    assert!(matches!(app.take_render_wave(&layout), RenderWave::Scene(_)));
+    app.damage.take(app.canvas.width(), app.canvas.height());
+
+    app.terminal_dirty = true;
+    assert_eq!(
+        app.take_render_wave(&layout),
+        RenderWave::Terminal(damage_rect(layout.term_grid, 1.0, 1024, 768))
+    );
+    assert!(!app.terminal_dirty, "the terminal wave consumes the dirty flag");
+}
+
+#[test]
+fn scene_damage_takes_precedence_over_a_terminal_only_repaint() {
+    let d = temp_dir("app-terminal-scene-wave");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.canvas.resize(1024, 768);
+    app.layout_visibility.terminal = true;
+    app.terms.tabs.push(
+        term::Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            term::GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn test terminal"),
+    );
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    app.damage.take(app.canvas.width(), app.canvas.height());
+    let tree_damage = damage_rect(layout.tree_panel, 1.0, 1024, 768);
+    app.damage.mark(tree_damage);
+    app.terminal_dirty = true;
+
+    assert_eq!(app.take_render_wave(&layout), RenderWave::Scene(vec![tree_damage]));
+    assert!(!app.terminal_dirty, "a scene wave already paints the terminal");
+}
+
+#[test]
+fn hidden_terminal_output_does_not_schedule_a_repaint() {
+    let d = temp_dir("app-terminal-hidden-wave");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.canvas.resize(1024, 768);
+    app.terms.tabs.push(
+        term::Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            term::GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn test terminal"),
+    );
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, false, false);
+    app.damage.take(app.canvas.width(), app.canvas.height());
+    app.terminal_dirty = true;
+
+    assert_eq!(app.take_render_wave(&layout), RenderWave::None);
+    assert!(!app.terminal_dirty);
+}
+
+#[test]
 fn app_terminal_divider_drag_resizes_and_clamps_the_dock() {
     let d = temp_dir("app-terminal-resize");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
@@ -686,6 +763,116 @@ fn app_terminal_divider_drag_resizes_and_clamps_the_dock() {
     assert_eq!(app.term_height, Some(120.0));
     app.resize_terminal_to(-1_000.0, &layout);
     assert_eq!(app.term_height, Some(524.0));
+}
+
+#[test]
+fn app_terminal_divider_drag_coalesces_damage_and_redraws() {
+    let d = temp_dir("app-terminal-resize-coalesce");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.canvas.resize(1024, 768);
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    app.damage.take(app.canvas.width(), app.canvas.height());
+    app.pointer.x = layout.term_dock.x + 40.0;
+    app.pointer.y = layout.term_dock.y;
+    assert!(app.begin_terminal_resize(&layout));
+
+    for y in [
+        layout.term_dock.y - 20.0,
+        layout.term_dock.y - 60.0,
+        layout.term_dock.y - 100.0,
+    ] {
+        app.pointer.y = y;
+        assert!(app.resize_terminal_to(y, &layout));
+        app.mark_terminal_resize_damage(&layout);
+    }
+    assert!(app.term_drag.dirty, "movement queues one frame");
+    assert!(app.take_terminal_resize_redraw());
+    assert!(!app.take_terminal_resize_redraw(), "later wakes do not duplicate the redraw");
+
+    let region = Rect {
+        x: layout.editor_card.x,
+        y: layout.workbench.y,
+        w: layout.editor_card.w,
+        h: layout.workbench.h,
+    };
+    assert_eq!(
+        app.damage.take(1024, 768),
+        Some(vec![damage_rect(region, 1.0, 1024, 768)]),
+        "the whole drag shares one bounded damage region"
+    );
+}
+
+#[test]
+fn app_terminal_divider_release_flushes_only_the_final_pty_size() {
+    let d = temp_dir("app-terminal-resize-flush");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.canvas.resize(1024, 768);
+    app.layout_visibility.terminal = true;
+    let layout_for = |app: &App| {
+        frame::app_layout_with_visibility(
+            1024.0,
+            768.0,
+            app.split.position,
+            app.editor_groups.divider,
+            app.editor_groups.groups.len(),
+            app.layout_visibility,
+            app.term_height,
+        )
+    };
+    let initial_layout = layout_for(&app);
+    let font_size = (UI_FONT_SIZE as f64 * app.scale * initial_layout.ui_scale) as f32;
+    let m = app.text.mono_metrics(font_size, font_size * 1.35);
+    let advance = f64::from(m.advance) / app.scale;
+    let initial = term::GridSize::fit(
+        initial_layout.term_grid.w,
+        initial_layout.term_grid.h,
+        advance,
+        viewer::LINE_H,
+    );
+    app.terms.tabs.push(
+        term::Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            initial,
+            || {},
+        )
+        .expect("spawn test terminal"),
+    );
+    app.pointer.x = initial_layout.term_dock.x + 40.0;
+    app.pointer.y = initial_layout.term_dock.y - 4.0;
+    assert!(app.begin_terminal_resize(&initial_layout));
+
+    // One painted drag frame leaves the visual model at nine rows.
+    assert!(app.resize_terminal_to(initial_layout.term_dock.y - 32.0, &initial_layout));
+    let intermediate_layout = layout_for(&app);
+    frame::draw_terminal_grid(
+        &mut app.canvas,
+        &mut app.text,
+        &app.theme,
+        app.scale,
+        intermediate_layout.ui_scale,
+        intermediate_layout.term_grid,
+        &mut app.terms,
+        false,
+    );
+    let intermediate = app.terms.active().expect("terminal").size();
+    assert_eq!(intermediate.rows, 9);
+    assert_eq!(app.terms.active().expect("terminal").pty_size(), initial);
+
+    // Release arrives before the final visual frame. It must skip the stale
+    // nine-row PTY size and send only the final eight-row size.
+    assert!(app.resize_terminal_to(initial_layout.term_dock.y - 12.0, &initial_layout));
+    let final_layout = layout_for(&app);
+    assert!(app.finish_terminal_resize(Some(&final_layout)));
+    assert!(!app.term_drag.dragging);
+    assert_eq!(app.terms.active().expect("terminal").size().rows, 8);
+    assert_eq!(
+        app.terms.active().expect("terminal").pty_size(),
+        app.terms.active().expect("terminal").size(),
+        "release synchronizes the final grid without an intermediate SIGWINCH"
+    );
+    assert!(!app.finish_terminal_resize(None), "release without a drag is a no-op");
 }
 
 #[test]

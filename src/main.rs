@@ -3,9 +3,10 @@
 //! M3: the lazy virtualized file tree panel in the real app frame. `frame.rs`
 //! owns layout + scene composition; `tree.rs` owns the tree state model and
 //! its viewport-only panel rendering. `App` routes winit events into the
-//! frame: tree scroll marks panel-level damage (partial presents), everything
-//! else is full. The M2 demo scene survives as test-only `demo.rs`. HiDPI:
-//! layout in logical px, raster ×scale.
+//! frame: tree scrolls and PTY output use partial/terminal-only damage,
+//! divider drags coalesce to one frame, and scene changes repaint fully.
+//! The M2 demo scene survives as test-only `demo.rs`. HiDPI: layout in
+//! logical px, raster ×scale.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -216,6 +217,19 @@ fn route_wheel_viewer(
 struct TerminalDrag {
     dragging: bool,
     grab_dy: f64,
+    /// Pointer movement since the last requested frame.
+    dirty: bool,
+    /// The drag's stable editor/terminal envelope is already damaged.
+    damage_marked: bool,
+}
+
+/// One pending present wave. PTY output normally stays terminal-only; layout,
+/// input, menus, and window changes use the normal scene path.
+#[derive(Debug, PartialEq, Eq)]
+enum RenderWave {
+    Scene(Vec<DamageRect>),
+    Terminal(DamageRect),
+    None,
 }
 
 /// Per-window render state. `Arc<Window>` clones keep the `Surface` (which
@@ -276,6 +290,10 @@ struct App {
     last_render: Option<Instant>,
     /// A terminal-area repaint was deferred past the frame budget.
     term_paint_due: bool,
+    /// PTY output changed a visible terminal since the last present. Kept
+    /// separate from scene damage so repeated chunks cannot degrade the fast
+    /// path into full-frame damage.
+    terminal_dirty: bool,
     /// "Changed on disk" flash deadline (cleared by a scheduled redraw).
     flash_until: Option<Instant>,
     /// Group/path that owns the current change flash.
@@ -377,6 +395,7 @@ impl App {
             term_drag: TerminalDrag::default(),
             last_render: None,
             term_paint_due: false,
+            terminal_dirty: false,
             flash_until: None,
             flash_path: None,
             last_tree_refresh: None,
@@ -658,6 +677,36 @@ impl App {
         }
     }
 
+    /// Select the smallest correct render wave. Terminal-only painting is safe
+    /// only when no scene interaction is pending and the grid is visible.
+    fn take_render_wave(&mut self, layout: &AppLayout) -> RenderWave {
+        let terminal_only = self.terminal_dirty
+            && self.damage.is_empty()
+            && self.layout_visibility.terminal
+            && layout.term_grid.w > 0.0
+            && layout.term_grid.h > 0.0
+            && self.terms.is_open()
+            && !self.terms.menu_open
+            && !self.term_drag.dragging
+            && !self.pointer.click
+            && !self.pending_dbl
+            && self.scale.is_finite()
+            && self.scale > 0.0;
+        self.terminal_dirty = false;
+        if terminal_only {
+            return RenderWave::Terminal(damage_rect(
+                layout.term_grid,
+                self.scale,
+                self.canvas.width(),
+                self.canvas.height(),
+            ));
+        }
+        match self.damage.take(self.canvas.width(), self.canvas.height()) {
+            Some(rects) => RenderWave::Scene(rects),
+            None => RenderWave::None,
+        }
+    }
+
     /// Current frame layout from the window's logical size, or `None` before
     /// the window exists / while collapsed.
     fn app_layout(&self) -> Option<AppLayout> {
@@ -683,13 +732,15 @@ impl App {
         }
         self.term_drag.dragging = true;
         self.term_drag.grab_dy = self.pointer.y - layout.term_dock.y;
+        self.term_drag.dirty = false;
+        self.term_drag.damage_marked = false;
         log::debug!("terminal resize drag started");
         true
     }
 
-    fn resize_terminal_to(&mut self, pointer_y: f64, layout: &AppLayout) {
+    fn resize_terminal_to(&mut self, pointer_y: f64, layout: &AppLayout) -> bool {
         if !self.term_drag.dragging || !pointer_y.is_finite() {
-            return;
+            return false;
         }
         let bottom = layout.workbench.y + layout.workbench.h;
         let requested = bottom - (pointer_y - self.term_drag.grab_dy);
@@ -698,10 +749,63 @@ impl App {
             layout.workbench.h,
             layout.terminal_resize.h,
         );
-        if self.term_height != Some(height) {
-            self.term_height = Some(height);
-            log::debug!("terminal height set to {height:.1}px");
+        if self.term_height == Some(height) {
+            return false;
         }
+        self.term_height = Some(height);
+        self.term_drag.dirty = true;
+        log::debug!("terminal height set to {height:.1}px");
+        true
+    }
+
+    /// Damage the editor/terminal column once per drag. Its geometry is
+    /// stable while only the divider moves, so repeated pointer events do not
+    /// accumulate rectangles or degrade into full-frame damage.
+    fn mark_terminal_resize_damage(&mut self, layout: &AppLayout) {
+        if self.term_drag.damage_marked {
+            return;
+        }
+        let region = Rect {
+            x: layout.editor_card.x,
+            y: layout.workbench.y,
+            w: layout.editor_card.w,
+            h: layout.workbench.h,
+        };
+        let (cw, ch) = (self.canvas.width(), self.canvas.height());
+        self.damage.mark(damage_rect(region, self.scale, cw, ch));
+        self.term_drag.damage_marked = true;
+    }
+
+    /// Consume the coalesced resize redraw request. Called after a batch of
+    /// pointer movements so one event-loop turn requests at most one frame.
+    fn take_terminal_resize_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.term_drag.dirty)
+    }
+
+    /// End a divider drag and send fish its final grid size exactly once.
+    /// When release arrives before the last visual frame, fit the model to
+    /// the final layout here so a stale intermediate size is never sent.
+    fn finish_terminal_resize(&mut self, layout: Option<&AppLayout>) -> bool {
+        if !self.term_drag.dragging {
+            return false;
+        }
+        self.term_drag.dragging = false;
+        self.term_drag.dirty = false;
+        if let Some(layout) = layout {
+            if let Some(size) = frame::terminal_grid_size(
+                &mut self.text,
+                self.scale,
+                layout.ui_scale,
+                layout.term_grid,
+            ) {
+                if let Some(term) = self.terms.active_mut() {
+                    term.resize_visual(size);
+                }
+            }
+        }
+        self.terms.flush_active_resize();
+        log::debug!("terminal resize drag finished");
+        true
     }
 
     /// Terminal grid as if the dock were open (new tab spawn size).
@@ -781,20 +885,11 @@ impl App {
         // app_layout borrows all of self; it must finish before the surface
         // borrow below.
         let Some(layout) = self.app_layout() else { return };
-        let active_group = self.active_group_index();
-        let active_path = self.active_path();
-        let config_path = self.config_path();
-        let group_viewers = Self::prepare_group_viewers(
-            &mut self.buffers,
-            &mut self.editor_groups,
-            config_path,
-        );
-        let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
-            return;
-        };
+        let Some(window) = &self.window else { return };
         // The window size is guaranteed non-zero here (app_layout checked).
         let size = window.inner_size();
         if self.surface_size != (size.width, size.height) {
+            let Some(surface) = self.surface.as_mut() else { return };
             if let Err(e) = surface.resize(
                 NonZeroU32::new(size.width.max(1)).expect("nonzero width"),
                 NonZeroU32::new(size.height.max(1)).expect("nonzero height"),
@@ -807,9 +902,48 @@ impl App {
             self.damage.mark_full();
             info!("surface resized to {}x{}", size.width, size.height);
         }
-        let Some(rects) = self.damage.take(self.canvas.width(), self.canvas.height()) else {
-            return; // nothing changed since the last present
+        let rects = match self.take_render_wave(&layout) {
+            RenderWave::None => return,
+            RenderWave::Scene(rects) => rects,
+            RenderWave::Terminal(rect) => {
+                // PTY output repaints only the grid. No viewer preparation,
+                // chrome composition, or whole-canvas raster is needed.
+                log::trace!(
+                    "terminal-only frame {}x{}",
+                    rect.width,
+                    rect.height
+                );
+                frame::draw_terminal_grid(
+                    &mut self.canvas,
+                    &mut self.text,
+                    &self.theme,
+                    self.scale,
+                    layout.ui_scale,
+                    layout.term_grid,
+                    &mut self.terms,
+                    self.term_focused,
+                );
+                if !self.term_drag.dragging {
+                    self.terms.flush_active_resize();
+                }
+                let Some(surface) = self.surface.as_mut() else { return };
+                if render::present(surface, &self.canvas, &[rect]) && self.smoke {
+                    self.pending_exit = true;
+                }
+                self.last_render = Some(Instant::now());
+                return;
+            }
         };
+
+        let active_group = self.active_group_index();
+        let active_path = self.active_path();
+        let config_path = self.config_path();
+        let group_viewers = Self::prepare_group_viewers(
+            &mut self.buffers,
+            &mut self.editor_groups,
+            config_path,
+        );
+        let Some(surface) = self.surface.as_mut() else { return };
 
         // Raster the full scene per damage wave (partial damage bounds the
         // PRESENT, not the raster). The frame consumes the armed click and
@@ -894,6 +1028,11 @@ impl App {
             &mut self.scrollbar,
             &mut Scrollbar::default(),
         );
+        // Window/layout changes resize the PTY immediately. Only an active
+        // divider drag defers SIGWINCH until release.
+        if !self.term_drag.dragging {
+            self.terms.flush_active_resize();
+        }
         // Post-raster damage for state changes made during the frame (the
         // marks schedule the next present).
         if effects.tree_changed {
@@ -1282,6 +1421,9 @@ impl App {
                     self.layout_visibility.terminal = false;
                     self.terms.menu_open = false;
                     self.term_focused = false;
+                    self.finish_terminal_resize(None);
+                    self.term_paint_due = false;
+                    self.terminal_dirty = false;
                 } else {
                     self.layout_visibility.terminal = true;
                     self.terms.menu_open = false;
@@ -1717,15 +1859,12 @@ impl App {
         if !parsed {
             return;
         }
-        // Hidden terminals keep their scrollback current but do not repaint
-        // another pane. The workbench dock repaints whenever tabs exist.
-        if self.terms.is_open() {
-            if let Some(layout) = self.app_layout() {
-                let (cw, ch) = (self.canvas.width(), self.canvas.height());
-                self.damage
-                    .mark(damage_rect(layout.term_grid, self.scale, cw, ch));
-            }
+        // Hidden terminals keep their scrollback current but do not schedule
+        // paints for a surface that is not visible.
+        if !self.layout_visibility.terminal || !self.terms.is_open() {
+            return;
         }
+        self.terminal_dirty = true;
         let now = Instant::now();
         let due = self.last_render.is_none_or(|t| now.duration_since(t) >= TERM_FRAME_BUDGET);
         if due {
@@ -2004,9 +2143,19 @@ impl ApplicationHandler<Wake> for App {
                 self.pointer.y = logical.y;
                 if self.term_drag.dragging {
                     if let Some(layout) = self.app_layout() {
-                        self.resize_terminal_to(logical.y, &layout);
+                        if self.resize_terminal_to(logical.y, &layout) {
+                            self.mark_terminal_resize_damage(&layout);
+                        }
                     }
+                    // One request per event-loop turn, not per raw pointer
+                    // event. The PTY itself stays at its pre-drag size.
+                    if self.take_terminal_resize_redraw() {
+                        self.request_redraw();
+                    }
+                    return;
                 }
+                // Full repaint on pointer movement: hover backgrounds and the
+                // split divider react to position; simple and correct in M3.
                 self.damage.mark_full();
                 self.request_redraw();
             }
@@ -2038,9 +2187,8 @@ impl ApplicationHandler<Wake> for App {
                         self.begin_terminal_resize(layout);
                     }
                 }
-                if state == ElementState::Released {
-                    self.term_drag.dragging = false;
-                }
+                let terminal_drag_finished = state == ElementState::Released
+                    && self.finish_terminal_resize(layout.as_ref());
                 if over_commit {
                     // A commit-panel click never leaves the shell keyboard-
                     // focused (the message field / buttons own this surface).
@@ -2089,7 +2237,13 @@ impl ApplicationHandler<Wake> for App {
                         }
                     }
                 }
-                self.damage.mark_full();
+                if terminal_drag_finished {
+                    if let Some(layout) = layout.as_ref() {
+                        self.mark_terminal_resize_damage(layout);
+                    }
+                } else {
+                    self.damage.mark_full();
+                }
                 self.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -2160,7 +2314,13 @@ impl ApplicationHandler<Wake> for App {
                         &mut self.damage,
                     )
                 } else if grid.contains(x, y) && self.terms.is_open() {
-                    route_wheel_term(self, dy, &grid)
+                    let handled = route_wheel_term(self, dy, &grid);
+                    if handled {
+                        // Scrollback and mouse-report-driven updates repaint
+                        // only the terminal grid.
+                        self.terminal_dirty = true;
+                    }
+                    handled
                 } else if let Some(group) = layout
                     .editor_groups
                     .iter()

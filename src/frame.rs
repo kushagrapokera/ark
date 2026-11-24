@@ -904,6 +904,55 @@ fn draw_source_control(f: &mut Frame, layout: &AppLayout) -> commit::PanelEffect
     panel.draw(f.canvas, f.text, f.theme, f.scale, rect, status, f.pointer)
 }
 
+/// Fit the active terminal's monospace grid into a logical rect. Shared by
+/// full-frame composition and the final drag-release synchronization.
+pub fn terminal_grid_size(
+    text: &mut TextSystem,
+    scale: f64,
+    ui_scale: f64,
+    rect: Rect,
+) -> Option<term::GridSize> {
+    if rect.w <= 0.0
+        || rect.h <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+        || !ui_scale.is_finite()
+        || ui_scale <= 0.0
+    {
+        return None;
+    }
+    let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
+    let m = text.mono_metrics(font_size, font_size * 1.35);
+    let advance = f64::from(m.advance) / scale;
+    Some(term::GridSize::fit(rect.w, rect.h, advance, LINE_H))
+}
+
+/// Resize and paint only the active terminal grid. This is the fast path for
+/// PTY output: unlike `draw_frame`, it never touches the title bar, Explorer,
+/// editor, or terminal chrome. The grid is cleared first so erased cells and
+/// cursor movement cannot leave stale ink on the persistent canvas.
+#[allow(clippy::too_many_arguments)] // explicit raster context and terminal state
+pub fn draw_terminal_grid(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    scale: f64,
+    ui_scale: f64,
+    rect: Rect,
+    terms: &mut TerminalTabs,
+    show_cursor: bool,
+) {
+    let Some(size) = terminal_grid_size(text, scale, ui_scale, rect) else {
+        return;
+    };
+    canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, theme.bg, scale);
+    let Some(term) = terms.active_mut() else {
+        return;
+    };
+    term.resize_visual(size);
+    term.draw(canvas, text, theme, scale, ui_scale, rect, show_cursor);
+}
+
 /// Compose and raster one app frame (M3 layout + M4 viewer pane). State
 /// transitions happen here, right before the widgets draw (the M2 pattern,
 /// preserved).
@@ -1140,14 +1189,16 @@ pub fn draw_frame(
         chrome::draw_terminal_placeholder(f, layout);
     }
     if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
-        let grid = layout.term_grid;
-        if let Some(t) = terms.active_mut() {
-            let font_size = (UI_FONT_SIZE as f64 * f.scale * f.ui_scale) as f32;
-            let m = f.text.mono_metrics(font_size, font_size * 1.35);
-            let advance = f64::from(m.advance) / f.scale;
-            t.resize(term::GridSize::fit(grid.w, grid.h, advance, LINE_H));
-            t.draw(f.canvas, f.text, f.theme, f.scale, f.ui_scale, grid, f.term_focused);
-        }
+        draw_terminal_grid(
+            f.canvas,
+            f.text,
+            f.theme,
+            f.scale,
+            f.ui_scale,
+            layout.term_grid,
+            terms,
+            f.term_focused,
+        );
     }
     chrome::draw_terminal_menu(f, layout, &mut terminal_fx);
     effects.open_terminal = terminal_fx.open;
