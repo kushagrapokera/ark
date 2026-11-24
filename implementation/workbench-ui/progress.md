@@ -385,16 +385,19 @@ five open viewers, two shells + fake agent tab):
   action spacing so neither titles nor icons overlap at large UI scales.
 - Kept Explorer row labels clipped before the badge/scrollbar area.
 - Made fish the preferred default shell when installed.
-- Terminal dock now starts hidden; Ctrl+T, terminal actions, git command tabs,
-  and profile creation reveal it. New default terminals are fish.
+- Terminal dock now starts hidden. Its top-right button opens fish when no
+  shell exists, reveals existing shells when hidden, and hides the dock only
+  when shells are already open. Ctrl+T, terminal actions, git command tabs,
+  and profile creation also reveal it. New default terminals are fish.
 - Removed the three-dot More action from editor tab strips, including split
   groups; Split and per-tab/group close controls remain.
-- Verification: `cargo test` **319 passed, 0 failed, 3 ignored**, 5/5 CLI;
+- Verification: `cargo test` **321 passed, 0 failed, 3 ignored**, 5/5 CLI;
   clippy and release build clean. Live smoke used a long repository name and
-  confirmed colored M/U names, non-overlapping root actions, hidden startup terminal,
-  fish on Ctrl+T, and split strips without More.
-- Five-viewer/two-fish-terminal stress at 1440×900 measured **64,332 KiB RSS /
-  55,361 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  confirmed colored M/U names, non-overlapping root actions, hidden startup
+  terminal, fish on Ctrl+T and the top-right button, and split strips without
+  More.
+- Five-viewer/two-fish-terminal stress at 1440×900 measured **64,356 KiB RSS /
+  55,286 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
   unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
 ## Notes

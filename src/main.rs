@@ -1278,10 +1278,20 @@ impl App {
                 }
             }
             frame::LayoutAction::ToggleTerminal => {
-                self.layout_visibility.terminal = !self.layout_visibility.terminal;
-                if !self.layout_visibility.terminal {
+                if self.layout_visibility.terminal && self.terms.is_open() {
+                    self.layout_visibility.terminal = false;
                     self.terms.menu_open = false;
                     self.term_focused = false;
+                } else {
+                    self.layout_visibility.terminal = true;
+                    self.terms.menu_open = false;
+                    if self.terms.is_open() {
+                        self.activity = frame::ActivityPanel::Terminal;
+                        self.term_focused = true;
+                        self.commit.message.focused = false;
+                    } else {
+                        self.open_terminal_tab();
+                    }
                 }
             }
         }

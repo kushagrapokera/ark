@@ -702,6 +702,44 @@ fn app_layout_actions_toggle_explorer_and_terminal() {
 }
 
 #[test]
+fn app_terminal_button_reveals_the_dock_when_no_shell_exists() {
+    let d = temp_dir("app-terminal-empty-toggle");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    assert!(!app.layout_visibility.terminal);
+
+    app.apply_layout_action(frame::LayoutAction::ToggleTerminal);
+    assert!(app.layout_visibility.terminal, "the first click opens the terminal surface");
+}
+
+#[test]
+fn app_terminal_button_hides_and_reveals_existing_shells() {
+    let d = temp_dir("app-terminal-existing-toggle");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.terms.tabs.push(
+        term::Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            term::GridSize { cols: 40, rows: 8 },
+            || {},
+        )
+        .expect("spawn test terminal"),
+    );
+
+    app.apply_layout_action(frame::LayoutAction::ToggleTerminal);
+    assert!(app.layout_visibility.terminal);
+    assert!(app.term_focused);
+
+    app.apply_layout_action(frame::LayoutAction::ToggleTerminal);
+    assert!(!app.layout_visibility.terminal, "an open dock toggles closed");
+    assert!(!app.term_focused);
+
+    app.apply_layout_action(frame::LayoutAction::ToggleTerminal);
+    assert!(app.layout_visibility.terminal, "a hidden dock reveals its shells");
+    assert!(app.term_focused);
+}
+
+#[test]
 fn app_close_active_tab_prefers_the_editor_over_terminal_close() {
     let d = temp_dir("app-close-active-tab");
     let a = d.path().join("a.txt");
