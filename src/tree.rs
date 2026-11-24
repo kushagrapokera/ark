@@ -336,9 +336,6 @@ pub struct RowHit<'a> {
     /// Row's top edge y in LOGICAL px (panel.y + index×ROW_H − offset).
     #[allow(dead_code)] // interaction-contract surface (row_y); M4 hover affordances consume it
     pub y: f64,
-    /// Pointer is inside the row's chevron zone (dirs only): a chevron
-    /// click toggles, a row-body click selects.
-    pub on_chevron: bool,
 }
 
 /// Hit-test one pointer position against the visible rows: maps the pointer
@@ -362,10 +359,7 @@ pub fn row_at<'a>(panel: Rect, x: f64, y: f64, tree: &'a FileTree) -> Option<Row
     let rows = tree.visible_rows();
     let row = rows.get(idx as usize)?;
     let row_y = panel.y + idx * ROW_H - tree.offset;
-    let indent = row.depth as f64 * INDENT_PX;
-    let on_chevron =
-        row.is_dir && x >= panel.x + indent && x < panel.x + indent + CHEVRON_ZONE;
-    Some(RowHit { row: row.clone(), y: row_y, on_chevron })
+    Some(RowHit { row: row.clone(), y: row_y })
 }
 
 /// What one pointer frame did to the tree (M2 pattern: state transitions at
@@ -377,16 +371,15 @@ pub enum TreeAction {
     Toggled,
     /// Selection changed (full damage).
     Selected,
-    /// A file row was double-clicked: open it in the viewer (M4).
+    /// A file row was clicked: open it in the viewer (M4).
     Opened(PathBuf),
 }
 
 /// Pointer interaction for the tree panel (M2 pattern: state transitions
-/// happen at draw time, right before the widgets draw). A completed click on
-/// a dir row's chevron toggles expansion; a click anywhere else on a row
-/// selects it (dirs included — selection never expands); a double-click on a
-/// file row opens it in the viewer. Returns what changed.
-pub fn handle_pointer(tree: &mut FileTree, panel: Rect, pointer: Pointer, double: bool) -> TreeAction {
+/// happen at draw time, right before the widgets draw). A completed click
+/// anywhere on a directory row selects and toggles it; a completed click on a
+/// file row selects and opens it. Returns what changed.
+pub fn handle_pointer(tree: &mut FileTree, panel: Rect, pointer: Pointer) -> TreeAction {
     if !pointer.click {
         return TreeAction::None;
     }
@@ -395,23 +388,19 @@ pub fn handle_pointer(tree: &mut FileTree, panel: Rect, pointer: Pointer, double
     };
     // Copy what the click needs out of the borrowed hit so the tree can
     // mutate again.
-    let (path, is_dir, on_chevron) =
-        (hit.row.path.to_path_buf(), hit.row.is_dir, hit.on_chevron);
-    if on_chevron {
-        return if tree.toggle(&path, is_dir) {
+    let (path, is_dir) = (hit.row.path.to_path_buf(), hit.row.is_dir);
+    let selection_changed = tree.selected() != Some(path.as_path());
+    tree.select(&path);
+    if is_dir {
+        return if tree.toggle(&path, true) {
             TreeAction::Toggled
+        } else if selection_changed {
+            TreeAction::Selected
         } else {
             TreeAction::None
         };
     }
-    if double && !is_dir {
-        return TreeAction::Opened(path);
-    }
-    if tree.selected() == Some(path.as_path()) {
-        return TreeAction::None; // re-selecting the same row changes nothing
-    }
-    tree.select(&path);
-    TreeAction::Selected
+    TreeAction::Opened(path)
 }
 
 /// Render the visible rows of `tree` into `panel` (LOGICAL px, rastered at

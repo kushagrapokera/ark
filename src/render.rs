@@ -32,7 +32,7 @@ pub struct Theme {
     pub fg_dim: ColorRgb,
     /// Muted chrome text (`#9D9D9D`).
     pub text_muted: ColorRgb,
-    /// Dim code/minimap text (`#8B949E`).
+    /// Dim code text (`#8B949E`).
     pub text_dim: ColorRgb,
     pub accent: ColorRgb,
     pub border: ColorRgb,
@@ -349,6 +349,7 @@ impl Canvas {
 
     /// 1-logical-px border outline of a logical-space rect via four un-AA'd
     /// fill strips — exact pixels with no AA seam against blitted interiors.
+    #[cfg(test)]
     pub fn stroke_rect_strips(
         &mut self,
         x: f64,

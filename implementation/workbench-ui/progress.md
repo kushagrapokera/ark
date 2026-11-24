@@ -339,6 +339,21 @@ five open viewers, two shells + fake agent tab):
   57,503 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
   unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
+## Viewer chrome and Explorer click behavior
+
+- Removed the minimap gutter and rendering completely; viewer panes now use
+  the full editor width in both split groups.
+- Removed the inner grey placeholder/message border while keeping centered
+  guidance and error text.
+- File rows open on the first click and become selected. Directory rows select
+  and toggle expansion from anywhere in the row, including the chevron.
+- Verification: `cargo test` **311 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live smoke confirmed no minimap/inner box,
+  one-click file opening, and whole-row folder expand/collapse.
+- Five-viewer/two-terminal stress at 1440×900 measured **65,460 KiB RSS /
+  57,345 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

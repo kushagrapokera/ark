@@ -83,29 +83,29 @@ fn row_at_maps_offset_to_rows() {
     assert_eq!(hit.row.name, "A");
     assert!(hit.row.is_dir && hit.row.depth == 0);
     assert_eq!(hit.y, 10.0, "row 0 top edge");
-    assert!(!hit.on_chevron, "x=50 is past the depth-0 chevron zone [10, 26)");
 
-    // Chevron zone of a dir row: indent 0 → [panel.x, panel.x+16).
-    assert!(row_at(PANEL, 15.0, 21.0, &tree).expect("A hit").on_chevron);
-    assert!(
-        !row_at(PANEL, 26.0, 21.0, &tree).expect("A hit").on_chevron,
-        "x=26 is past the chevron zone (indent 0 + 16)"
+    // The whole directory row is the same hit target, including the chevron.
+    assert_eq!(
+        row_at(PANEL, 15.0, 21.0, &tree).expect("A hit").row.name,
+        "A"
+    );
+    assert_eq!(
+        row_at(PANEL, 50.0, 21.0, &tree).expect("A hit").row.name,
+        "A"
     );
 
-    // Deeper row: C at depth 1 → chevron zone [panel.x+16, panel.x+32).
+    // Deeper row: C at depth 1.
     let c = row_at(PANEL, 30.0, 43.0, &tree).expect("row 1 hit");
     assert_eq!(c.row.name, "C");
     assert_eq!(c.row.depth, 1);
-    assert!(c.on_chevron, "x=30 is inside depth-1 chevron zone [26, 42)");
-    assert!(
-        !row_at(PANEL, 20.0, 43.0, &tree).expect("C hit").on_chevron,
-        "x=20 is left of the depth-1 chevron zone"
+    assert_eq!(
+        row_at(PANEL, 20.0, 43.0, &tree).expect("C hit").row.name,
+        "C"
     );
 
-    // File rows never report the chevron zone, whatever x is.
+    // File rows use the same whole-row hit target.
     let a_txt = row_at(PANEL, 15.0, 65.0, &tree).expect("row 2 hit");
     assert_eq!(a_txt.row.name, "a.txt");
-    assert!(!a_txt.on_chevron, "files have no chevron zone");
 
     // Scroll shifts the mapping: a 3-row viewport on the 4-row content has
     // max offset 22 (overshoot clamps); at offset 22 pointer row-0 band
@@ -144,73 +144,65 @@ fn handle_pointer_routes_clicks() {
     let a = tree.root.join("A");
     let b = tree.root.join("b.txt");
 
-    // Chevron click on a dir row toggles.
+    // Chevron click expands and selects the folder.
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 15.0, y: 21.0, down: false, click: true }, false),
+        handle_pointer(&mut tree, PANEL, Pointer { x: 15.0, y: 21.0, down: false, click: true }),
         TreeAction::Toggled
     );
-    assert!(tree.is_expanded(&a), "chevron click expands");
-    assert!(tree.selected().is_none(), "chevron click does not select");
+    assert!(tree.is_expanded(&a));
+    assert_eq!(tree.selected(), Some(a.as_path()));
 
-    // Row-body click on a dir selects ONLY (never expands).
-    tree.toggle(&a, true); // collapse again
+    // Clicking anywhere else on the folder row collapses it.
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 21.0, down: false, click: true }, false),
-        TreeAction::Selected
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 21.0, down: false, click: true }),
+        TreeAction::Toggled
     );
-    assert!(!tree.is_expanded(&a), "row-body click does not expand a dir");
-    assert_eq!(tree.selected(), Some(a.as_path()), "row-body click selects");
+    assert!(!tree.is_expanded(&a));
+    assert_eq!(tree.selected(), Some(a.as_path()));
 
-    // Clicking a file selects it; re-clicking the same row is a no-op.
-    // (A is collapsed here, so only 2 rows are visible: b.txt at row 1.)
+    // A is collapsed, so b.txt is row 1 and opens on the first click.
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, false),
-        TreeAction::Selected
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }),
+        TreeAction::Opened(b.clone())
     );
-    assert_eq!(tree.selected(), Some(b.as_path()), "file click selects");
+    assert_eq!(tree.selected(), Some(b.as_path()));
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, false),
-        TreeAction::None,
-        "re-selecting the same row changes nothing"
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }),
+        TreeAction::Opened(b.clone()),
+        "re-clicking a file still opens it"
     );
 
-    // Clicks outside the panel (or without the click flag) never act.
+    // Clicks outside the panel or without the click flag never act.
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 500.0, y: 21.0, down: false, click: true }, false),
+        handle_pointer(&mut tree, PANEL, Pointer { x: 500.0, y: 21.0, down: false, click: true }),
         TreeAction::None
     );
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 15.0, y: 21.0, down: false, click: false }, false),
+        handle_pointer(&mut tree, PANEL, Pointer { x: 15.0, y: 21.0, down: false, click: false }),
         TreeAction::None
     );
     assert_eq!(tree.selected(), Some(b.as_path()), "state untouched");
 }
 
-// ---- handle_pointer: double-click opens files (M4) ----
+// ---- handle_pointer: single-click opens files ----
 
 #[test]
-fn handle_pointer_opens_files_on_double_click() {
+fn handle_pointer_opens_files_on_single_click() {
     let (_d, mut tree) = panel_fixture("open");
     let b = tree.root.join("b.txt");
 
-    // Single click selects; double-click on the SAME file opens it.
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, false),
-        TreeAction::Selected
-    );
-    assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }, true),
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 43.0, down: false, click: true }),
         TreeAction::Opened(b.clone())
     );
 
-    // A double-click on a dir row body does NOT open (selection only).
+    // Folder row bodies toggle on a single click, never open.
     let a = tree.root.join("A");
     assert_eq!(
-        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 21.0, down: false, click: true }, true),
-        TreeAction::Selected,
-        "dirs never open — single-select even on double-click"
+        handle_pointer(&mut tree, PANEL, Pointer { x: 50.0, y: 21.0, down: false, click: true }),
+        TreeAction::Toggled
     );
-    assert!(!tree.is_expanded(&a));
+    assert!(tree.is_expanded(&a));
 }
 
 // ---- draw_tree_panel: viewport-only ink ----

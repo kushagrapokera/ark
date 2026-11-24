@@ -18,7 +18,7 @@ fn fs_change_refreshes_viewer_and_flags_tree() {
     let p = d.path().join("open.txt");
     fs::write(&p, "one\ntwo\n").expect("write");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
-    // Simulate a double-click open (the cache holds the viewer; the frame
+    // Simulate a single-click open (the cache holds the viewer; the frame
     // would render it).
     app.open_viewer(p.clone(), 0);
     {

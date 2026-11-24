@@ -698,42 +698,7 @@ pub(super) fn draw_editor_group_chrome(
             f.scale,
         );
     }
-    draw_minimap_rect(f, layout.minimap);
     effects
-}
-
-pub(super) fn draw_minimap_rect(f: &mut Frame, map: Rect) {
-    if map.w <= 0.0 || map.h <= 0.0 {
-        return;
-    }
-    f.canvas
-        .fill_rect(map.x, map.y, 1.0, map.h, f.theme.border_subtle, f.scale);
-    let colors = [
-        f.theme.syntax_comment,
-        f.theme.syntax_keyword,
-        f.theme.syntax_type,
-        f.theme.syntax_function,
-        f.theme.syntax_variable,
-        f.theme.syntax_string,
-        f.theme.syntax_number,
-        f.theme.syntax_control,
-    ];
-    let widths = [42.0, 26.0, 38.0, 18.0, 44.0, 34.0, 30.0, 40.0];
-    for index in 0..24 {
-        let y = map.y + 8.0 + index as f64 * 9.0;
-        if y >= map.y + map.h - 4.0 {
-            break;
-        }
-        let width = widths[index % widths.len()];
-        f.canvas.fill_rect(
-            map.x + map.w - 4.0 - width,
-            y,
-            width,
-            2.0,
-            colors[index % colors.len()],
-            f.scale,
-        );
-    }
 }
 
 pub(super) fn draw_terminal_resize_handle(f: &mut Frame, layout: &AppLayout) {

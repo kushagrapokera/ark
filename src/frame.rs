@@ -36,7 +36,6 @@ const TERM_EDITOR_MIN_H: f64 = 160.0;
 const TERM_HANDLE_W: f64 = 36.0;
 const TERM_HANDLE_H: f64 = 12.0;
 const STATUS_H: f64 = 24.0;
-const MINIMAP_W: f64 = 56.0;
 const CARD_RADIUS: f64 = 6.0;
 /// Split clamps: explorer card width and a usable editor minimum.
 const SPLIT_MIN_PX: f64 = 224.0;
@@ -52,7 +51,6 @@ pub struct EditorGroupLayout {
     pub tabs: Rect,
     pub breadcrumb: Rect,
     pub body: Rect,
-    pub minimap: Rect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,7 +92,7 @@ pub struct AppLayout {
     pub scroll_track: Rect,
     /// Narrow drag hit-area between explorer and editor cards.
     pub split_area: Rect,
-    /// Editor card, tab strip, breadcrumbs, body and minimap.
+    /// Editor card, tab strip, breadcrumbs and body.
     pub editor_card: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
     pub editor_tabs: Rect,
@@ -102,8 +100,6 @@ pub struct AppLayout {
     pub breadcrumb: Rect,
     #[cfg_attr(not(test), allow(dead_code))]
     pub viewer_pane: Rect,
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub minimap: Rect,
     /// Per-editor-group chrome/body rects. Index 1 is degenerate when unsplit.
     pub editor_groups: [EditorGroupLayout; 2],
     pub editor_group_count: usize,
@@ -310,23 +306,11 @@ pub fn app_layout_with_visibility(
         w: editor_card.w,
         h: breadcrumb_h,
     };
-    let minimap_w = if editor_w >= 560.0 {
-        MINIMAP_W
-    } else {
-        0.0
-    };
     let viewer_pane = Rect {
         x: editor_card.x + pad,
         y: breadcrumb.y + breadcrumb_h,
-        w: (editor_card.w - 2.0 * pad - minimap_w - if minimap_w > 0.0 { gap } else { 0.0 })
-            .max(0.0),
+        w: (editor_card.w - 2.0 * pad).max(0.0),
         h: (editor_card.h - editor_tab_h - breadcrumb_h - pad).max(0.0),
-    };
-    let minimap = Rect {
-        x: editor_card.x + editor_card.w - pad - minimap_w,
-        y: viewer_pane.y,
-        w: minimap_w,
-        h: viewer_pane.h,
     };
 
     let empty = Rect {
@@ -340,13 +324,11 @@ pub fn app_layout_with_visibility(
             tabs: editor_tabs,
             breadcrumb,
             body: viewer_pane,
-            minimap,
         },
         EditorGroupLayout {
             tabs: empty,
             breadcrumb: empty,
             body: empty,
-            minimap: empty,
         },
     ];
     let mut editor_group_split = Rect {
@@ -379,8 +361,8 @@ pub fn app_layout_with_visibility(
             h: editor_card.h,
         };
         editor_groups = [
-            editor_group_layout(left, editor_tab_h, breadcrumb_h, pad, gap),
-            editor_group_layout(right, editor_tab_h, breadcrumb_h, pad, gap),
+            editor_group_layout(left, editor_tab_h, breadcrumb_h, pad),
+            editor_group_layout(right, editor_tab_h, breadcrumb_h, pad),
         ];
         editor_group_split = Rect {
             x: editor_card.x + left_w,
@@ -392,7 +374,6 @@ pub fn app_layout_with_visibility(
     let editor_tabs = editor_groups[0].tabs;
     let breadcrumb = editor_groups[0].breadcrumb;
     let viewer_pane = editor_groups[0].body;
-    let minimap = editor_groups[0].minimap;
     let editor_group_count = if group_count >= 2 { 2 } else { 1 };
 
     let terminal = Rect {
@@ -454,7 +435,6 @@ pub fn app_layout_with_visibility(
         editor_tabs,
         breadcrumb,
         viewer_pane,
-        minimap,
         editor_groups,
         editor_group_count,
         editor_group_split,
@@ -476,7 +456,6 @@ fn editor_group_layout(
     tab_h: f64,
     breadcrumb_h: f64,
     pad: f64,
-    gap: f64,
 ) -> EditorGroupLayout {
     let tabs = Rect {
         x: card.x,
@@ -490,28 +469,16 @@ fn editor_group_layout(
         w: card.w,
         h: breadcrumb_h,
     };
-    let minimap_w = if card.w >= 480.0 {
-        MINIMAP_W
-    } else {
-        0.0
-    };
     let body = Rect {
         x: card.x + pad,
         y: breadcrumb.y + breadcrumb_h,
-        w: (card.w - 2.0 * pad - minimap_w - if minimap_w > 0.0 { gap } else { 0.0 }).max(0.0),
+        w: (card.w - 2.0 * pad).max(0.0),
         h: (card.h - tab_h - breadcrumb_h - pad).max(0.0),
-    };
-    let minimap = Rect {
-        x: card.x + card.w - pad - minimap_w,
-        y: body.y,
-        w: minimap_w,
-        h: body.h,
     };
     EditorGroupLayout {
         tabs,
         breadcrumb,
         body,
-        minimap,
     }
 }
 
@@ -1078,7 +1045,7 @@ pub fn draw_frame(
         } else {
             f.pointer
         };
-        match tree::handle_pointer(tree, layout.tree_panel, tree_pointer, f.dbl_click) {
+        match tree::handle_pointer(tree, layout.tree_panel, tree_pointer) {
             tree::TreeAction::None => {}
             tree::TreeAction::Toggled | tree::TreeAction::Selected => effects.tree_changed = true,
             tree::TreeAction::Opened(path) => effects.opened = Some(path),
@@ -1122,7 +1089,7 @@ pub fn draw_frame(
         effects.set_activity = Some(panel);
     }
 
-    // Per-group tabs, breadcrumbs, actions and minimaps.
+    // Per-group tabs, breadcrumbs, actions and viewer bodies.
     let active_group = f.active_group.min(groups.len().saturating_sub(1));
     for index in 0..layout.editor_group_count.min(groups.len()) {
         let gx = chrome::draw_editor_group_chrome(
@@ -1415,29 +1382,26 @@ fn frame_status(
     }
 }
 
-/// Bordered placeholder with two centered dim lines (or the open-failure
-/// message when the last attempt errored).
+/// Placeholder text (or the open-failure message when the last attempt errored).
 fn draw_placeholder(f: &mut Frame, rect: Rect, error: Option<&str>) {
     let lines: (String, &str) = match error {
         Some(err) => (
             truncate_chars(err, 44),
-            "double-click a text file in the tree",
+            "click a text file in the tree",
         ),
         None => (
             "M4 viewer lands here —".to_string(),
-            "double-click a file in the tree",
+            "click a file in the tree",
         ),
     };
     draw_pane_message(f, rect, &lines.0, lines.1);
 }
 
-/// Bordered pane message used by the placeholder and config-open errors.
+/// Pane message used by the placeholder and config-open errors.
 fn draw_pane_message(f: &mut Frame, rect: Rect, top: &str, bottom: &str) {
     if rect.w <= 2.0 || rect.h <= 2.0 {
         return;
     }
-    f.canvas
-        .stroke_rect_strips(rect.x, rect.y, rect.w, rect.h, f.theme.border, f.scale);
     let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
     let m = f
         .text

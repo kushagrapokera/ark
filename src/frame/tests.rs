@@ -99,16 +99,7 @@ fn app_layout_matches_card_design() {
         Rect {
             x: 320.0,
             y: 104.0,
-            w: 624.0,
-            h: 624.0
-        }
-    );
-    assert_eq!(
-        l.minimap,
-        Rect {
-            x: 952.0,
-            y: 104.0,
-            w: 56.0,
+            w: 688.0,
             h: 624.0
         }
     );
@@ -161,7 +152,6 @@ fn responsive_layout_prioritizes_editor_on_small_windows() {
         "hidden Explorer has no resize handle"
     );
     assert!(sidebar_handle(&small, 304.0).is_none());
-    assert_eq!(small.minimap.w, 0.0, "narrow editor hides minimap");
     assert_eq!(small.activity_bar.w, 40.0, "compact activity card");
     assert!(
         small.editor_card.w > small.workbench.w * 0.75,
@@ -175,13 +165,11 @@ fn responsive_layout_prioritizes_editor_on_small_windows() {
 
     let short = app_layout_with_commit(600.0, 480.0, 304.0, true, true);
     assert_eq!(short.explorer_card.w, 0.0);
-    assert_eq!(short.minimap.w, 0.0);
     assert_eq!(short.terminal_toolbar.h, 30.0);
     assert!(short.term_grid.h > 0.0 && short.viewer_pane.h > 0.0);
 
     let full = app_layout_with_commit(1440.0, 900.0, 304.0, true, true);
     assert_eq!(full.explorer_card.w, 240.0);
-    assert_eq!(full.minimap.w, 56.0);
     assert!(
         full.editor_card.w > 1_000.0,
         "large window expands the editor"
@@ -622,7 +610,7 @@ fn layout_visibility_options_hide_cards() {
     );
     assert_eq!(layout.explorer_card.w, 0.0);
     assert_eq!(layout.term_dock.h, 0.0);
-    assert_eq!(layout.minimap.w, 56.0, "minimap keeps responsive behavior");
+    assert_eq!(layout.viewer_pane.w, layout.editor_card.w - 16.0);
     assert_eq!(layout.editor_card.x, layout.activity_bar.x + layout.activity_bar.w + 8.0);
     assert_eq!(layout.editor_card.h, layout.workbench.h);
 }
@@ -871,7 +859,6 @@ fn unsplit_group_layout_keeps_existing_editor_geometry() {
     assert_eq!(layout.editor_groups[0].tabs, layout.editor_tabs);
     assert_eq!(layout.editor_groups[0].breadcrumb, layout.breadcrumb);
     assert_eq!(layout.editor_groups[0].body, layout.viewer_pane);
-    assert_eq!(layout.editor_groups[0].minimap, layout.minimap);
     assert_eq!(layout.editor_group_split.w, 0.0);
 }
 
@@ -898,12 +885,6 @@ fn split_group_layout_divides_the_editor_card_with_a_gap() {
                 x: 320.0,
                 y: 104.0,
                 w: 332.0,
-                h: 624.0
-            },
-            minimap: Rect {
-                x: 652.0,
-                y: 104.0,
-                w: 0.0,
                 h: 624.0
             },
         }
@@ -938,11 +919,10 @@ fn split_group_layout_divides_the_editor_card_with_a_gap() {
 }
 
 #[test]
-fn split_group_layout_shows_minimaps_only_in_wide_groups() {
+fn split_group_layout_uses_the_full_group_width() {
     let layout = app_layout_with_groups(1440.0, 900.0, 304.0, false, false, 0.5, 2);
-    assert_eq!(layout.editor_groups[0].minimap.w, 56.0);
-    assert_eq!(layout.editor_groups[1].minimap.w, 56.0);
-    assert!(layout.editor_groups[0].body.w > 400.0);
+    assert_eq!(layout.editor_groups[0].body.w, 540.0);
+    assert_eq!(layout.editor_groups[1].body.w, 540.0);
 }
 
 #[test]
@@ -1146,7 +1126,7 @@ fn source_control_panel_uses_the_sidebar_or_compact_editor_body() {
         Rect {
             x: 320.0,
             y: 104.0,
-            w: 624.0,
+            w: 688.0,
             h: 624.0
         }
     );
@@ -1190,7 +1170,7 @@ fn app_layout_terminal_card_reserves_the_bottom() {
         Rect {
             x: 320.0,
             y: 104.0,
-            w: 624.0,
+            w: 688.0,
             h: 392.0
         }
     );
@@ -1827,7 +1807,7 @@ fn frame_scene_renders_spec_surfaces() {
     );
     assert_eq!(effects.opened, None);
 
-    // Title bar, card chrome, tree, minimap and status surfaces.
+    // Title bar, card chrome, tree and status surfaces.
     assert!(
         count_color_in(&canvas, theme.accent, 0, 0, 40, 36) > 0,
         "title icon"
@@ -1853,12 +1833,13 @@ fn frame_scene_renders_spec_surfaces() {
         "thumb"
     );
     assert!(
-        count_color_in(&canvas, theme.text_dim, 952, 104, 1008, 300) > 0,
-        "minimap placeholder"
-    );
-    assert!(
-        count_color_in(&canvas, theme.fg_dim, 320, 104, 944, 728) > 0,
+        count_color_in(&canvas, theme.fg_dim, 320, 104, 1008, 728) > 0,
         "placeholder text"
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.border, 320, 104, 1008, 728),
+        0,
+        "placeholder has no inner grey box"
     );
     assert!(
         count_color_in(&canvas, theme.accent, 0, 744, 32, 768) > 500,
@@ -2115,7 +2096,7 @@ fn frame_interactions_report_effects() {
 }
 
 #[test]
-fn frame_double_click_opens_and_viewer_scrolls() {
+fn frame_single_click_opens_and_viewer_scrolls() {
     let (_d, mut tree) = scene_fixture("dbl-open");
     let theme = frame_theme();
     let layout = app_layout_with_commit(1024.0, 768.0, 304.0, true, true);
@@ -2192,9 +2173,8 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         )
     };
 
-    // Double-click on file row 1 ("f00.txt", band [130, 152)) → Opened.
-    // (The first click already selected it in a prior frame.)
-    let _ = draw_at(
+    // Single-click on file row 1 ("f00.txt", band [130, 152)) → Opened.
+    let effects = draw_at(
         &mut frame,
         Pointer {
             x: 100.0,
@@ -2206,28 +2186,16 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         &mut tree,
         &mut viewer_scrollbar,
     );
-    let effects = draw_at(
-        &mut frame,
-        Pointer {
-            x: 100.0,
-            y: 141.0,
-            down: false,
-            click: true,
-        },
-        true,
-        &mut tree,
-        &mut viewer_scrollbar,
-    );
     assert_eq!(
         effects.opened,
         Some(tree.root.join("f00.txt")),
-        "double-click reports the tree row's file to open"
+        "single-click reports the tree row's file to open"
     );
 
     // Viewer scrollbar thumb drag past the end → offset clamps to the max
     // line offset and reports viewer_scrolled (viewer rect damage only).
     let press = Pointer {
-        x: 940.0,
+        x: 1004.0,
         y: 110.0,
         down: true,
         click: false,
@@ -2238,7 +2206,7 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         "grabbing the viewer thumb doesn't move it"
     );
     let drag = Pointer {
-        x: 940.0,
+        x: 1004.0,
         y: 700.0,
         down: true,
         click: false,
@@ -2429,7 +2397,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
     assert!(!effects.config_save && !effects.config_reload);
     // Header title + textarea ink inside the editor body.
     assert!(
-        count_color_in(&canvas, theme.fg, 320, 104, 944, 300) > 0,
+        count_color_in(&canvas, theme.fg, 320, 104, 1008, 300) > 0,
         "config ink"
     );
     assert!(
@@ -2441,7 +2409,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
 
     // Header Save button (panel right edge) reports the effect.
     let save_click = Pointer {
-        x: 900.0,
+        x: layout.viewer_pane.x + layout.viewer_pane.w - 44.0,
         y: 123.0,
         down: false,
         click: true,
