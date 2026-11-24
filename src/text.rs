@@ -29,6 +29,13 @@ const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"
 /// Default logical (scale-independent) UI font size in px.
 pub const UI_FONT_SIZE: f32 = 14.0;
 
+/// Substring between CHAR indices `[a, b)`, clamped to the string.
+pub fn char_range(s: &str, a: usize, b: usize) -> &str {
+    let start = s.char_indices().nth(a).map(|(i, _)| i).unwrap_or(s.len());
+    let end = s.char_indices().nth(b).map(|(i, _)| i).unwrap_or(s.len());
+    &s[start..end]
+}
+
 /// Measured metrics of the bundled monospace face at one physical size.
 #[derive(Clone, Copy, Debug)]
 pub struct MonoMetrics {

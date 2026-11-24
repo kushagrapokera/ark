@@ -1,24 +1,41 @@
-//! Regex token highlighter (M4): one compiled rule set, applied per VISIBLE
-//! line only (viewport discipline — no whole-file passes, no per-frame
-//! compilation).
+//! Tier-1.5 token highlighter: static language/file-type profiles plus
+//! bounded multiline state, applied per VISIBLE line only.
 //!
-//! The rule set is deliberately GENERIC (one profile for every language):
-//! comments (`//`, `#` — with a code-level exception for Rust attributes),
-//! string/char literals, numbers and a multi-language keyword list. Span
-//! resolution: matches compete by start position, earlier-start wins; ties
-//! go to the longer span. That makes `"http://x"` a string (the string
-//! starts before the `//`) and `// "q"` a comment (the comment starts
-//! before the quote).
+//! No AST, grammar bundle or whole-file token cache. Profiles compile lazily,
+//! identical regexes are shared, keyword/type tables are scanned directly, and
+//! the viewer reconstructs multiline state from at most 256 preceding lines.
 
-use regex::Regex;
+use std::sync::OnceLock;
+
+mod detect;
+mod profiles;
+mod state;
+mod theme;
+mod tokenize;
+
+pub use detect::lang_for_source;
+pub use state::HighlightState;
+pub use theme::token_color;
+
+use tokenize::{collect_static_spans, compile, finalize_spans, CompiledProfile};
 
 /// Token kinds mapped to theme colors at render time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Token {
     Keyword,
+    ControlKeyword,
     String,
     Number,
     Comment,
+    Type,
+    Function,
+    Constant,
+    Property,
+    Variable,
+    Regex,
+    Escape,
+    Decorator,
+    Selector,
 }
 
 /// One highlighted span of a line, in CHAR indices (render maps col → x).
@@ -29,13 +46,74 @@ pub struct Span {
     pub token: Token,
 }
 
-/// Compiled rule set. Static patterns — the `expect`s fire only on a bug in
-/// these constants, never on user input.
+/// Language/file families recognized by the static highlighter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lang {
+    Rust,
+    CLike,
+    Go,
+    PythonLike,
+    Shell,
+    PowerShell,
+    Sql,
+    Markup,
+    Css,
+    Json,
+    Yaml,
+    Toml,
+    Ini,
+    Dotenv,
+    Dockerfile,
+    Makefile,
+    Markdown,
+    Nix,
+    Hcl,
+    Protobuf,
+    DashLike,
+    Cmake,
+    Graphql,
+    Latex,
+    Plain,
+}
+
+impl Lang {
+    pub const ALL: [Lang; 25] = [
+        Lang::Rust,
+        Lang::CLike,
+        Lang::Go,
+        Lang::PythonLike,
+        Lang::Shell,
+        Lang::PowerShell,
+        Lang::Sql,
+        Lang::Markup,
+        Lang::Css,
+        Lang::Json,
+        Lang::Yaml,
+        Lang::Toml,
+        Lang::Ini,
+        Lang::Dotenv,
+        Lang::Dockerfile,
+        Lang::Makefile,
+        Lang::Markdown,
+        Lang::Nix,
+        Lang::Hcl,
+        Lang::Protobuf,
+        Lang::DashLike,
+        Lang::Cmake,
+        Lang::Graphql,
+        Lang::Latex,
+        Lang::Plain,
+    ];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Lazily compiled profiles. One `OnceLock` per family; unused languages cost
+/// only an empty cell.
 pub struct Highlighter {
-    comment: Regex,
-    string: Regex,
-    number: Regex,
-    keyword: Regex,
+    profiles: Vec<OnceLock<CompiledProfile>>,
 }
 
 impl Default for Highlighter {
@@ -47,135 +125,93 @@ impl Default for Highlighter {
 impl Highlighter {
     pub fn new() -> Self {
         Highlighter {
-            // `//` or `#` to end of line. Rust attribute lines (`#[…]`,
-            // `#![…]`) are filtered out in code below (the regex crate has
-            // no lookaround).
-            comment: Regex::new(r"(?://|#).*$").expect("static comment pattern"),
-            // Double-quoted with escapes; single-quote CHAR literals only
-            // (so lifetimes like `'static` and prose apostrophes never match).
-            string: Regex::new(r#""(?:[^"\\\n]|\\.)*"|'(?:\\.|[^'\\\n])'"#)
-                .expect("static string pattern"),
-            number: Regex::new(r"\b0[xX][0-9a-fA-F_]+\b|\b\d[\d_]*(?:\.[\d_]+)?(?:[eE][+-]?\d+)?\b")
-                .expect("static number pattern"),
-            keyword: Regex::new(
-                r"\b(?:as|async|await|bool|break|case|catch|char|class|const|continue|def|default|do|double|elif|else|enum|export|extends|false|fn|for|from|func|if|impl|import|in|let|loop|match|mod|move|mut|new|None|null|package|pass|pub|raise|ref|return|self|static|struct|super|switch|this|throw|trait|true|try|type|unsafe|use|val|var|void|where|while|with)\b",
-            )
-            .expect("static keyword pattern"),
+            profiles: Lang::ALL.iter().map(|_| OnceLock::new()).collect(),
         }
     }
 
-    /// Highlight one line: non-overlapping spans sorted by start.
-    pub fn line_spans(&self, line: &str) -> Vec<Span> {
+    fn profile(&self, lang: Lang) -> &CompiledProfile {
+        self.profiles[lang.index()].get_or_init(|| compile(lang))
+    }
+
+    /// Reconstruct multiline state from at most [`state::LOOKBACK_LINES`]
+    /// lines before `start`. The callback returns borrowed display lines.
+    pub fn state_before<S: AsRef<str>>(
+        &self,
+        lang: Lang,
+        start: usize,
+        mut line_at: impl FnMut(usize) -> Option<S>,
+    ) -> HighlightState {
+        let mut state = HighlightState::default();
+        let first = start.saturating_sub(state::LOOKBACK_LINES);
+        for index in first..start {
+            if let Some(line) = line_at(index) {
+                state = state::scan_line(line.as_ref(), lang, state).outgoing;
+            }
+        }
+        state
+    }
+
+    /// Highlight one line for a specific language family without multiline
+    /// carry. Kept for tests and callers that only have one line.
+    pub fn line_spans_for(&self, line: &str, lang: Lang) -> Vec<Span> {
+        self.line_spans_with_state(line, lang, &mut HighlightState::default())
+    }
+
+    /// Highlight one line and advance the caller-owned bounded state.
+    pub fn line_spans_with_state(
+        &self,
+        line: &str,
+        lang: Lang,
+        state: &mut HighlightState,
+    ) -> Vec<Span> {
+        let incoming = *state;
+        let scan = state::scan_line(line, lang, incoming);
+        let effective = state::effective_lang(line, lang, incoming);
         let mut raw: Vec<(usize, usize, Token)> = Vec::new();
-        for (re, token) in [
-            (&self.comment, Token::Comment),
-            (&self.string, Token::String),
-            (&self.number, Token::Number),
-            (&self.keyword, Token::Keyword),
-        ] {
-            for m in re.find_iter(line) {
-                if token == Token::Comment && is_rust_attribute(m.as_str()) {
-                    continue; // `#[…]` / `#![…]` are not comments
-                }
-                raw.push((m.start(), m.end(), token));
-            }
-        }
-        // Compete by start position (earlier wins; ties go to the longer
-        // span), then drop any span overlapping an accepted one.
-        raw.sort_by_key(|&(s, e, _)| (s, std::cmp::Reverse(e)));
-        let mut spans = Vec::new();
-        let mut last_end = 0usize;
-        for (s, e, t) in raw {
-            if s < last_end {
-                continue;
-            }
-            last_end = e;
-            // byte → char index conversion (spans feed col → x rendering)
-            let start = line[..s].chars().count();
-            let end = start + line[s..e].chars().count();
-            spans.push(Span { start, end, token: t });
-        }
-        spans
-    }
-}
+        let mut cursor = 0;
 
-/// True when a comment match actually starts at a Rust attribute (`#[` or
-/// `#![`), which must stay plain.
-fn is_rust_attribute(matched: &str) -> bool {
-    matched.starts_with("#[") || matched.starts_with("#![")
+        if incoming.has_block_comment() {
+            if let Some(end) = scan.close_block_comment {
+                raw.push((0, end, Token::Comment));
+                cursor = end;
+            } else {
+                raw.push((0, line.len(), Token::Comment));
+                *state = scan.outgoing;
+                return finalize_spans(line, raw);
+            }
+        } else if incoming.has_triple_quote() {
+            if let Some(end) = scan.close_triple_quote {
+                raw.push((0, end, Token::String));
+                cursor = end;
+            } else {
+                raw.push((0, line.len(), Token::String));
+                *state = scan.outgoing;
+                return finalize_spans(line, raw);
+            }
+        }
+
+        if cursor < line.len() {
+            collect_static_spans(self.profile(effective), &line[cursor..], effective, cursor, &mut raw);
+        }
+        if let Some(start) = scan.open_block_comment {
+            raw.push((start, line.len(), Token::Comment));
+        }
+        if let Some(start) = scan.open_triple_quote {
+            raw.push((start, line.len(), Token::String));
+        }
+
+        *state = scan.outgoing;
+        finalize_spans(line, raw)
+    }
+
+    /// Highlight one line with the Rust family. Kept for the existing M4
+    /// tests and any Rust-specific call sites; production renders pass the
+    /// detected language explicitly.
+    #[allow(dead_code)] // test/frozen M4 surface; production passes a detected Lang
+    pub fn line_spans(&self, line: &str) -> Vec<Span> {
+        self.line_spans_for(line, Lang::Rust)
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn kinds(line: &str) -> Vec<(usize, usize, Token)> {
-        Highlighter::new()
-            .line_spans(line)
-            .into_iter()
-            .map(|s| (s.start, s.end, s.token))
-            .collect()
-    }
-
-    #[test]
-    fn keywords_and_numbers_span_correctly() {
-        assert_eq!(
-            kinds("let x = 0x1F + 1_000 + 1.5e3;"),
-            vec![
-                (0, 3, Token::Keyword),  // let
-                (8, 12, Token::Number),  // 0x1F
-                (15, 20, Token::Number), // 1_000
-                (23, 28, Token::Number), // 1.5e3
-            ]
-        );
-    }
-
-    #[test]
-    fn strings_win_over_comments_inside_them() {
-        // The `//` sits INSIDE the string literal: the string starts earlier
-        // and swallows the would-be comment.
-        assert_eq!(
-            kinds(r#"let url = "http://x";"#),
-            vec![(0, 3, Token::Keyword), (10, 20, Token::String)],
-        );
-    }
-
-    #[test]
-    fn comments_win_over_strings_inside_them() {
-        // The comment starts at col 0; its quotes are plain comment text.
-        assert_eq!(kinds("// it's \"quoted\" // x"), vec![(0, 21, Token::Comment)]);
-    }
-
-    #[test]
-    fn rust_attributes_are_not_comments() {
-        assert_eq!(kinds("#[derive(Debug)]"), Vec::new());
-        assert_eq!(kinds("#![allow(dead_code)]"), Vec::new());
-        // Shell/python style comments still work.
-        assert_eq!(kinds("# TODO fix"), vec![(0, 10, Token::Comment)]);
-        assert_eq!(kinds("#!/bin/sh"), vec![(0, 9, Token::Comment)]);
-    }
-
-    #[test]
-    fn char_literals_match_but_prose_apostrophes_do_not() {
-        assert_eq!(
-            kinds("let c = '\\n';"),
-            vec![(0, 3, Token::Keyword), (8, 12, Token::String)]
-        );
-        assert_eq!(kinds("it's fine"), Vec::new(), "no closing quote → no string");
-    }
-
-    #[test]
-    fn spans_use_char_indices_not_bytes() {
-        // é is one char / two bytes: string span must land on char columns.
-        assert_eq!(
-            kinds("let café = \"ü\";"),
-            vec![(0, 3, Token::Keyword), (11, 14, Token::String)]
-        );
-    }
-
-    #[test]
-    fn empty_and_plain_lines_have_no_spans() {
-        assert_eq!(kinds(""), Vec::new());
-        assert_eq!(kinds("plain_identifier + call()"), Vec::new());
-    }
-}
+mod tests;

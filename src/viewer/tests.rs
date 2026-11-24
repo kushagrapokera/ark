@@ -44,6 +44,27 @@ fn open_indexes_lines_and_normalizes_display() {
 }
 
 #[test]
+fn open_detects_extensionless_shebang_language() {
+    let d = temp_dir("shebang");
+    let p = d.path().join("script");
+    fs::write(&p, "#!/usr/bin/env python3\nprint('hi')\n").expect("write");
+    let v = Viewer::open(&p).expect("opens");
+    assert_eq!(v.language(), Lang::PythonLike);
+}
+
+#[test]
+fn open_detects_shebang_without_reading_an_unbounded_first_line() {
+    let d = temp_dir("shebang-long");
+    let p = d.path().join("script");
+    let mut source = String::from("#!/usr/bin/env python3 ");
+    source.push_str(&"x".repeat(64 * 1024));
+    source.push('\n');
+    fs::write(&p, source).expect("write");
+    let v = Viewer::open(&p).expect("opens");
+    assert_eq!(v.language(), Lang::PythonLike);
+}
+
+#[test]
 fn open_missing_is_an_io_error() {
     let d = temp_dir("missing");
     let p = d.path().join("not-there");

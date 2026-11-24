@@ -17,10 +17,13 @@ pub enum Icon {
     ChevronRight,
     ChevronDown,
     File,
-    #[allow(dead_code)] // drawn by the M2 demo scene (test builds) until the UI draws folder marks
+#[allow(dead_code)] // frozen M2 test/demo surface; production icons arrive with the workbench
     Folder,
-    #[allow(dead_code)] // drawn by the M2 demo scene (test builds) until the UI draws status dots
+    #[allow(dead_code)] // frozen M2 test/demo surface; production icons arrive with the workbench
     Dot,
+    SourceControl,
+    Terminal,
+    Config,
 }
 
 /// Stroke-based outline icon in LOGICAL space, centered on (cx, cy) with a
@@ -101,10 +104,52 @@ pub fn draw(
             pb.push_circle(cx, cy, 0.16 * s);
             pb.finish().expect("valid dot path")
         }
+        Icon::SourceControl => {
+            // Git branch: stem + two node circles.
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.16 * s, cy - 0.28 * s);
+            pb.line_to(cx - 0.16 * s, cy + 0.28 * s);
+            pb.push_circle(cx - 0.16 * s, cy - 0.30 * s, 0.10 * s);
+            pb.push_circle(cx - 0.16 * s, cy + 0.30 * s, 0.10 * s);
+            pb.push_circle(cx + 0.24 * s, cy, 0.10 * s);
+            pb.move_to(cx - 0.16 * s, cy + 0.04 * s);
+            pb.cubic_to(cx + 0.04 * s, cy + 0.04 * s, cx + 0.04 * s, cy, cx + 0.14 * s, cy);
+            pb.finish().expect("valid source control path")
+        }
+        Icon::Terminal => {
+            // Screen + prompt chevron/underscore.
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.34 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.34 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.34 * s, cy + 0.28 * s);
+            pb.line_to(cx - 0.34 * s, cy + 0.28 * s);
+            pb.close();
+            pb.move_to(cx - 0.18 * s, cy - 0.08 * s);
+            pb.line_to(cx - 0.04 * s, cy);
+            pb.line_to(cx - 0.18 * s, cy + 0.08 * s);
+            pb.move_to(cx + 0.04 * s, cy + 0.10 * s);
+            pb.line_to(cx + 0.20 * s, cy + 0.10 * s);
+            pb.finish().expect("valid terminal path")
+        }
+        Icon::Config => {
+            // Gear: outer circle + four spokes.
+            let mut pb = PathBuilder::new();
+            pb.push_circle(cx, cy, 0.22 * s);
+            pb.move_to(cx, cy - 0.38 * s);
+            pb.line_to(cx, cy - 0.22 * s);
+            pb.move_to(cx, cy + 0.22 * s);
+            pb.line_to(cx, cy + 0.38 * s);
+            pb.move_to(cx - 0.38 * s, cy);
+            pb.line_to(cx - 0.22 * s, cy);
+            pb.move_to(cx + 0.22 * s, cy);
+            pb.line_to(cx + 0.38 * s, cy);
+            pb.finish().expect("valid config path")
+        }
     };
 
     match icon {
-        Icon::File | Icon::ChevronRight | Icon::ChevronDown => {
+        Icon::File | Icon::ChevronRight | Icon::ChevronDown | Icon::SourceControl
+        | Icon::Terminal | Icon::Config => {
             pixmap.stroke_path(&path, &paint, &stroke, transform, None);
         }
         Icon::Folder | Icon::Dot => {

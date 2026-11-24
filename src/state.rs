@@ -9,20 +9,34 @@ use std::path::{Path, PathBuf};
 
 use crate::viewer::{Viewer, ViewerError};
 
+/// Aggregate heap budget for all cached viewer line indexes (M11). The file
+/// count cap alone is not enough: several large indexed files could add up
+/// without bound. When exceeded, the LRU viewer is dropped.
+pub const INDEX_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
 /// LRU cache of open viewers. `order` holds paths oldest-first; the most
 /// recently used (hit or opened) is promoted to the back, and insertion over
 /// the cap evicts from the front.
 pub struct BufferCache {
     cap: usize,
+    index_budget: usize,
     entries: HashMap<PathBuf, Viewer>,
     order: VecDeque<PathBuf>,
 }
 
 impl BufferCache {
-    /// Cache holding at most `max(1, cap)` viewers.
+    /// Cache holding at most `max(1, cap)` viewers and the default aggregate
+    /// index budget.
     pub fn new(cap: usize) -> Self {
+        Self::with_budget(cap, INDEX_BUDGET_BYTES)
+    }
+
+    /// Cache with an explicit aggregate line-index budget (tests use small
+    /// values; the open file is always retained even if it alone exceeds it).
+    pub fn with_budget(cap: usize, index_budget: usize) -> Self {
         BufferCache {
             cap: cap.max(1),
+            index_budget: index_budget.max(1),
             entries: HashMap::new(),
             order: VecDeque::new(),
         }
@@ -42,6 +56,7 @@ impl BufferCache {
             }
             self.entries.insert(path.to_path_buf(), viewer);
             self.order.push_back(path.to_path_buf());
+            self.enforce_index_budget();
         }
         Ok(self
             .entries
@@ -59,10 +74,29 @@ impl BufferCache {
     }
 
     /// Drop the least-recently-used viewer (its mmap and index free with it).
-    fn evict_oldest(&mut self) {
+    /// Returns whether an entry was removed.
+    fn evict_oldest(&mut self) -> bool {
         if let Some(oldest) = self.order.pop_front() {
             if let Some(evicted) = self.entries.remove(&oldest) {
                 log::debug!("evicted viewer for {} (cache at cap)", evicted.path().display());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Sum the cached line-index heap bytes.
+    fn total_index_bytes(&self) -> usize {
+        self.entries.values().map(Viewer::index_bytes).sum()
+    }
+
+    /// MEMORY RULE (M11): evict LRU viewers until the summed line indices fit
+    /// `index_budget`. The most-recently-opened entry is always kept, so the
+    /// pane can never lose its open file to the budget.
+    fn enforce_index_budget(&mut self) {
+        while self.entries.len() > 1 && self.total_index_bytes() > self.index_budget {
+            if !self.evict_oldest() {
+                break;
             }
         }
     }
@@ -80,6 +114,7 @@ impl BufferCache {
             viewer.restore_offset(off);
         }
         self.entries.insert(path.to_path_buf(), viewer);
+        self.enforce_index_budget();
         Ok(self
             .entries
             .get_mut(path)
@@ -90,6 +125,19 @@ impl BufferCache {
     #[allow(dead_code)] // cache-assertion surface (LRU tests); M7 diagnostics consume it
     pub fn contains(&self, path: &Path) -> bool {
         self.entries.contains_key(path)
+    }
+
+    /// Cached paths in MOST-RECENTLY-FIRST order (the file-tab strip order).
+    pub fn lru_paths(&self) -> Vec<PathBuf> {
+        self.order.iter().rev().cloned().collect()
+    }
+
+    /// Evict one exact path (file-tab close). Returns whether it was cached.
+    pub fn evict(&mut self, path: &Path) -> bool {
+        let before = self.entries.len();
+        self.entries.remove(path);
+        self.order.retain(|p| p != path);
+        before != self.entries.len()
     }
 
     #[allow(dead_code)] // cache-assertion surface (LRU tests); M7 diagnostics consume it
@@ -179,6 +227,54 @@ mod tests {
         cache.get_or_open(&b).expect("open b");
         assert_eq!(cache.len(), 1, "cap 0 → holds exactly one viewer");
         assert!(!cache.contains(&a), "a was evicted by b");
+    }
+
+    #[test]
+    fn lru_paths_are_mru_first_and_evict_removes_one() {
+        let d = temp_dir("lru-paths");
+        let a = make_file(d.path(), "a.txt");
+        let b = make_file(d.path(), "b.txt");
+        let c = make_file(d.path(), "c.txt");
+        let mut cache = BufferCache::new(8);
+        cache.get_or_open(&a).expect("a");
+        cache.get_or_open(&b).expect("b");
+        cache.get_or_open(&c).expect("c");
+        assert_eq!(cache.lru_paths(), vec![c.clone(), b.clone(), a.clone()]);
+        assert!(cache.evict(&b));
+        assert_eq!(cache.lru_paths(), vec![c.clone(), a.clone()]);
+        assert!(!cache.evict(&b), "second evict is a no-op");
+    }
+
+    /// M11: the aggregate line-index heap is capped, not just the file count.
+    #[test]
+    fn index_budget_evicts_lru_but_keeps_the_open_file() {
+        let d = temp_dir("lru-index-budget");
+        let lines: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let a = d.path().join("a.txt");
+        let b = d.path().join("b.txt");
+        fs::write(&a, &lines).expect("write a");
+        fs::write(&b, &lines).expect("write b");
+
+        let index_bytes = {
+            let mut probe = BufferCache::new(8);
+            let v = probe.get_or_open(&a).expect("probe");
+            assert!(v.index_bytes() > 0);
+            v.index_bytes()
+        };
+        // A budget that fits one index but not two.
+        let mut cache = BufferCache::with_budget(8, index_bytes + index_bytes / 2);
+        cache.get_or_open(&a).expect("open a");
+        cache.get_or_open(&b).expect("open b");
+        assert_eq!(cache.len(), 1, "aggregate index budget evicts the LRU viewer");
+        assert!(cache.contains(&b), "the just-opened file is retained");
+        assert!(!cache.contains(&a), "older viewer evicted");
+
+        // A single over-budget viewer is still retained (never blank the pane).
+        let mut tiny = BufferCache::with_budget(8, 1);
+        tiny.get_or_open(&a).expect("open sole file");
+        tiny.get_or_open(&b).expect("open second");
+        assert_eq!(tiny.len(), 1, "keeps exactly the open file when over budget");
+        assert!(tiny.contains(&b));
     }
 
     // ---- M5: refresh ----

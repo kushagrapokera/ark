@@ -32,6 +32,7 @@ mod fs;
 mod git;
 mod highlight;
 mod icons;
+mod memory;
 mod render;
 mod state;
 mod term;
@@ -79,7 +80,6 @@ const TERM_FRAME_BUDGET: Duration = Duration::from_millis(33);
 enum PaneMode {
     #[default]
     Viewer,
-    Terminals,
     Config,
 }
 
@@ -269,6 +269,8 @@ struct App {
     commit: commit::CommitPanel,
     /// Right-pane mode (M9): viewer vs hidden-terminal config editing.
     pane: PaneMode,
+    /// Active workbench activity panel (M12; focus/highlight only).
+    activity: frame::ActivityPanel,
     /// Human-writable whitelist from `ark.toml` (defaults on absence).
     settings: config::Config,
     /// The open config editor (one at a time; M9).
@@ -277,6 +279,10 @@ struct App {
     config_error: Option<String>,
     /// Window IME state (follows PaneMode::Config).
     ime_allowed: bool,
+    /// Last input/fs/git/PTY activity (M11 idle trim gate).
+    last_activity: Instant,
+    /// Last successful idle heap trim (M11 min-interval gate).
+    last_trim: Option<Instant>,
     /// A git status subprocess is running (one at a time).
     git_inflight: bool,
     /// fs activity arrived while the status was in flight.
@@ -312,7 +318,7 @@ impl App {
         Self {
             root,
             title,
-            theme: Theme { ..Theme::DARK },
+            theme: Theme { ..Theme::DARK_PLUS },
             text: TextSystem::new(),
             scale: 1.0,
             window: None,
@@ -348,10 +354,13 @@ impl App {
             file_diff: None,
             commit: commit::CommitPanel::default(),
             pane: PaneMode::Viewer,
+            activity: frame::ActivityPanel::Explorer,
             settings,
             config_edits: None,
             config_error: None,
             ime_allowed: false,
+            last_activity: Instant::now(),
+            last_trim: None,
             git_inflight: false,
             git_pending: false,
             smoke,
@@ -375,25 +384,47 @@ impl App {
             return None;
         }
         Some(match &self.git {
-            // M8: a repo root gets the commit panel under the tree.
+            // M8: a repo root gets the commit panel under the tree; M12 keeps
+            // the terminal dock visible whenever tabs exist.
             Some(_) => frame::app_layout_with_commit(
                 size.width as f64 / self.scale,
                 size.height as f64 / self.scale,
                 self.split.position,
                 true,
+                self.terms.is_open(),
             ),
-            None => frame::app_layout(
+            None => frame::app_layout_with_commit(
                 size.width as f64 / self.scale,
                 size.height as f64 / self.scale,
                 self.split.position,
+                false,
+                self.terms.is_open(),
             ),
         })
     }
 
+    /// Terminal grid as if the dock were open (new tab spawn size).
+    fn terminal_grid_for_new_tab(&self) -> Option<Rect> {
+        let window = self.window.as_ref()?;
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return None;
+        }
+        Some(
+            frame::app_layout_with_commit(
+                size.width as f64 / self.scale,
+                size.height as f64 / self.scale,
+                self.split.position,
+                self.git.is_some(),
+                true,
+            )
+            .term_grid,
+        )
+    }
+
     /// Whether the tracked pointer is inside the window (logical px) — for
     /// arming the click flag on release.
-    fn pointer_in_window(&self) -> bool {
-        let Some(window) = &self.window else { return false };
+    fn pointer_in_window(&self) -> bool {        let Some(window) = &self.window else { return false };
         let size = window.inner_size();
         if size.width == 0 || size.height == 0 {
             return false;
@@ -438,14 +469,28 @@ impl App {
         let pointer = self.pointer;
         self.pointer.click = false;
         let dbl = std::mem::take(&mut self.pending_dbl);
-        // The open viewer (right pane) — borrowed from the LRU cache; the
-        // open file is always most-recently-used, so the cache never evicts
-        // it mid-frame. Only the explicit Viewer pane borrows it.
-        let viewer = match (self.pane, self.open_path.as_deref()) {
-            (PaneMode::Viewer, Some(p)) => self.buffers.get_or_open(Path::new(p)).ok(),
-            _ => None,
+        // Tab strip order: LRU files (most-recent first) + the one config
+        // editor. Bounded by the cache cap plus one.
+        let mut open_files = self.buffers.lru_paths();
+        if let Some(editor) = &self.config_edits {
+            let config_path = editor.path().to_path_buf();
+            if !open_files.contains(&config_path) {
+                open_files.push(config_path);
+            }
+        }
+        let active_path = match self.pane {
+            PaneMode::Config => self.config_edits.as_ref().map(|e| e.path().to_path_buf()),
+            _ => self.open_path.clone(),
         };
-        let terms = if self.pane == PaneMode::Terminals {
+        // The open viewer (editor body) — borrowed from the LRU cache; the
+        // open file is always most-recently-used, so the cache never evicts
+        // it mid-frame. Terminal tabs no longer replace the editor body.
+        let viewer = match (self.pane, self.open_path.as_deref()) {
+            (PaneMode::Config, _) => None,
+            (_, Some(p)) => self.buffers.get_or_open(Path::new(p)).ok(),
+            (_, None) => None,
+        };
+        let terms = if self.terms.is_open() {
             Some(&mut self.terms)
         } else {
             None
@@ -474,6 +519,10 @@ impl App {
                 theme: &self.theme,
                 scale: self.scale,
                 title: &self.title,
+                root: &self.root,
+                open_files: &open_files,
+                active_path: active_path.as_deref(),
+                activity: self.activity,
                 pointer,
                 dbl_click: dbl,
                 viewer,
@@ -523,9 +572,11 @@ impl App {
                 // (Io / binary refusal) surfaces in the pane and logs.
                 match self.buffers.get_or_open(&path) {
                     Ok(_) => {
+                        info!("viewer: opened {}", path.display());
                         self.open_path = Some(path);
                         self.viewer_error = None;
                         self.pane = PaneMode::Viewer;
+                        self.activity = frame::ActivityPanel::Explorer;
                         self.term_focused = false;
                         self.commit.message.focused = false;
                     }
@@ -558,6 +609,15 @@ impl App {
         }
         if effects.config_reload {
             self.reload_config();
+        }
+        if let Some(panel) = effects.set_activity {
+            self.set_activity(panel);
+        }
+        if let Some(path) = effects.select_tab {
+            self.select_tab(path);
+        }
+        if let Some(path) = effects.close_tab {
+            self.close_tab(path);
         }
         if let Some(path) = pending_config {
             self.open_config(path);
@@ -662,16 +722,15 @@ impl App {
             error!("terminal open failed: no wake proxy");
             return;
         };
-        let Some(layout) = self.app_layout() else {
+        let Some(grid) = self.terminal_grid_for_new_tab() else {
             return;
         };
-        let grid = frame::term_grid_rect(layout.viewer_pane);
         let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
         let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.open(&self.root, size, proxy) {
             Ok(()) => {
-                self.pane = PaneMode::Terminals;
+                self.activity = frame::ActivityPanel::Terminal;
                 self.term_focused = true;
                 self.commit.message.focused = false;
                 self.damage.mark_full();
@@ -681,15 +740,100 @@ impl App {
         }
     }
 
+    /// M12: activity-bar focus routing. The bar highlights the active panel;
+    /// Terminal/Config also switch the editor surface when one exists.
+    fn set_activity(&mut self, panel: frame::ActivityPanel) {
+        self.activity = panel;
+        match panel {
+            frame::ActivityPanel::Terminal => {
+                if self.terms.is_open() {
+                    self.term_focused = true;
+                    self.commit.message.focused = false;
+                }
+            }
+            frame::ActivityPanel::Config => {
+                if self.config_edits.is_some() {
+                    self.pane = PaneMode::Config;
+                }
+                self.term_focused = false;
+                self.commit.message.focused = false;
+            }
+            frame::ActivityPanel::Explorer | frame::ActivityPanel::SourceControl => {
+                if self.config_edits.is_some() || self.pane == PaneMode::Config {
+                    self.pane = PaneMode::Viewer;
+                }
+                self.term_focused = false;
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// M12: select a file/config tab. Config paths enter the config editor;
+    /// every other path opens through the LRU cache.
+    fn select_tab(&mut self, path: PathBuf) {
+        if Some(path.as_path()) == self.config_edits.as_ref().map(|e| e.path()) {
+            self.pane = PaneMode::Config;
+            self.activity = frame::ActivityPanel::Config;
+            self.term_focused = false;
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        }
+        match self.buffers.get_or_open(&path) {
+            Ok(_) => {
+                self.open_path = Some(path);
+                self.viewer_error = None;
+                self.pane = PaneMode::Viewer;
+                self.activity = frame::ActivityPanel::Explorer;
+                self.term_focused = false;
+                self.request_diff_refresh();
+            }
+            Err(e) => {
+                error!("viewer: {e}");
+                self.viewer_error = Some(e.to_string());
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// M12: close a file/config tab. Closing the active viewer tab selects
+    /// the most recently used remaining file.
+    fn close_tab(&mut self, path: PathBuf) {
+        if Some(path.as_path()) == self.config_edits.as_ref().map(|e| e.path()) {
+            self.close_config();
+            self.activity = frame::ActivityPanel::Explorer;
+            return;
+        }
+        let was_active = self.open_path.as_deref() == Some(path.as_path());
+        self.buffers.evict(&path);
+        if was_active {
+            self.open_path = self
+                .buffers
+                .lru_paths()
+                .into_iter()
+                .next()
+                .filter(|p| Some(p.as_path()) != self.config_edits.as_ref().map(|e| e.path()));
+            if self.open_path.is_none() {
+                self.viewer_error = None;
+            }
+            self.pane = PaneMode::Viewer;
+            self.request_diff_refresh();
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
     /// Open a whitelisted config file in the enforced editor. Failures render
     /// in the pane (never a silent viewer fallback).
-    fn open_config(&mut self, path: PathBuf) {
-        match ConfigEditor::open(&self.root, &path, &self.settings.editable) {
+    fn open_config(&mut self, path: PathBuf) {        match ConfigEditor::open(&self.root, &path, &self.settings.editable) {
             Ok(editor) => {
                 info!("config editor: {} ({:?})", path.display(), editor.kind());
                 self.config_edits = Some(editor);
                 self.config_error = None;
                 self.pane = PaneMode::Config;
+                self.activity = frame::ActivityPanel::Config;
                 self.term_focused = false;
                 self.commit.message.focused = false;
                 self.viewer_error = None;
@@ -699,6 +843,7 @@ impl App {
                 self.config_edits = None;
                 self.config_error = Some(e.to_string());
                 self.pane = PaneMode::Config;
+                self.activity = frame::ActivityPanel::Config;
                 self.term_focused = false;
             }
         }
@@ -711,6 +856,7 @@ impl App {
         self.config_edits = None;
         self.config_error = None;
         self.pane = PaneMode::Viewer;
+        self.activity = frame::ActivityPanel::Explorer;
         self.damage.mark_full();
         self.request_redraw();
     }
@@ -783,17 +929,16 @@ impl App {
             self.request_redraw();
             return false;
         };
-        let Some(layout) = self.app_layout() else {
+        let Some(grid) = self.terminal_grid_for_new_tab() else {
             return false;
         };
-        let grid = frame::term_grid_rect(layout.viewer_pane);
         let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
         let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.open_command(&self.root, label, command, size, proxy) {
             Ok(()) => {
                 info!("{label}: command tab opened (output streams there)");
-                self.pane = PaneMode::Terminals;
+                self.activity = frame::ActivityPanel::Terminal;
                 self.term_focused = true;
                 self.commit.message.focused = false;
                 self.damage.mark_full();
@@ -855,10 +1000,9 @@ impl App {
     /// Encode + write a mouse report to the active terminal when the running
     /// app has enabled mouse reporting. Returns whether a report was sent.
     fn term_mouse_report(&mut self, state: ElementState) -> bool {
-        let Some(layout) = self.app_layout() else {
+        let Some(grid) = self.terminal_grid_for_new_tab() else {
             return false;
         };
-        let grid = frame::term_grid_rect(layout.viewer_pane);
         if !grid.contains(self.pointer.x, self.pointer.y) {
             return false;
         }
@@ -886,21 +1030,16 @@ impl App {
             return;
         }
         // Hidden terminals keep their scrollback current but do not repaint
-        // another pane (M9: the right pane can be a config editor/viewer).
-        if self.pane != PaneMode::Terminals {
-            return;
+        // another pane. The workbench dock repaints whenever tabs exist.
+        if self.terms.is_open() {
+            if let Some(layout) = self.app_layout() {
+                let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                self.damage
+                    .mark(damage_rect(layout.term_grid, self.scale, cw, ch));
+            }
         }
         let now = Instant::now();
         let due = self.last_render.is_none_or(|t| now.duration_since(t) >= TERM_FRAME_BUDGET);
-        if let Some(layout) = self.app_layout() {
-            let (cw, ch) = (self.canvas.width(), self.canvas.height());
-            self.damage.mark(damage_rect(
-                frame::term_grid_rect(layout.viewer_pane),
-                self.scale,
-                cw,
-                ch,
-            ));
-        }
         if due {
             self.term_paint_due = false;
             self.request_redraw();
@@ -1047,6 +1186,7 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
+        self.last_activity = Instant::now();
         match event {
             Wake::FsChanged => {
                 let changed = self.watcher.as_ref().map(Watcher::take_pending).unwrap_or(false);
@@ -1080,6 +1220,33 @@ impl ApplicationHandler<Wake> for App {
             return;
         }
         let now = Instant::now();
+        // M11: return free heap pages after a quiet period (glibc only).
+        if memory::should_trim(now, self.last_activity, self.last_trim) {
+            let trimmed = memory::trim_heap();
+            self.last_trim = Some(now);
+            if let Some(r) = memory::report() {
+                if std::env::var_os("ARK_MEM_REPORT").is_some() {
+                    info!(
+                        "memory: trimmed={trimmed} rss={} KiB hwm={} KiB pss={} KiB",
+                        r.rss_kib, r.hwm_kib, r.pss_kib
+                    );
+                } else {
+                    log::debug!(
+                        "memory: trimmed={trimmed} rss={} KiB hwm={} KiB pss={} KiB",
+                        r.rss_kib, r.hwm_kib, r.pss_kib
+                    );
+                }
+            }
+        } else if now
+            .checked_duration_since(self.last_activity)
+            .is_none_or(|d| d < memory::TRIM_IDLE)
+        {
+            // Wake for the idle deadline; any earlier follow-up scheduling
+            // below overrides this to its own (sooner) deadline.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                self.last_activity + memory::TRIM_IDLE,
+            ));
+        }
         // Flash clear frame: one full redraw without the strip, then back to
         // waiting for events.
         if let Some(d) = self.flash_until {
@@ -1108,6 +1275,7 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        self.last_activity = Instant::now();
         match event {
             WindowEvent::CloseRequested => {
                 info!("close requested — exiting");
@@ -1140,10 +1308,7 @@ impl ApplicationHandler<Wake> for App {
                     .unwrap_or(false);
                 let over_grid = layout
                     .as_ref()
-                    .map(|l| {
-                        frame::term_grid_rect(l.viewer_pane)
-                            .contains(self.pointer.x, self.pointer.y)
-                    })
+                    .map(|l| l.term_grid.contains(self.pointer.x, self.pointer.y))
                     .unwrap_or(false);
                 if over_commit {
                     // A commit-panel click never leaves the shell keyboard-
@@ -1156,7 +1321,7 @@ impl ApplicationHandler<Wake> for App {
                     self.term_focused = false;
                     self.commit.message.focused = false;
                 }
-                if self.pane == PaneMode::Terminals && self.terms.is_open() && over_grid {
+                if self.terms.is_open() && over_grid {
                     self.term_focused = true;
                     self.commit.message.focused = false;
                     if self.term_mouse_report(state) {
@@ -1222,7 +1387,7 @@ impl ApplicationHandler<Wake> for App {
                     }
                     return;
                 }
-                let grid = frame::term_grid_rect(layout.viewer_pane);
+                let grid = layout.term_grid;
                 let (scale, canvas, damage) = (self.scale, &self.canvas, &mut self.damage);
                 let scrolled = if layout.tree_panel.contains(x, y) {
                     route_wheel_scroll(&mut self.tree, dy, &layout, scale, canvas, damage)
@@ -1285,6 +1450,11 @@ impl ApplicationHandler<Wake> for App {
                                 self.terms.close_active();
                                 if !self.terms.is_open() {
                                     self.pane = self.pane_after_terminals();
+                                    self.activity = if self.pane == PaneMode::Config {
+                                        frame::ActivityPanel::Config
+                                    } else {
+                                        frame::ActivityPanel::Explorer
+                                    };
                                     self.term_focused = false;
                                 }
                                 self.damage.mark_full();

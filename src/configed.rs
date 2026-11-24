@@ -14,6 +14,7 @@ use winit::keyboard::{Key, ModifiersState};
 
 use crate::config;
 use crate::fs::{self, EditError, MAX_CONFIG_BYTES};
+use crate::highlight::Highlighter;
 use crate::ui::{Rect, TextInput};
 
 pub mod env;
@@ -356,6 +357,7 @@ impl ConfigEditor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // shared raster context + editor effects
     pub fn draw(
         &mut self,
         canvas: &mut crate::render::Canvas,
@@ -364,8 +366,9 @@ impl ConfigEditor {
         scale: f64,
         rect: Rect,
         pointer: crate::ui::Pointer,
+        highlighter: &Highlighter,
     ) -> ConfigEffects {
-        ui::draw(self, canvas, text, theme, scale, rect, pointer)
+        ui::draw(self, canvas, text, theme, scale, rect, pointer, highlighter)
     }
 }
 

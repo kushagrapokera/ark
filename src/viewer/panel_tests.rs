@@ -3,6 +3,9 @@
 
 use super::*;
 use crate::fs::testutil::{temp_dir, TempDir};
+use crate::highlight::Highlighter;
+use crate::render::{Canvas, Theme};
+use crate::text::{TextSystem, UI_FONT_SIZE};
 use crate::ui::testutil::{count_color_in, ink_bbox_in};
 use std::fs;
 use std::io::Write;
@@ -24,6 +27,23 @@ fn panel_theme() -> Theme {
         syntax_string: (166, 227, 161),
         syntax_number: bg,
         syntax_comment: bg,
+        syntax_type: bg,
+        syntax_function: bg,
+        syntax_constant: bg,
+        syntax_property: bg,
+        syntax_control: bg,
+        syntax_variable: (255, 255, 255),
+        syntax_regex: bg,
+        syntax_escape: bg,
+        syntax_decorator: bg,
+        syntax_selector: bg,
+        editor_current_line: bg,
+        editor_indent_guide: bg,
+        editor_indent_guide_active: bg,
+        editor_bracket_1: bg,
+        editor_bracket_2: bg,
+        editor_bracket_3: bg,
+        on_accent: bg,
         git_modified: bg,
         git_added: bg,
         git_deleted: bg,
@@ -35,7 +55,7 @@ fn panel_theme() -> Theme {
 /// a string literal so token colors can be pinned on the deepest line.
 fn lines_fixture(label: &str) -> (TempDir, PathBuf) {
     let d = temp_dir(label);
-    let p = d.path().join("lines.txt");
+    let p = d.path().join("lines.rs");
     let mut f = fs::File::create(&p).expect("create");
     for i in 0..39 {
         writeln!(f, "{}", "a".repeat(i + 1)).expect("write");
@@ -167,6 +187,79 @@ fn token_colors_and_selection_render() {
     assert!(
         count_color_in(&canvas, theme.selection, sel_x1, 10, 320, 29) == 0,
         "nothing beyond the span end"
+    );
+}
+
+// ---- editor decorations ----
+
+fn decor_fixture(label: &str, source: &str) -> (TempDir, PathBuf) {
+    let d = temp_dir(label);
+    let p = d.path().join("main.rs");
+    fs::write(&p, source).expect("write");
+    (d, p)
+}
+
+#[test]
+fn current_line_indent_guides_and_bracket_colors_render() {
+    let (_d, p) = decor_fixture(
+        "decor",
+        "fn main() {\n    let x = 1;\n    if ready { call(x); }\n}\n",
+    );
+    let v = Viewer::open(&p).expect("opens");
+    let mut theme = panel_theme();
+    theme.editor_current_line = (30, 31, 32);
+    theme.editor_indent_guide = (50, 51, 52);
+    theme.editor_indent_guide_active = (60, 61, 62);
+    theme.editor_bracket_1 = (70, 71, 72);
+    theme.editor_bracket_2 = (80, 81, 82);
+    theme.editor_bracket_3 = (90, 91, 92);
+    let mut canvas = Canvas::new(420, 110);
+    let m = draw(&theme, PANEL, &v, &mut canvas);
+    let advance = f64::from(m.advance);
+    let gutter_w = gutter_width(v.line_count(), advance);
+    let text_x = (PANEL.x + gutter_w) as u32;
+
+    assert!(
+        count_color_in(&canvas, theme.editor_current_line, text_x, 10, 310, 29) > 100,
+        "current line paints a full editor band"
+    );
+    assert!(
+        count_color_in(&canvas, theme.editor_indent_guide, text_x, 29, 310, 67) > 5,
+        "indented lines paint guide pixels"
+    );
+    assert!(
+        count_color_in(&canvas, theme.editor_bracket_1, text_x, 10, 310, 67) > 0,
+        "outer brackets use the first pair color"
+    );
+    assert!(
+        count_color_in(&canvas, theme.editor_bracket_2, text_x, 10, 310, 67) > 0,
+        "nested brackets use the second pair color"
+    );
+}
+
+#[test]
+fn bracket_colors_ignore_brackets_inside_strings() {
+    let (_d, p) = decor_fixture("brackets", "fn main() { let s = \"{\"; }\n");
+    let v = Viewer::open(&p).expect("opens");
+    let mut theme = panel_theme();
+    theme.editor_bracket_1 = (70, 71, 72);
+    theme.editor_bracket_2 = (80, 81, 82);
+    theme.editor_bracket_3 = (90, 91, 92);
+    theme.syntax_string = (20, 21, 22);
+    let mut canvas = Canvas::new(420, 80);
+    let m = draw(&theme, PANEL, &v, &mut canvas);
+    let advance = f64::from(m.advance);
+    let text_x = PANEL.x + gutter_width(v.line_count(), advance);
+    let brace_in_string = (text_x + 21.0 * advance) as u32;
+
+    assert!(
+        count_color_in(&canvas, theme.syntax_string, brace_in_string, 10, brace_in_string + 8, 29) > 0,
+        "the string brace keeps string coloring"
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.editor_bracket_1, brace_in_string, 10, brace_in_string + 8, 29),
+        0,
+        "the string brace is not bracket-colored"
     );
 }
 

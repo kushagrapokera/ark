@@ -4,8 +4,9 @@ use cosmic_text::Weight;
 
 use super::{GUTTER_W, PAD};
 use crate::configed::text::TextEditor;
+use crate::highlight::{token_color, Highlighter, Lang};
 use crate::render::{Canvas, Theme};
-use crate::text::{TextSystem, TextStyle};
+use crate::text::{char_range, TextSystem, TextStyle};
 use crate::ui::{Pointer, Rect};
 use crate::viewer::LINE_H;
 
@@ -22,6 +23,8 @@ pub(super) fn draw(
     font_size: f32,
     m: &crate::text::MonoMetrics,
     dragging: &mut bool,
+    highlighter: &Highlighter,
+    lang: Lang,
 ) -> bool {
     let rows = (body.h / LINE_H).floor().max(1.0) as usize;
     let text_x = body.x + GUTTER_W;
@@ -31,6 +34,7 @@ pub(super) fn draw(
     let selection = t.selected_range();
     let (cursor_line, cursor_col) = t.cursor();
     let hscroll = t.hscroll_col();
+    let mut highlight_state = highlighter.state_before(lang, t.scroll_line(), |i| Some(t.line(i)));
     for slot in 0..rows {
         let line_idx = t.scroll_line() + slot;
         if line_idx >= t.line_count() {
@@ -75,15 +79,41 @@ pub(super) fn draw(
             }
         }
 
-        let visible: String = line.chars().skip(hscroll).take(cols).collect();
-        if !visible.is_empty() {
+        let spans = highlighter.line_spans_with_state(line, lang, &mut highlight_state);
+        let char_len = line.chars().count();
+        let limit = (hscroll + cols).min(char_len);
+        let mut draw_pos = hscroll.min(char_len);
+        let mut draw_run = |a: usize, b: usize, color| {
+            if b <= a {
+                return;
+            }
             text.draw_line(
                 canvas,
-                &visible,
-                (text_x * scale) as f32,
+                char_range(line, a, b),
+                ((text_x + (a - hscroll) as f64 * advance) * scale) as f32,
                 baseline as f32,
-                TextStyle { color: theme.fg, font_size, weight: Weight::NORMAL },
+                TextStyle { color, font_size, weight: Weight::NORMAL },
             );
+        };
+        for span in &spans {
+            if span.end <= draw_pos {
+                continue;
+            }
+            if span.start >= limit {
+                break;
+            }
+            let a = span.start.max(hscroll).min(limit);
+            let b = span.end.max(hscroll).min(limit);
+            if a > draw_pos {
+                draw_run(draw_pos, a, theme.fg);
+            }
+            if b > a {
+                draw_run(a, b, token_color(theme, span.token));
+            }
+            draw_pos = draw_pos.max(b);
+        }
+        if draw_pos < limit {
+            draw_run(draw_pos, limit, theme.fg);
         }
 
         // Caret: a 2px accent column when this line holds it and it's in view.

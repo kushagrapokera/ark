@@ -20,19 +20,17 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use cosmic_text::Weight;
 use memmap2::Mmap;
 
-use crate::git::{FileDiff, GutterMark};
-use crate::highlight::{Highlighter, Token};
-use crate::render::{Canvas, Theme};
-use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
+use crate::highlight::{lang_for_source, Lang};
 use crate::ui::{Pointer, Rect};
 
 /// Cap on the viewed region of a file (larger files render a preview).
 pub const VIEW_CAP_BYTES: u64 = 64 * 1024 * 1024;
 /// NUL sniff window for binary refusal.
 pub const BINARY_SNIFF_BYTES: usize = 8 * 1024;
+/// Maximum first-line prefix inspected for shebang language detection.
+const SHEBANG_SNIFF_BYTES: usize = 4 * 1024;
 /// Logical px per viewer text line (UI_FONT_SIZE × 1.35).
 pub const LINE_H: f64 = 18.9;
 /// Width of the gutter strip reserved for git marks (M7 paints into it).
@@ -84,6 +82,8 @@ impl Selection {
 /// index + selection; nothing grows with interaction.
 pub struct Viewer {
     path: PathBuf,
+    /// Language detected once at open from name/extension or shebang.
+    lang: Lang,
     map: Mmap,
     /// Full file size at open time (disk-change detection compares it).
     file_len: u64,
@@ -139,8 +139,16 @@ impl Viewer {
                 }
             }
         }
+        let sniff_len = view.len().min(SHEBANG_SNIFF_BYTES);
+        let first_line_end = view[..sniff_len]
+            .iter()
+            .position(|b| *b == b'\n')
+            .unwrap_or(sniff_len);
+        let first_line = String::from_utf8_lossy(&view[..first_line_end]);
+        let lang = lang_for_source(path, first_line.as_ref());
         Ok(Viewer {
             path: path.to_path_buf(),
+            lang,
             map,
             file_len: len,
             modified,
@@ -157,8 +165,18 @@ impl Viewer {
         &self.path
     }
 
+    pub fn language(&self) -> Lang {
+        self.lang
+    }
+
     pub fn truncated(&self) -> bool {
         self.truncated
+    }
+
+    /// Heap footprint of the line index (`Vec<u32>` capacity). M11's aggregate
+    /// LRU budget uses this, not the mmap (whose pages are viewport-touched).
+    pub fn index_bytes(&self) -> usize {
+        self.starts.capacity() * std::mem::size_of::<u32>()
     }
 
     /// True when the file on disk differs from what this view holds (len or
@@ -409,166 +427,13 @@ pub fn handle_pointer(viewer: &mut Viewer, panel: Rect, pointer: Pointer, advanc
     viewer.sel != before
 }
 
-fn token_color(theme: &Theme, token: Token) -> crate::render::ColorRgb {
-    match token {
-        Token::Keyword => theme.syntax_keyword,
-        Token::String => theme.syntax_string,
-        Token::Number => theme.syntax_number,
-        Token::Comment => theme.syntax_comment,
-    }
-}
-
-/// Substring of `s` between CHAR indices [a, b).
-fn char_range(s: &str, a: usize, b: usize) -> &str {
-    let start = s.char_indices().nth(a).map(|(i, _)| i).unwrap_or(s.len());
-    let end = s.char_indices().nth(b).map(|(i, _)| i).unwrap_or(s.len());
-    &s[start..end]
-}
-
-/// Render the visible lines of `viewer` into `panel` (LOGICAL px, rastered
-/// at `scale`). Viewport-only: only the offset-exposed lines are shaped.
-/// Gutter: reserved git-mark strip (M7 paints it) + right-aligned dim line
-/// numbers. Selection backgrounds paint under the text; text draws in
-/// `highlighter` token colors over `fg`.
-#[allow(clippy::too_many_arguments)] // highlighter + diff join raster borrows; explicit beats bundling
-pub fn draw_viewer_panel(
-    canvas: &mut Canvas,
-    text: &mut TextSystem,
-    theme: &Theme,
-    scale: f64,
-    panel: Rect,
-    viewer: &Viewer,
-    highlighter: &Highlighter,
-    file_diff: Option<&FileDiff>,
-) {
-    if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
-        return; // degenerate panel or scale: nothing to raster
-    }
-    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
-    let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
-    let advance = f64::from(m.advance) / scale; // logical px per char
-
-    if viewer.line_count() == 0 {
-        canvas.fill_rect(panel.x, panel.y, panel.w, panel.h, theme.bg, scale);
-        let cy = (panel.y + panel.h / 2.0) * scale;
-        text.draw_line(
-            canvas,
-            "(empty file)",
-            ((panel.x + panel.w / 2.0) * scale - f64::from(m.advance) * 6.0) as f32,
-            (cy + f64::from(m.ascent - m.descent) / 2.0) as f32,
-            TextStyle { color: theme.fg_dim, font_size, weight: Weight::NORMAL },
-        );
-        return;
-    }
-
-    // Reserved git-mark strip: the M7 diff marks paint into it.
-    canvas.fill_rect(panel.x, panel.y, MARK_W, panel.h, theme.bg_elevated, scale);
-    let offset_lines = viewer.offset_lines();
-    let visible_rows = ((panel.h / LINE_H).floor() as usize).max(1);
-    if let Some(diff) = file_diff {
-        for (line, kind) in &diff.marks {
-            // line is 1-based; the strip bar spans the line's row band.
-            let row_i = *line as i64 - 1 - offset_lines as i64;
-            if row_i < 0 || row_i as usize >= visible_rows {
-                continue;
-            }
-            let y = panel.y + row_i as f64 * LINE_H;
-            let color = match kind {
-                GutterMark::Added => theme.git_added,
-                GutterMark::Modified => theme.git_modified,
-            };
-            canvas.fill_rect(panel.x + 1.0, y + 1.0, MARK_W - 2.0, LINE_H - 2.0, color, scale);
-        }
-    }
-
-    let gutter_w = gutter_width(viewer.line_count(), advance);
-    let text_x = panel.x + gutter_w;
-    let first = viewer.offset_lines();
-    // Whole rows only: a partial row at the bottom would paint ink past the
-    // panel (there is no clip machinery) — the sliver stays background.
-    let rows = ((panel.h / LINE_H).floor() as usize).max(1);
-    let baseline_off = f64::from(m.ascent - m.descent) / 2.0;
-
-    for i in first..(first + rows).min(viewer.line_count()) {
-        let row_y = panel.y + (i - first) as f64 * LINE_H;
-        // Selection background: intersection of the selection span with
-        // this line, in char columns → x/w.
-        if let Some(((sl, sc), (el, ec))) = viewer.selection() {
-            if i >= sl && i <= el {
-                let len = viewer.line_text(i).map(|t| t.chars().count()).unwrap_or(0);
-                let (a, b) = if sl == el {
-                    (sc, ec)
-                } else if i == sl {
-                    (sc, len)
-                } else if i == el {
-                    (0, ec)
-                } else {
-                    (0, len)
-                };
-                if b > a {
-                    canvas.fill_rect(
-                        text_x + a as f64 * advance,
-                        row_y,
-                        (b - a) as f64 * advance,
-                        LINE_H,
-                        theme.selection,
-                        scale,
-                    );
-                }
-            }
-        }
-
-        let Some(line) = viewer.line_text(i) else { continue };
-
-        // Gutter line number, right-aligned against the text edge.
-        let num = (i + 1).to_string();
-        let num_x = panel.x + gutter_w - GUT_PAD_R - num.chars().count() as f64 * advance;
-        let baseline = (row_y + LINE_H / 2.0) * scale + baseline_off;
-        text.draw_line(
-            canvas,
-            &num,
-            (num_x * scale) as f32,
-            baseline as f32,
-            TextStyle { color: theme.fg_dim, font_size, weight: Weight::NORMAL },
-        );
-
-        // Text segments: plain fg runs between token-colored spans. Drawing
-        // per segment segments the shaping (no ligatures across colors) and
-        // keeps each run's x predictable: char col × advance.
-        let spans = highlighter.line_spans(&line);
-        let char_len = line.chars().count();
-        let mut segs: Vec<(usize, usize, crate::render::ColorRgb)> = Vec::new();
-        let mut pos = 0usize;
-        for s in &spans {
-            if s.start > pos {
-                segs.push((pos, s.start, theme.fg));
-            }
-            if s.end > s.start {
-                segs.push((s.start, s.end, token_color(theme, s.token)));
-            }
-            pos = s.end.max(pos);
-        }
-        if pos < char_len {
-            segs.push((pos, char_len, theme.fg));
-        }
-        for (a, b, color) in segs {
-            let seg = char_range(&line, a, b);
-            text.draw_line(
-                canvas,
-                seg,
-                ((text_x + a as f64 * advance) * scale) as f32,
-                baseline as f32,
-                TextStyle { color, font_size, weight: Weight::NORMAL },
-            );
-        }
-        // NOTE: text that crosses the panel's right edge is left unclipped
-        // (no horizontal scroll in M4, same as the tree panel).
-    }
-}
-
 // Model tests and panel pixel pins live in the module subdirectory (impl +
 // all tests together would bloat this file).
+mod render;
+pub use render::draw_viewer_panel;
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod panel_tests;
+mod decor;

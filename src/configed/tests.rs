@@ -4,6 +4,8 @@
 use super::*;
 use crate::config::Config;
 use crate::fs::testutil::temp_dir;
+use crate::highlight::Highlighter;
+use crate::render::Canvas;
 use crate::text::TextSystem;
 use crate::ui::Pointer;
 
@@ -140,6 +142,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
         1.0,
         pane(),
         Pointer { x: x1, y, down: true, click: false },
+        &Highlighter::new(),
     );
     let _ = e.draw(
         &mut canvas,
@@ -148,6 +151,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
         1.0,
         pane(),
         Pointer { x: x4, y, down: true, click: false },
+        &Highlighter::new(),
     );
     let _ = e.draw(
         &mut canvas,
@@ -156,6 +160,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
         1.0,
         pane(),
         Pointer { x: x4, y, down: false, click: true },
+        &Highlighter::new(),
     );
     let Body::Text(t) = &e.body else { panic!("text") };
     assert_eq!(t.selected_text(), Some("bcd"), "drag selection survives release");
@@ -176,6 +181,23 @@ fn panel_theme() -> crate::render::Theme {
         syntax_string: (166, 227, 161),
         syntax_number: (250, 179, 135),
         syntax_comment: (108, 112, 134),
+        syntax_type: (137, 180, 250),
+        syntax_function: (249, 226, 175),
+        syntax_constant: (137, 180, 250),
+        syntax_property: (137, 180, 250),
+        syntax_control: (0, 0, 0),
+        syntax_variable: (0, 0, 0),
+        syntax_regex: (0, 0, 0),
+        syntax_escape: (0, 0, 0),
+        syntax_decorator: (0, 0, 0),
+        syntax_selector: (0, 0, 0),
+        editor_current_line: (0, 0, 0),
+        editor_indent_guide: (0, 0, 0),
+        editor_indent_guide_active: (0, 0, 0),
+        editor_bracket_1: (0, 0, 0),
+        editor_bracket_2: (0, 0, 0),
+        editor_bracket_3: (0, 0, 0),
+        on_accent: (30, 30, 46),
         git_modified: (250, 179, 135),
         git_added: (166, 227, 161),
         git_deleted: (243, 139, 168),
@@ -197,7 +219,7 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
     let mut text = TextSystem::new();
     let mut canvas = crate::render::Canvas::new(720, 632);
 
-    e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), Pointer::default());
+    e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), Pointer::default(), &Highlighter::new());
     assert!(
         crate::ui::testutil::count_color_in(&canvas, theme.fg, 0, 0, 720, 34) > 0,
         "header/title ink"
@@ -209,7 +231,7 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
 
     // Row 0 (the first ENTRY, after the comment) selects at y≈62.
     let row_click = Pointer { x: 100.0, y: 62.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), row_click);
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), row_click, &Highlighter::new());
     assert!(!fx.changed, "selection is not a document edit");
     let Body::Env(ed) = &e.body else { panic!("env") };
     assert_eq!(ed.selected, Some(ed.doc.entries()[0].0));
@@ -219,7 +241,7 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
     // Add button (8..239 × 602..624) appends NEW_KEY and marks dirty.
     let before = ed.doc.entries().len();
     let add_click = Pointer { x: 100.0, y: 613.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), add_click);
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), add_click, &Highlighter::new());
     assert!(fx.changed);
     assert!(e.is_dirty());
     let Body::Env(ed) = &e.body else { panic!("env") };
@@ -228,15 +250,15 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
 
     // Header Save/Reload report effects (the App does the fs boundary).
     let save_click = Pointer { x: 681.0, y: 19.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), save_click);
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), save_click, &Highlighter::new());
     assert!(fx.save && !fx.reload);
     let reload_click = Pointer { x: 613.0, y: 19.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), reload_click);
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), reload_click, &Highlighter::new());
     assert!(fx.reload && !fx.save);
 
     // Degenerate panes rasterize nothing and never panic.
-    e.draw(&mut canvas, &mut text, &theme, 1.0, Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Pointer::default());
-    e.draw(&mut canvas, &mut text, &theme, 0.0, pane(), Pointer::default());
+    e.draw(&mut canvas, &mut text, &theme, 1.0, Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Pointer::default(), &Highlighter::new());
+    e.draw(&mut canvas, &mut text, &theme, 0.0, pane(), Pointer::default(), &Highlighter::new());
 }
 
 #[test]
@@ -251,7 +273,7 @@ fn env_form_field_focus_and_typing_target_the_clicked_field() {
 
     // Select the DB row inside the config pane (pane at 0,0 → row 1 y=82).
     let row_click = Pointer { x: 400.0, y: 82.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), row_click);
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), row_click, &Highlighter::new());
     assert!(!fx.changed);
     let Body::Env(ed) = &e.body else { panic!("env") };
     assert_eq!(ed.selected, Some(1));
@@ -261,7 +283,7 @@ fn env_form_field_focus_and_typing_target_the_clicked_field() {
     // Click the value field (x 577..1008, y 570..594 for a 0,0 pane) and
     // type into it.
     let value_click = Pointer { x: 700.0, y: 580.0, down: false, click: true };
-    e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), value_click);
+    e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), value_click, &Highlighter::new());
     let Body::Env(ed) = &e.body else { panic!("env") };
     assert!(ed.value.focused && !ed.key.focused, "value field keeps focus");
     assert!(e.handle_key(
@@ -276,6 +298,43 @@ fn env_form_field_focus_and_typing_target_the_clicked_field() {
 }
 
 #[test]
+fn textarea_uses_syntax_colors_for_config_files() {
+    let d = temp_dir("configed-text-syntax");
+    let yaml = d.path().join("config.yaml");
+    std::fs::write(&yaml, "# note\nenabled: true\ncount: 42\n").expect("write");
+    let mut e = ConfigEditor::open(d.path(), &yaml, &patterns()).expect("open");
+    let mut theme = panel_theme();
+    theme.syntax_comment = (10, 20, 30);
+    theme.syntax_property = (40, 50, 60);
+    theme.syntax_number = (70, 80, 90);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(720, 632);
+    canvas.fill(theme.bg);
+
+    let _ = e.draw(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        pane(),
+        Pointer::default(),
+        &Highlighter::new(),
+    );
+    assert!(
+        crate::ui::testutil::count_color_in(&canvas, theme.syntax_comment, 44, 52, 700, 90) > 0,
+        "config comments use syntax_comment"
+    );
+    assert!(
+        crate::ui::testutil::count_color_in(&canvas, theme.syntax_property, 44, 52, 700, 130) > 0,
+        "config keys use syntax_property"
+    );
+    assert!(
+        crate::ui::testutil::count_color_in(&canvas, theme.syntax_number, 44, 52, 700, 170) > 0,
+        "config numbers use syntax_number"
+    );
+}
+
+#[test]
 fn textarea_draws_ink_and_maps_clicks_to_the_caret() {
     let d = temp_dir("configed-text-ui");
     let yaml = d.path().join("config.yaml");
@@ -285,7 +344,7 @@ fn textarea_draws_ink_and_maps_clicks_to_the_caret() {
     let mut text = TextSystem::new();
     let mut canvas = crate::render::Canvas::new(720, 632);
 
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), Pointer::default());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), Pointer::default(), &Highlighter::new());
     assert!(!fx.changed);
     assert!(
         crate::ui::testutil::count_color_in(&canvas, theme.fg, 0, 52, 720, 200) > 0,
@@ -304,7 +363,7 @@ fn textarea_draws_ink_and_maps_clicks_to_the_caret() {
         down: false,
         click: true,
     };
-    let _ = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), click);
+    let _ = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), click, &Highlighter::new());
     let Body::Text(t) = &e.body else { panic!("text") };
     assert_eq!(t.cursor(), (1, 2));
     assert!(!e.is_dirty(), "caret movement is not an edit");

@@ -36,6 +36,10 @@ use crate::watch::Wake;
 
 /// Terminal scrollback cap (memory rule 3: capped terminal scrollback).
 pub const SCROLLBACK_LINES: usize = 2000;
+/// Hard cap on open terminal tabs (shell, git commands and agents share it).
+/// Each tab carries a PTY, grid + capped scrollback; without a cap the tab
+/// vector would grow with clicks and could blow the memory budget.
+pub const MAX_TERM_TABS: usize = 8;
 /// Grid cell metrics: the viewer's row height and the shared mono font.
 pub const TERM_LINE_H: f64 = LINE_H;
 
@@ -84,6 +88,7 @@ impl EventListener for NoopListener {}
 pub enum TermError {
     Io(std::io::Error),
     Pty(anyhow::Error),
+    TabLimit { max: usize },
 }
 
 impl std::fmt::Display for TermError {
@@ -91,6 +96,9 @@ impl std::fmt::Display for TermError {
         match self {
             TermError::Io(e) => write!(f, "{e}"),
             TermError::Pty(e) => write!(f, "{e}"),
+            TermError::TabLimit { max } => {
+                write!(f, "terminal tab limit reached ({max}); close a tab first")
+            }
         }
     }
 }
@@ -253,6 +261,18 @@ impl Terminal {
         wake: impl Fn() + Send + 'static,
     ) -> Result<Terminal, TermError> {
         Self::spawn_inner(root, shell, None, size, &[], wake)
+    }
+
+    /// Test-only direct-program spawn (no event-loop proxy).
+    #[cfg(test)]
+    fn spawn_program_with(
+        root: &Path,
+        program: &Path,
+        label: &str,
+        size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Terminal, TermError> {
+        Self::spawn_inner(root, program, Some(label), size, &[], wake)
     }
 
     /// Test-only command spawn (no event-loop proxy).
@@ -861,6 +881,19 @@ impl TerminalTabs {
         !self.tabs.is_empty()
     }
 
+    /// Hard cap check shared by shell, command and agent tabs.
+    fn ensure_capacity(&self) -> Result<(), TermError> {
+        Self::capacity_for(self.tabs.len())
+    }
+
+    /// Pure cap kernel (tested without spawning processes).
+    fn capacity_for(open_tabs: usize) -> Result<(), TermError> {
+        if open_tabs >= MAX_TERM_TABS {
+            return Err(TermError::TabLimit { max: MAX_TERM_TABS });
+        }
+        Ok(())
+    }
+
     /// Spawn a new tab with the registry's default shell. Becomes active.
     pub fn open(
         &mut self,
@@ -868,6 +901,7 @@ impl TerminalTabs {
         size: GridSize,
         proxy: EventLoopProxy<Wake>,
     ) -> Result<(), TermError> {
+        self.ensure_capacity()?;
         let shell = default_shell();
         let term = Terminal::spawn(root, &shell, size, proxy)?;
         self.push_tab(term);
@@ -884,6 +918,7 @@ impl TerminalTabs {
         size: GridSize,
         proxy: EventLoopProxy<Wake>,
     ) -> Result<(), TermError> {
+        self.ensure_capacity()?;
         let shell = default_shell();
         let term = Terminal::spawn_command(root, &shell, label, command, size, proxy)?;
         self.push_tab(term);
@@ -1072,6 +1107,16 @@ mod tests {
         assert_eq!(sorted.len(), reg.len());
     }
 
+    #[test]
+    fn terminal_tab_cap_rejects_beyond_the_limit() {
+        assert!(TerminalTabs::capacity_for(0).is_ok());
+        assert!(TerminalTabs::capacity_for(MAX_TERM_TABS - 1).is_ok());
+        let err = TerminalTabs::capacity_for(MAX_TERM_TABS).expect_err("at the cap");
+        assert!(matches!(err, TermError::TabLimit { max } if max == MAX_TERM_TABS));
+        assert!(TerminalTabs::capacity_for(MAX_TERM_TABS + 5).is_err());
+        assert!(err.to_string().contains("tab limit"), "{err}");
+    }
+
     // ---- LIVE PTY round-trip (a real bash, a real echo) ----
 
     /// Drain with a timeout: poll until the grid contains `needle` (the shell
@@ -1127,6 +1172,36 @@ mod tests {
             wait_for_text(&mut term, "ark-command-ok", Duration::from_secs(5)),
             "command output missing: {:?}",
             visible_text(&term)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn program_tab_runs_in_the_project_dir_under_its_label() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = temp_dir("program-tab");
+        let script = d.path().join("program");
+        std::fs::write(&script, "#!/bin/sh\npwd\necho ark-program-ok\n").expect("write script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let mut term = Terminal::spawn_program_with(
+            d.path(),
+            &script,
+            "program",
+            GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn the program");
+        assert_eq!(term.label(), "program");
+        assert!(
+            wait_for_text(&mut term, "ark-program-ok", Duration::from_secs(5)),
+            "program output missing: {:?}",
+            visible_text(&term)
+        );
+        let text = visible_text(&term);
+        assert!(
+            text.contains(&d.path().to_string_lossy().to_string()),
+            "agent runs in the project root; saw {text:?}"
         );
     }
 

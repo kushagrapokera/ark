@@ -6,6 +6,7 @@ use cosmic_text::Weight;
 
 use super::env::{self};
 use super::{Body, ConfigEditor, EnvEditor};
+use crate::highlight::{lang_for_source, Highlighter, Lang};
 use crate::render::{Canvas, Theme};
 use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
 use crate::ui::{draw_button, Pointer, Press, Rect, TextInput};
@@ -57,6 +58,7 @@ fn layout(panel: Rect) -> HeaderLayout {
     HeaderLayout { save, reload, status, body }
 }
 
+#[allow(clippy::too_many_arguments)] // explicit raster context matches ConfigEditor::draw
 pub(crate) fn draw(
     editor: &mut ConfigEditor,
     canvas: &mut Canvas,
@@ -65,6 +67,7 @@ pub(crate) fn draw(
     scale: f64,
     panel: Rect,
     pointer: Pointer,
+    highlighter: &Highlighter,
 ) -> ConfigEffects {
     let mut effects = ConfigEffects::default();
     if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
@@ -122,6 +125,10 @@ pub(crate) fn draw(
         return effects; // header/status still paint; no body surface
     }
     let mut dragging = editor.dragging;
+    let text_lang = match &editor.body {
+        Body::Text(t) => lang_for_source(editor.path(), t.line(0)),
+        Body::Env(_) => Lang::Plain,
+    };
     match &mut editor.body {
         Body::Env(ed) => {
             changed = draw_env(ed, canvas, text, theme, scale, l.body, pointer, advance, font_size, &m);
@@ -132,6 +139,7 @@ pub(crate) fn draw(
         Body::Text(t) => {
             changed = text::draw(
                 t, canvas, text, theme, scale, l.body, pointer, advance, font_size, &m, &mut dragging,
+                highlighter, text_lang,
             );
         }
     }

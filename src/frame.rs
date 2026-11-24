@@ -4,7 +4,7 @@
 //! changed so the caller can decide damage (scroll → the scrolled panel's
 //! rect, everything else → full; see FrameEffects).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cosmic_text::Weight;
 
@@ -23,97 +23,410 @@ use crate::viewer::{self, Viewer, LINE_H};
 const LEFT_MARGIN: f64 = 8.0;
 /// Baselines (logical px from the window top).
 const HEADER_BASELINE: f64 = 40.0;
-const INFO_BASELINE: f64 = 64.0;
 /// Top of the split area (below header + info line).
 const CONTENT_TOP: f64 = 88.0;
-/// Gap kept clear above the status line at the window bottom.
-const BOTTOM_INSET: f64 = 48.0;
-/// Status line baseline sits this far above the window bottom.
-const STATUS_BASELINE_INSET: f64 = 28.0;
 /// Split clamps: a readable minimum tree width, and a placeholder that
 /// never fully disappears on the right.
 const SPLIT_MIN_PX: f64 = 160.0;
 const SPLIT_MAX_MARGIN: f64 = 220.0;
+/// Sidebar resize handle (M12 polish): VS Code-style three vertical dots.
+const SIDEBAR_DEFAULT_PX: f64 = 280.0;
+const SIDEBAR_HANDLE_W: f64 = 16.0;
+const SIDEBAR_HANDLE_H: f64 = 24.0;
+const SIDEBAR_HANDLE_Y: f64 = CONTENT_TOP - SIDEBAR_HANDLE_H - 4.0;
 /// Height of the "changed on disk" flash strip (viewer pane top edge).
 pub const FLASH_STRIP_H: f64 = 3.0;
-
+/// Workbench chrome (M12): activity bar, editor tabs, breadcrumb, dock.
+const ACTIVITY_W: f64 = 48.0;
+const EDITOR_TAB_H: f64 = 30.0;
+const BREADCRUMB_H: f64 = 22.0;
+const TERM_DOCK_H: f64 = 220.0;
+const STATUS_H: f64 = 24.0;
 /// Geometry of one frame in LOGICAL px, derived from the window size and
 /// the current split position. Pure — tests pin it.
 pub struct AppLayout {
+    /// Far-left activity strip (Explorer / Source Control / Terminal / Config).
+    pub activity_bar: Rect,
     pub tree_panel: Rect,
     pub scroll_track: Rect,
     /// Commit & push panel (M8) under the tree; zero-height when hidden.
     pub commit_panel: Rect,
     pub split_area: Rect,
-    /// The right pane: terminals (M6) while tabs are open, else the viewer /
-    /// placeholder.
+    /// File/config tab strip above the editor body.
+    pub editor_tabs: Rect,
+    /// Path breadcrumb strip under the file tabs.
+    pub breadcrumb: Rect,
+    /// The editor body: read-only viewer or config editor.
     pub viewer_pane: Rect,
-    /// The terminal grid rect (inside the right pane, below the tab strip).
+    /// Bottom terminal dock; zero-height when no terminal tabs are open.
+    pub term_dock: Rect,
+    /// Terminal tab strip inside the dock.
+    pub term_tabbar: Rect,
+    /// The terminal grid rect inside the dock, below the tab strip.
     pub term_grid: Rect,
     /// Damage envelope of the status line (its ink sits well inside).
     pub status: Rect,
 }
 
+#[allow(dead_code)] // test/layout compatibility surface; the App uses the commit variant
 pub fn app_layout(w: f64, h: f64, split_x: f64) -> AppLayout {
-    app_layout_with_commit(w, h, split_x, false)
+    app_layout_with_commit(w, h, split_x, false, false)
 }
 
-/// [`app_layout`] with the M8 commit panel shown under the tree. The panel
-/// takes its preferred height capped at 60% of the content area, so a tiny
-/// window still keeps tree rows visible.
-pub fn app_layout_with_commit(w: f64, h: f64, split_x: f64, show_commit: bool) -> AppLayout {
-    let area = Rect { x: 0.0, y: CONTENT_TOP, w: w.max(0.0), h: (h - BOTTOM_INSET - CONTENT_TOP).max(0.0) };
-    let panel_w = (split_x - 16.0).max(0.0);
+/// [`app_layout`] with the M8 commit panel shown under the tree and the
+/// optional M12 terminal dock at the bottom of the editor column.
+pub fn app_layout_with_commit(
+    w: f64,
+    h: f64,
+    split_x: f64,
+    show_commit: bool,
+    show_term: bool,
+) -> AppLayout {
+    let status_y = (h - STATUS_H).max(CONTENT_TOP);
+    let area_h = (status_y - CONTENT_TOP).max(0.0);
+    let area = Rect { x: 0.0, y: CONTENT_TOP, w: w.max(0.0), h: area_h };
+    let panel_w = (split_x - ACTIVITY_W - 16.0).max(0.0);
     let commit_h = if show_commit {
         crate::commit::PANEL_H.min(area.h * 0.6).max(0.0)
     } else {
         0.0
     };
     let tree_h = (area.h - commit_h).max(0.0);
+    let dock_h = if show_term { TERM_DOCK_H.min(area.h * 0.4).max(0.0) } else { 0.0 };
+    let editor_x = split_x + 16.0;
+    let editor_w = (w - split_x - 24.0).max(0.0);
+    let tabs_bottom = CONTENT_TOP + EDITOR_TAB_H + BREADCRUMB_H;
+    let editor_h = (status_y - tabs_bottom - dock_h).max(0.0);
+    let dock_y = status_y - dock_h;
     AppLayout {
-        tree_panel: Rect { x: LEFT_MARGIN, y: CONTENT_TOP, w: panel_w, h: tree_h },
-        // The 8px scrollbar track occupies the tree panel's right edge.
+        activity_bar: Rect { x: 0.0, y: CONTENT_TOP, w: ACTIVITY_W, h: area.h },
+        tree_panel: Rect { x: ACTIVITY_W + LEFT_MARGIN, y: CONTENT_TOP, w: panel_w, h: tree_h },
         scroll_track: Rect {
-            x: LEFT_MARGIN + (panel_w - tree::TRACK_W).max(0.0),
+            x: ACTIVITY_W + LEFT_MARGIN + (panel_w - tree::TRACK_W).max(0.0),
             y: CONTENT_TOP,
             w: tree::TRACK_W,
             h: tree_h,
         },
         commit_panel: Rect {
-            x: LEFT_MARGIN,
+            x: ACTIVITY_W + LEFT_MARGIN,
             y: CONTENT_TOP + tree_h,
             w: panel_w,
             h: commit_h,
         },
-        viewer_pane: Rect {
-            x: split_x + 16.0,
-            y: CONTENT_TOP,
-            w: (w - split_x - 24.0).max(0.0),
-            h: area.h,
+        editor_tabs: Rect { x: editor_x, y: CONTENT_TOP, w: editor_w, h: EDITOR_TAB_H },
+        breadcrumb: Rect {
+            x: editor_x,
+            y: CONTENT_TOP + EDITOR_TAB_H,
+            w: editor_w,
+            h: BREADCRUMB_H,
+        },
+        viewer_pane: Rect { x: editor_x, y: tabs_bottom, w: editor_w, h: editor_h },
+        term_dock: Rect { x: editor_x, y: dock_y, w: editor_w, h: dock_h },
+        term_tabbar: Rect {
+            x: editor_x,
+            y: dock_y,
+            w: (editor_w - 60.0).max(0.0),
+            h: TAB_HEIGHT,
         },
         term_grid: Rect {
-            x: split_x + 16.0,
-            y: CONTENT_TOP + TAB_HEIGHT + 4.0,
-            w: (w - split_x - 24.0).max(0.0),
-            h: (area.h - TAB_HEIGHT - 4.0).max(0.0),
+            x: editor_x,
+            y: dock_y + TAB_HEIGHT,
+            w: editor_w,
+            h: (dock_h - TAB_HEIGHT).max(0.0),
         },
         split_area: area,
-        status: Rect {
-            x: 0.0,
-            y: (h - STATUS_BASELINE_INSET - 14.0).max(0.0),
-            w: w.max(0.0),
-            h: 20.0,
-        },
+        status: Rect { x: 0.0, y: status_y, w: w.max(0.0), h: STATUS_H },
     }
 }
 
-/// The terminal grid rect inside the right pane (App-side damage marking).
-pub fn term_grid_rect(pane: Rect) -> Rect {
+/// Three-dot resize handle centered on the split divider in the header gap.
+fn sidebar_handle(split_x: f64) -> Rect {
     Rect {
-        x: pane.x,
-        y: pane.y + TAB_HEIGHT + 4.0,
-        w: pane.w,
-        h: (pane.h - TAB_HEIGHT - 4.0).max(0.0),
+        x: split_x - SIDEBAR_HANDLE_W / 2.0,
+        y: SIDEBAR_HANDLE_Y,
+        w: SIDEBAR_HANDLE_W,
+        h: SIDEBAR_HANDLE_H,
+    }
+}
+
+fn draw_sidebar_handle(f: &mut Frame, rect: Rect, dragging: bool) {
+    let hovered = rect.contains(f.pointer.x, f.pointer.y);
+    let color = if dragging || hovered {
+        f.theme.accent
+    } else {
+        f.theme.fg_dim
+    };
+    let dot = 2.0;
+    let gap = 3.0;
+    let total = dot * 3.0 + gap * 2.0;
+    let x = rect.x + (rect.w - dot) / 2.0;
+    let y = rect.y + (rect.h - total) / 2.0;
+    for index in 0..3 {
+        f.canvas.fill_rect(
+            x,
+            y + index as f64 * (dot + gap),
+            dot,
+            dot,
+            color,
+            f.scale,
+        );
+    }
+}
+
+/// Workbench activity panels (M12). `Copy` state only — no per-panel data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivityPanel {
+    Explorer,
+    SourceControl,
+    Terminal,
+    Config,
+}
+
+impl ActivityPanel {
+    pub const ALL: [ActivityPanel; 4] = [
+        ActivityPanel::Explorer,
+        ActivityPanel::SourceControl,
+        ActivityPanel::Terminal,
+        ActivityPanel::Config,
+    ];
+
+    fn icon(self) -> crate::icons::Icon {
+        match self {
+            ActivityPanel::Explorer => crate::icons::Icon::File,
+            ActivityPanel::SourceControl => crate::icons::Icon::SourceControl,
+            ActivityPanel::Terminal => crate::icons::Icon::Terminal,
+            ActivityPanel::Config => crate::icons::Icon::Config,
+        }
+    }
+}
+
+/// Activity-bar icon rects (top-aligned, one per panel).
+fn activity_rects(bar: Rect) -> Vec<(ActivityPanel, Rect)> {
+    ActivityPanel::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            (
+                *p,
+                Rect {
+                    x: bar.x + 6.0,
+                    y: bar.y + 8.0 + i as f64 * 52.0,
+                    w: bar.w - 12.0,
+                    h: 40.0,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Draw the far-left activity strip. Count badges ride the existing git and
+/// terminal state — no new panel state is introduced.
+fn draw_activity_bar(
+    f: &mut Frame,
+    bar: Rect,
+    term_count: usize,
+) -> Option<ActivityPanel> {
+    if bar.w <= 0.0 || bar.h <= 0.0 {
+        return None;
+    }
+    f.canvas.fill_rect(bar.x, bar.y, bar.w, bar.h, f.theme.bg_elevated, f.scale);
+    let mut clicked = None;
+    for (panel, rect) in activity_rects(bar) {
+        let active = f.activity == panel;
+        if active {
+            f.canvas.fill_rect(bar.x, rect.y, 3.0, rect.h, f.theme.accent, f.scale);
+        }
+        let color = if active { f.theme.accent } else { f.theme.fg_dim };
+        crate::icons::draw(
+            f.canvas.pixmap_mut(),
+            panel.icon(),
+            (rect.x + rect.w / 2.0) as f32,
+            (rect.y + rect.h / 2.0 - 4.0) as f32,
+            20.0,
+            color,
+            f.scale,
+        );
+        let count = match panel {
+            ActivityPanel::SourceControl => f.git.map(|g| g.changed_count()).unwrap_or(0),
+            ActivityPanel::Terminal => term_count,
+            _ => 0,
+        };
+        if count > 0 {
+            let badge = Rect { x: rect.x + rect.w - 18.0, y: rect.y + rect.h - 14.0, w: 16.0, h: 14.0 };
+            f.canvas.fill_rect(badge.x, badge.y, badge.w, badge.h, f.theme.accent, f.scale);
+            let font = (10.0 * f.scale) as f32;
+            let m = f.text.mono_metrics(font, font * 1.35);
+            let baseline = (badge.y + badge.h / 2.0) * f.scale
+                + f64::from(m.ascent - m.descent) / 2.0;
+            f.text.draw_line(
+                f.canvas,
+                &count.to_string(),
+                (badge.x * f.scale) as f32,
+                baseline as f32,
+                TextStyle { color: f.theme.on_accent, font_size: font, weight: Weight::BOLD },
+            );
+        }
+        if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
+            clicked = Some(panel);
+        }
+    }
+    clicked
+}
+
+/// File-tab rects across the editor tab strip. Tabs are bounded by the LRU
+/// cache (plus at most one config editor), so the strip never grows without
+/// bound.
+fn file_tab_rects(pane: Rect, count: usize) -> Vec<Rect> {
+    if count == 0 || pane.w <= 0.0 {
+        return Vec::new();
+    }
+    let tab_w = (pane.w / count as f64).floor().clamp(48.0, 160.0);
+    (0..count)
+        .map(|i| Rect {
+            x: pane.x + i as f64 * tab_w,
+            y: pane.y,
+            w: tab_w,
+            h: pane.h,
+        })
+        .collect()
+}
+
+/// Draw the file/config tab strip. Clicks report select/close; no second
+/// open-files model exists (labels come from the LRU + config editor).
+fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf>) {
+    let mut select = None;
+    let mut close = None;
+    if pane.w <= 0.0 || pane.h <= 0.0 {
+        return (select, close);
+    }
+    f.canvas.fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg_elevated, f.scale);
+    let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
+    let m = f.text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+    let advance = f64::from(m.advance) / f.scale;
+    let rects = file_tab_rects(pane, f.open_files.len());
+    for (rect, path) in rects.iter().zip(f.open_files.iter()) {
+        let active = f.active_path == Some(path.as_path());
+        if active {
+            f.canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.bg, f.scale);
+            f.canvas.fill_rect(rect.x, rect.y + rect.h - 2.0, rect.w, 2.0, f.theme.accent, f.scale);
+        } else if rect.contains(f.pointer.x, f.pointer.y) {
+            f.canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.selection, f.scale);
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "(unset)".into());
+        let max_chars = (((rect.w - 44.0) / advance).floor()).max(1.0) as usize;
+        let label: String = name.chars().take(max_chars).collect();
+        let baseline = (rect.y + rect.h / 2.0) * f.scale
+            + f64::from(m.ascent - m.descent) / 2.0;
+        f.text.draw_line(
+            f.canvas,
+            &label,
+            ((rect.x + 10.0) * f.scale) as f32,
+            baseline as f32,
+            TextStyle { color: f.theme.fg, font_size, weight: Weight::NORMAL },
+        );
+        if let Some(badge) = f.git.and_then(|g| g.badge_for(path)) {
+            let (letter, color) = crate::tree::badge_glyph(badge, f.theme);
+            f.text.draw_line(
+                f.canvas,
+                letter,
+                ((rect.x + rect.w - 30.0) * f.scale) as f32,
+                baseline as f32,
+                TextStyle { color, font_size, weight: Weight::BOLD },
+            );
+        }
+        let close_rect = Rect {
+            x: rect.x + rect.w - 22.0,
+            y: rect.y + (rect.h - 16.0) / 2.0,
+            w: 16.0,
+            h: 16.0,
+        };
+        f.text.draw_line(
+            f.canvas,
+            "\u{d7}",
+            ((close_rect.x + 4.0) * f.scale) as f32,
+            baseline as f32,
+            TextStyle { color: f.theme.fg_dim, font_size, weight: Weight::NORMAL },
+        );
+        if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
+            if close_rect.contains(f.pointer.x, f.pointer.y) {
+                close = Some(path.clone());
+            } else {
+                select = Some(path.clone());
+            }
+        }
+    }
+    // READ-ONLY badge at the strip's right edge (not for the writable config
+    // editor tab).
+    if f.open_files.is_empty() {
+        return (select, close);
+    }
+    let active_is_config = f
+        .config
+        .as_ref()
+        .is_some_and(|c| f.active_path == Some(c.path()));
+    if active_is_config {
+        return (select, close);
+    }
+    let badge_w = 92.0;
+    let badge = Rect {
+        x: pane.x + pane.w - badge_w - 8.0,
+        y: pane.y + 5.0,
+        w: badge_w,
+        h: pane.h - 10.0,
+    };
+    if badge.x > pane.x {
+        f.canvas.fill_rect(badge.x, badge.y, badge.w, badge.h, f.theme.bg, f.scale);
+        f.canvas.stroke_rect_strips(badge.x, badge.y, badge.w, badge.h, f.theme.border, f.scale);
+        let baseline = (badge.y + badge.h / 2.0) * f.scale
+            + f64::from(m.ascent - m.descent) / 2.0;
+        f.text.draw_line(
+            f.canvas,
+            "READ-ONLY",
+            ((badge.x + 12.0) * f.scale) as f32,
+            baseline as f32,
+            TextStyle { color: f.theme.fg_dim, font_size: (11.0 * f.scale) as f32, weight: Weight::BOLD },
+        );
+    }
+    (select, close)
+}
+
+/// Draw the breadcrumb for the active path, relative to the project root.
+fn draw_breadcrumb(f: &mut Frame, pane: Rect) {
+    if pane.w <= 0.0 || pane.h <= 0.0 {
+        return;
+    }
+    f.canvas.fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg, f.scale);
+    let Some(path) = f.active_path else { return };
+    let rel = path.strip_prefix(f.root).unwrap_or(path);
+    let font_size = (11.0 * f.scale) as f32;
+    let m = f.text.mono_metrics(font_size, font_size * 1.35);
+    let mut x = pane.x + 12.0;
+    let baseline = (pane.y + pane.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
+    let parts: Vec<_> = rel.components().collect();
+    for (i, part) in parts.iter().enumerate() {
+        let text = part.as_os_str().to_string_lossy();
+        let color = if i + 1 == parts.len() { f.theme.fg } else { f.theme.fg_dim };
+        f.text.draw_line(
+            f.canvas,
+            &text,
+            (x * f.scale) as f32,
+            baseline as f32,
+            TextStyle { color, font_size, weight: Weight::NORMAL },
+        );
+        x += f64::from(m.advance) * text.chars().count() as f64 + 8.0;
+        if i + 1 < parts.len() {
+            f.text.draw_line(
+                f.canvas,
+                ">",
+                (x * f.scale) as f32,
+                baseline as f32,
+                TextStyle { color: f.theme.fg_dim, font_size, weight: Weight::NORMAL },
+            );
+            x += f64::from(m.advance) + 8.0;
+        }
     }
 }
 
@@ -133,6 +446,14 @@ pub struct Frame<'a> {
     pub scale: f64,
     /// Project dir name for the header (App owns it, precomputed).
     pub title: &'a str,
+    /// Project root (breadcrumbs strip it from open paths).
+    pub root: &'a Path,
+    /// Cached/config file paths in tab order (most-recent first).
+    pub open_files: &'a [PathBuf],
+    /// The active tab path (viewer file or config file).
+    pub active_path: Option<&'a Path>,
+    /// Active workbench panel (activity bar highlight).
+    pub activity: ActivityPanel,
     pub pointer: Pointer,
     /// Armed together with `pointer.click`: this click completes a
     /// double-click (the App tracks time+distance).
@@ -196,6 +517,12 @@ pub struct FrameEffects {
     pub config_reload: bool,
     /// The config body changed (env add/remove/apply).
     pub config_changed: bool,
+    /// An activity-bar icon was clicked (M12).
+    pub set_activity: Option<ActivityPanel>,
+    /// A file/config tab was clicked.
+    pub select_tab: Option<PathBuf>,
+    /// A file/config tab close button was clicked.
+    pub close_tab: Option<PathBuf>,
 }
 
 /// Compose and raster one app frame (M3 layout + M4 viewer pane). State
@@ -214,15 +541,15 @@ pub fn draw_frame(
     if !f.scale.is_finite() || f.scale <= 0.0 {
         return effects;
     }
-    let (lw, lh) = (
+    let (lw, _lh) = (
         f.canvas.width() as f64 / f.scale,
         f.canvas.height() as f64 / f.scale,
     );
     f.canvas.fill(f.theme.bg);
 
-    // Header + info line.
+    // Header. The debug scale/canvas line and agent launchers were removed;
+    // the gap below the title is intentionally quiet.
     let header_size = 16.0 * f.scale as f32;
-    let info_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
     let status_size = (12.0 * f.scale) as f32;
     f.text.draw_line(
         f.canvas,
@@ -231,25 +558,15 @@ pub fn draw_frame(
         (HEADER_BASELINE * f.scale) as f32,
         TextStyle { color: f.theme.accent, font_size: header_size, weight: Weight::BOLD },
     );
-    f.text.draw_line(
-        f.canvas,
-        &format!(
-            "scale {:.2}x · canvas {}x{}px · rows {} · expanded {}",
-            f.scale,
-            f.canvas.width(),
-            f.canvas.height(),
-            tree.visible_count(),
-            tree.expanded_dir_count(),
-        ),
-        (LEFT_MARGIN * f.scale) as f32,
-        (INFO_BASELINE * f.scale) as f32,
-        TextStyle { color: f.theme.fg_dim, font_size: info_size, weight: Weight::NORMAL },
-    );
 
     // Split: grab within ±4px while the pointer is down, drag until release
     // (sticky latch so the divider can be pulled beyond the grab band).
+    let handle = sidebar_handle(split.position);
+    let handle_hover = handle.contains(f.pointer.x, f.pointer.y);
     if f.pointer.down
-        && (split_drag.dragging || split.hit_divider(layout.split_area, f.pointer, f.scale))
+        && (split_drag.dragging
+            || split.hit_divider(layout.split_area, f.pointer, f.scale)
+            || handle_hover)
     {
         if !split_drag.dragging {
             split_drag.grab_dx = f.pointer.x - split.position;
@@ -261,8 +578,10 @@ pub fn draw_frame(
         split_drag.dragging = false;
     }
     split.draw(f.canvas, layout.split_area, f.theme, f.scale);
-    if split_drag.dragging {
-        // Accent overlay while dragging (draw painted the resting strip).
+    let split_hover =
+        split.hit_divider(layout.split_area, f.pointer, f.scale) || handle_hover;
+    if split_drag.dragging || split_hover {
+        // Accent overlay while dragging or hovering the grab band.
         f.canvas.fill_rect(
             split.position - 1.0,
             layout.split_area.y,
@@ -272,6 +591,12 @@ pub fn draw_frame(
             f.scale,
         );
     }
+    // Double-click the divider or the three-dot handle resets the sidebar.
+    if f.dbl_click && split_hover {
+        let hi = (lw - SPLIT_MAX_MARGIN).max(SPLIT_MIN_PX);
+        split.drag_to(SIDEBAR_DEFAULT_PX, SPLIT_MIN_PX, hi);
+    }
+    draw_sidebar_handle(f, handle, split_drag.dragging);
 
     // Tree panel: process the frame's click, then draw the rows.
     match tree::handle_pointer(tree, layout.tree_panel, f.pointer, f.dbl_click) {
@@ -309,13 +634,31 @@ pub fn draw_frame(
         effects.push_clicked |= panel.push;
     }
 
-    // Right pane: terminal tabs (M6) while open, else the viewer /
-    // placeholder.
+    // Workbench activity bar (M12): four fixed panels, existing state only.
+    let term_count = f.terms.as_ref().map(|t| t.tabs.len()).unwrap_or(0);
+    if let Some(panel) = draw_activity_bar(f, layout.activity_bar, term_count) {
+        effects.set_activity = Some(panel);
+    }
+
+    // File/config tab strip + breadcrumb (M12). Tabs come from the LRU order
+    // (plus the one config editor), never from a second open-files model.
+    let (select_tab, close_tab) = draw_file_tabs(f, layout.editor_tabs);
+    if select_tab.is_some() {
+        effects.select_tab = select_tab;
+    }
+    if close_tab.is_some() {
+        effects.close_tab = close_tab;
+    }
+    draw_breadcrumb(f, layout.breadcrumb);
+
+    // Bottom terminal dock (M12): always visible while tabs exist; the
+    // editor body above never switches away for a terminal.
     if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
-        let pane = layout.viewer_pane;
-        let tabbar_rect = Rect { x: pane.x, y: pane.y, w: (pane.w - 60.0).max(0.0), h: TAB_HEIGHT };
+        let pane = layout.term_dock;
+        let tabbar_rect = layout.term_tabbar;
         let plus = Rect { x: pane.x + pane.w - 56.0, y: pane.y + 3.0, w: 26.0, h: 24.0 };
         let close = Rect { x: pane.x + pane.w - 28.0, y: pane.y + 3.0, w: 24.0, h: 24.0 };
+        f.canvas.fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg_elevated, f.scale);
 
         // Sync the retained widget bar with the terminal tabs, process the
         // frame's click, then draw. A tab-list change (open/close, including
@@ -343,7 +686,11 @@ pub fn draw_frame(
             t.resize(term::GridSize::fit(grid.w, grid.h, advance, LINE_H));
             t.draw(f.canvas, f.text, f.theme, f.scale, grid, f.term_focused);
         }
-    } else if let Some(config) = f.config.as_deref_mut() {
+    }
+
+    // Editor body: config editor while its pane is active, else the viewer /
+    // placeholder. Terminal tabs no longer replace this surface.
+    if let Some(config) = f.config.as_deref_mut() {
         let fx = config.draw(
             f.canvas,
             f.text,
@@ -351,6 +698,7 @@ pub fn draw_frame(
             f.scale,
             layout.viewer_pane,
             f.pointer,
+            f.highlighter,
         );
         effects.config_save |= fx.save;
         effects.config_reload |= fx.reload;
@@ -426,13 +774,22 @@ pub fn draw_frame(
         draw_placeholder(f, layout.viewer_pane, f.viewer_error);
     }
 
-    // Status line (mono 12px, dim).
+    // Status bar (M12): accent-filled band with on-accent text.
+    f.canvas.fill_rect(
+        layout.status.x,
+        layout.status.y,
+        layout.status.w,
+        layout.status.h,
+        f.theme.accent,
+        f.scale,
+    );
+    let status_baseline = (layout.status.y + layout.status.h - 8.0) * f.scale;
     f.text.draw_line(
         f.canvas,
         &frame_status(tree, f.viewer.as_deref(), f.config.as_deref(), f.terms.as_deref(), f.git, layout.tree_panel.h),
         (LEFT_MARGIN * f.scale) as f32,
-        ((lh - STATUS_BASELINE_INSET) * f.scale) as f32,
-        TextStyle { color: f.theme.fg_dim, font_size: status_size, weight: Weight::NORMAL },
+        status_baseline as f32,
+        TextStyle { color: f.theme.on_accent, font_size: status_size, weight: Weight::NORMAL },
     );
     effects
 }

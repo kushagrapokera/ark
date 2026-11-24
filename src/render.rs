@@ -29,12 +29,43 @@ pub struct Theme {
     pub selection: ColorRgb,
     /// Keywords / control flow (mauve).
     pub syntax_keyword: ColorRgb,
+    /// Control-flow keywords (VS Code Dark+ orchid).
+    pub syntax_control: ColorRgb,
     /// String + char literals (green).
     pub syntax_string: ColorRgb,
     /// Numeric literals (peach).
     pub syntax_number: ColorRgb,
     /// Comments (overlay0 — dimmer than fg_dim).
     pub syntax_comment: ColorRgb,
+    /// Type/class names (M12 all-language highlighting).
+    pub syntax_type: ColorRgb,
+    /// Function/method names (VS Code Dark+ yellow).
+    pub syntax_function: ColorRgb,
+    /// Constants / all-caps identifiers (VS Code Dark+ light blue).
+    pub syntax_constant: ColorRgb,
+    /// Object properties / keys / HTML attributes (VS Code Dark+ pale blue).
+    pub syntax_property: ColorRgb,
+    /// Variables / parameters (VS Code Dark+ pale blue).
+    pub syntax_variable: ColorRgb,
+    /// Regular-expression literals (VS Code Dark+ red).
+    pub syntax_regex: ColorRgb,
+    /// String escape sequences (VS Code Dark+ amber).
+    pub syntax_escape: ColorRgb,
+    /// Decorators / annotations (VS Code Dark+ yellow).
+    pub syntax_decorator: ColorRgb,
+    /// CSS selectors / class and id names (VS Code Dark+ amber).
+    pub syntax_selector: ColorRgb,
+    /// Text painted over an `accent` fill (status bar, M12).
+    pub on_accent: ColorRgb,
+    /// Current editor line background.
+    pub editor_current_line: ColorRgb,
+    /// Indent-guide colors, inactive and active.
+    pub editor_indent_guide: ColorRgb,
+    pub editor_indent_guide_active: ColorRgb,
+    /// Three bracket-pair colors, matching VS Code Dark+.
+    pub editor_bracket_1: ColorRgb,
+    pub editor_bracket_2: ColorRgb,
+    pub editor_bracket_3: ColorRgb,
     /// Git tree-badge / gutter-mark colors (M7): modified, added, deleted,
     /// untracked.
     pub git_modified: ColorRgb,
@@ -44,6 +75,10 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Original Catppuccin Mocha palette (blue-tinted). Kept for the widget
+    /// test fixtures and an easy future theme switch; the app defaults to
+    /// [`Theme::DARK_PLUS`].
+    #[allow(dead_code)]
     pub const DARK: Theme = Theme {
         bg: (0x1E, 0x1E, 0x2E),
         bg_elevated: (0x24, 0x24, 0x37),
@@ -53,13 +88,68 @@ impl Theme {
         border: (0x31, 0x32, 0x44),
         selection: (0x45, 0x47, 0x5A),
         syntax_keyword: (0xCB, 0xA6, 0xF7),
+        syntax_control: (0xF5, 0xC2, 0xE7),
         syntax_string: (0xA6, 0xE3, 0xA1),
         syntax_number: (0xFA, 0xB3, 0x87),
         syntax_comment: (0x6C, 0x70, 0x86),
+        syntax_type: (0x89, 0xB4, 0xFA),
+        syntax_function: (0xF9, 0xE2, 0xAF),
+        syntax_constant: (0x89, 0xB4, 0xFA),
+        syntax_property: (0x89, 0xB4, 0xFA),
+        syntax_variable: (0x89, 0xB4, 0xFA),
+        syntax_regex: (0xF3, 0x8B, 0xA8),
+        syntax_escape: (0xF9, 0xE2, 0xAF),
+        syntax_decorator: (0xF9, 0xE2, 0xAF),
+        syntax_selector: (0xF9, 0xE2, 0xAF),
+        on_accent: (0x1E, 0x1E, 0x2E),
+        editor_current_line: (0x31, 0x32, 0x44),
+        editor_indent_guide: (0x45, 0x47, 0x5A),
+        editor_indent_guide_active: (0x6C, 0x70, 0x86),
+        editor_bracket_1: (0xF9, 0xE2, 0xAF),
+        editor_bracket_2: (0xF5, 0xC2, 0xE7),
+        editor_bracket_3: (0x89, 0xB4, 0xFA),
         git_modified: (0xF9, 0xE2, 0xAF),
         git_added: (0xA6, 0xE3, 0xA1),
         git_deleted: (0xF3, 0x8B, 0xA8),
         git_untracked: (0x94, 0xE2, 0xD5),
+    };
+
+    /// Neutral black palette from the shared design mock (VS Code Dark+).
+    /// Kept separate from Catppuccin so the blue-tinted theme remains
+    /// available and tests can pin either.
+    pub const DARK_PLUS: Theme = Theme {
+        bg: (0x1E, 0x1E, 0x1E),
+        bg_elevated: (0x25, 0x25, 0x26),
+        fg: (0xD4, 0xD4, 0xD4),
+        fg_dim: (0x96, 0x96, 0x96),
+        accent: (0x00, 0x7A, 0xCC),
+        border: (0x3C, 0x3C, 0x3C),
+        selection: (0x26, 0x4F, 0x78),
+        syntax_keyword: (0x56, 0x9C, 0xD6),
+        syntax_control: (0xC5, 0x86, 0xC0),
+        syntax_string: (0xCE, 0x91, 0x78),
+        syntax_number: (0xB5, 0xCE, 0xA8),
+        syntax_comment: (0x6A, 0x99, 0x55),
+        syntax_type: (0x4E, 0xC9, 0xB0),
+        syntax_function: (0xDC, 0xDC, 0xAA),
+        syntax_constant: (0x4F, 0xC1, 0xFF),
+        syntax_property: (0x9C, 0xDC, 0xFE),
+        syntax_variable: (0x9C, 0xDC, 0xFE),
+        syntax_regex: (0xD1, 0x69, 0x69),
+        syntax_escape: (0xD7, 0xBA, 0x7D),
+        syntax_decorator: (0xDC, 0xDC, 0xAA),
+        syntax_selector: (0xD7, 0xBA, 0x7D),
+        on_accent: (0xFF, 0xFF, 0xFF),
+        editor_current_line: (0x2A, 0x2D, 0x2E),
+        editor_indent_guide: (0x40, 0x40, 0x40),
+        editor_indent_guide_active: (0x70, 0x70, 0x70),
+        editor_bracket_1: (0xFF, 0xD7, 0x00),
+        editor_bracket_2: (0xDA, 0x70, 0xD6),
+        editor_bracket_3: (0x17, 0x9F, 0xFF),
+        git_modified: (0xE2, 0xC0, 0x8D),
+        git_added: (0x73, 0xC9, 0x91),
+        git_deleted: (0xF1, 0x4C, 0x4C),
+        git_untracked: (0x73, 0xC9, 0x91),
     };
 }
 
