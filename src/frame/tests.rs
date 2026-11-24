@@ -577,8 +577,16 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 commit: Some(&mut commit),
                 config: None,
                 config_error: None,
+                config_error_path: None,
                 terms: None,
                 term_focused: false,
+                groups: None,
+                active_group: 0,
+                group_viewers: [None, None],
+                group_flash: [false, false],
+                group_scrollbars: None,
+                group_split: None,
+                group_split_drag: None,
             },
             &layout,
             &mut tree,
@@ -612,8 +620,16 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             commit: Some(&mut commit),
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         };
         let _ = draw_frame(
             &mut frame,
@@ -656,6 +672,258 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             "Source Control Commit button is wired"
         );
     }
+}
+
+#[test]
+fn unsplit_group_layout_keeps_existing_editor_geometry() {
+    let layout = app_layout_with_groups(1024.0, 768.0, 304.0, false, false, 0.5, 1);
+    assert_eq!(layout.editor_group_count, 1);
+    assert_eq!(layout.editor_groups[0].tabs, layout.editor_tabs);
+    assert_eq!(layout.editor_groups[0].breadcrumb, layout.breadcrumb);
+    assert_eq!(layout.editor_groups[0].body, layout.viewer_pane);
+    assert_eq!(layout.editor_groups[0].minimap, layout.minimap);
+    assert_eq!(layout.editor_group_split.w, 0.0);
+}
+
+#[test]
+fn split_group_layout_divides_the_editor_card_with_a_gap() {
+    let layout = app_layout_with_groups(1024.0, 768.0, 304.0, false, false, 0.5, 2);
+    assert_eq!(layout.editor_group_count, 2);
+    assert_eq!(
+        layout.editor_groups[0],
+        EditorGroupLayout {
+            tabs: Rect {
+                x: 312.0,
+                y: 44.0,
+                w: 348.0,
+                h: 36.0
+            },
+            breadcrumb: Rect {
+                x: 312.0,
+                y: 80.0,
+                w: 348.0,
+                h: 24.0
+            },
+            body: Rect {
+                x: 320.0,
+                y: 104.0,
+                w: 332.0,
+                h: 624.0
+            },
+            minimap: Rect {
+                x: 652.0,
+                y: 104.0,
+                w: 0.0,
+                h: 624.0
+            },
+        }
+    );
+    assert_eq!(
+        layout.editor_groups[1].tabs,
+        Rect {
+            x: 668.0,
+            y: 44.0,
+            w: 348.0,
+            h: 36.0
+        }
+    );
+    assert_eq!(
+        layout.editor_groups[1].body,
+        Rect {
+            x: 676.0,
+            y: 104.0,
+            w: 332.0,
+            h: 624.0
+        }
+    );
+    assert_eq!(
+        layout.editor_group_split,
+        Rect {
+            x: 660.0,
+            y: 44.0,
+            w: 8.0,
+            h: 692.0
+        }
+    );
+}
+
+#[test]
+fn split_group_layout_shows_minimaps_only_in_wide_groups() {
+    let layout = app_layout_with_groups(1440.0, 900.0, 304.0, false, false, 0.5, 2);
+    assert_eq!(layout.editor_groups[0].minimap.w, 56.0);
+    assert_eq!(layout.editor_groups[1].minimap.w, 56.0);
+    assert!(layout.editor_groups[0].body.w > 400.0);
+}
+
+#[test]
+fn split_group_layout_clamps_both_groups_to_minimum_widths() {
+    let layout = app_layout_with_groups(1024.0, 768.0, 304.0, false, false, 0.0, 2);
+    assert_eq!(layout.editor_groups[0].tabs.w, 180.0);
+    assert_eq!(layout.editor_groups[1].tabs.w, 516.0);
+    assert!(layout.editor_groups[0].body.w > 0.0);
+    assert!(layout.editor_groups[1].body.w > 0.0);
+}
+
+#[test]
+fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
+    let d = temp_dir("split-frame");
+    let a = d.path().join("a.txt");
+    let b = d.path().join("b.txt");
+    fs::write(&a, "alpha\nbeta\n").expect("write a");
+    fs::write(&b, "gamma\ndelta\n").expect("write b");
+    let mut va = Viewer::open(&a).expect("open a");
+    let mut vb = Viewer::open(&b).expect("open b");
+    let mut groups = crate::editor_groups::EditorGroups::new();
+    groups.open(a.clone());
+    groups.toggle_split();
+    groups.open(b.clone());
+    let mut divider = groups.divider;
+    let mut group_drag = SplitDrag::default();
+    let mut scrollbars = [Scrollbar::default(), Scrollbar::default()];
+    let theme = frame_theme();
+    let layout = app_layout_with_groups(1024.0, 768.0, 304.0, false, false, divider, 2);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let (_tree_dir, mut tree) = scene_fixture("split-frame-tree");
+    let mut split = Split { position: 304.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut tree_scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+    let mut frame = Frame {
+        canvas: &mut canvas,
+        text: &mut text,
+        theme: &theme,
+        scale: 1.0,
+        title: "ark",
+        root: Path::new("/repo"),
+        open_files: &[],
+        active_path: None,
+        activity: ActivityPanel::Explorer,
+        pointer: Pointer::default(),
+        dbl_click: false,
+        viewer: None,
+        viewer_error: None,
+        viewer_flash: false,
+        highlighter: &Highlighter::new(),
+        git: None,
+        file_diff: None,
+        commit: None,
+        config: None,
+        config_error: None,
+        config_error_path: None,
+        terms: None,
+        term_focused: false,
+        groups: Some(&groups.groups),
+        active_group: 1,
+        group_viewers: [Some(&mut va), Some(&mut vb)],
+        group_flash: [false, false],
+        group_scrollbars: Some(&mut scrollbars),
+        group_split: Some(&mut divider),
+        group_split_drag: Some(&mut group_drag),
+    };
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut tree_scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(effects.select_tab.is_none());
+    assert!(
+        count_color_in(frame.canvas, theme.fg, 320, 104, 652, 728) > 0,
+        "left group viewer renders"
+    );
+    assert!(
+        count_color_in(frame.canvas, theme.fg, 676, 104, 1008, 728) > 0,
+        "right group viewer renders"
+    );
+
+    frame.pointer = Pointer {
+        x: 700.0,
+        y: 62.0,
+        down: false,
+        click: true,
+    };
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut tree_scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert_eq!(effects.select_tab, Some((1, b.clone())));
+    assert_eq!(effects.focus_group, Some(1));
+
+    frame.pointer = Pointer {
+        x: 998.0,
+        y: 62.0,
+        down: false,
+        click: true,
+    };
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut tree_scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(
+        effects.toggle_split,
+        "Split action is wired in the group toolbar"
+    );
+
+    frame.pointer = Pointer {
+        x: 664.0,
+        y: 300.0,
+        down: true,
+        click: false,
+    };
+    let _ = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut tree_scrollbar,
+        &mut viewer_scrollbar,
+    );
+    frame.pointer.x = 720.0;
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut tree_scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(effects.group_split_moved);
+    frame.pointer = Pointer {
+        x: 980.0,
+        y: 62.0,
+        down: false,
+        click: true,
+    };
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut tree_scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert_eq!(effects.close_group, Some(1));
+    assert!(
+        **frame.group_split.as_ref().expect("divider state") > 0.5,
+        "divider follows the pointer"
+    );
 }
 
 #[test]
@@ -782,8 +1050,16 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         };
         draw_frame(
             &mut frame,
@@ -839,8 +1115,16 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         };
         draw_frame(
             &mut frame,
@@ -916,8 +1200,16 @@ fn vertical_terminal_sessions_switch_the_active_pty() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: Some(&mut terms),
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,
@@ -1074,8 +1366,16 @@ fn draw_static_frame(
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         layout,
         tree,
@@ -1169,8 +1469,16 @@ fn frame_scene_renders_spec_surfaces() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,
@@ -1268,8 +1576,16 @@ fn frame_viewer_pane_renders_over_placeholder() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,
@@ -1334,8 +1650,16 @@ fn frame_interactions_report_effects() {
         commit: None,
         config: None,
         config_error: None,
+        config_error_path: None,
         terms: None,
         term_focused: false,
+        groups: None,
+        active_group: 0,
+        group_viewers: [None, None],
+        group_flash: [false, false],
+        group_scrollbars: None,
+        group_split: None,
+        group_split_drag: None,
     };
     let mut draw_at = |frame: &mut Frame,
                        pointer: Pointer,
@@ -1493,8 +1817,16 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         commit: None,
         config: None,
         config_error: None,
+        config_error_path: None,
         terms: None,
         term_focused: false,
+        groups: None,
+        active_group: 0,
+        group_viewers: [None, None],
+        group_flash: [false, false],
+        group_scrollbars: None,
+        group_split: None,
+        group_split_drag: None,
     };
     let mut draw_at = |frame: &mut Frame,
                        pointer: Pointer,
@@ -1631,8 +1963,16 @@ fn viewer_flash_paints_accent_strip() {
                 commit: None,
                 config: None,
                 config_error: None,
+                config_error_path: None,
                 terms: None,
                 term_focused: false,
+                groups: None,
+                active_group: 0,
+                group_viewers: [None, None],
+                group_flash: [false, false],
+                group_scrollbars: None,
+                group_split: None,
+                group_split_drag: None,
             },
             &layout,
             tree,
@@ -1714,8 +2054,16 @@ fn frame_config_pane_renders_and_reports_save_click() {
             commit: None,
             config: Some(&mut editor),
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,
@@ -1766,8 +2114,16 @@ fn frame_config_pane_renders_and_reports_save_click() {
             commit: None,
             config: Some(&mut editor),
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,
@@ -1817,8 +2173,16 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         commit: None,
         config: None,
         config_error: None,
+        config_error_path: None,
         terms: None,
         term_focused: false,
+        groups: None,
+        active_group: 0,
+        group_viewers: [None, None],
+        group_flash: [false, false],
+        group_scrollbars: None,
+        group_split: None,
+        group_split_drag: None,
     };
     let effects = draw_frame(
         &mut frame,
@@ -1866,7 +2230,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    assert_eq!(effects.select_tab.as_deref(), Some(files[1].as_path()));
+    assert_eq!(effects.select_tab, Some((0, files[1].clone())));
     frame.pointer = Pointer {
         x: 458.0,
         y: 62.0,
@@ -1882,7 +2246,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    assert_eq!(effects.close_tab.as_deref(), Some(files[0].as_path()));
+    assert_eq!(effects.close_tab, Some((0, files[0].clone())));
     // Activity bar: click the Config icon (fourth slot).
     frame.pointer = Pointer {
         x: 24.0,
@@ -1947,8 +2311,16 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,
@@ -1985,8 +2357,16 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 commit: None,
                 config: None,
                 config_error: None,
+                config_error_path: None,
                 terms: None,
                 term_focused: false,
+                groups: None,
+                active_group: 0,
+                group_viewers: [None, None],
+                group_flash: [false, false],
+                group_scrollbars: None,
+                group_split: None,
+                group_split_drag: None,
             },
             &layout,
             &mut tree,
@@ -2148,8 +2528,16 @@ fn viewer_offset_self_heals_before_hit_testing() {
             commit: None,
             config: None,
             config_error: None,
+            config_error_path: None,
             terms: None,
             term_focused: false,
+            groups: None,
+            active_group: 0,
+            group_viewers: [None, None],
+            group_flash: [false, false],
+            group_scrollbars: None,
+            group_split: None,
+            group_split_drag: None,
         },
         &layout,
         &mut tree,

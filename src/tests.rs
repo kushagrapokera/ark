@@ -19,8 +19,7 @@ fn fs_change_refreshes_viewer_and_flags_tree() {
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
     // Simulate a double-click open (the cache holds the viewer; the frame
     // would render it).
-    app.buffers.get_or_open(&p).expect("open");
-    app.open_path = Some(p.clone());
+    app.open_viewer(p.clone(), 0);
     {
         let v = app.buffers.get_or_open(&p).expect("open");
         assert!(v.set_offset_lines(1, 1), "read position into range");
@@ -322,6 +321,159 @@ fn app_terminal_close_returns_focus_after_the_last_shell() {
 }
 
 #[test]
+fn app_opening_a_visible_file_focuses_its_existing_group() {
+    let d = temp_dir("app-split-focus");
+    let a = d.path().join("a.txt");
+    let b = d.path().join("b.txt");
+    fs::write(&a, "a\n").expect("write a");
+    fs::write(&b, "b\n").expect("write b");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(a.clone(), 0);
+    app.toggle_editor_split();
+    app.open_viewer(b.clone(), 1);
+    assert_eq!(app.active_group_index(), 1);
+
+    app.open_viewer(a.clone(), 1);
+    assert_eq!(app.active_group_index(), 0);
+    assert_eq!(app.active_path().as_deref(), Some(a.as_path()));
+    assert_eq!(app.editor_groups.groups[1].tabs, vec![b]);
+}
+
+#[test]
+fn app_closing_a_group_evicts_its_tabs_and_collapses() {
+    let d = temp_dir("app-split-close");
+    let a = d.path().join("a.txt");
+    let b = d.path().join("b.txt");
+    fs::write(&a, "a\n").expect("write a");
+    fs::write(&b, "b\n").expect("write b");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(a.clone(), 0);
+    app.toggle_editor_split();
+    app.open_viewer(b.clone(), 1);
+
+    app.close_editor_group(1);
+    assert!(!app.editor_groups.is_split());
+    assert_eq!(app.active_path().as_deref(), Some(a.as_path()));
+    assert!(app.buffers.contains(&a));
+    assert!(!app.buffers.contains(&b));
+}
+
+#[test]
+fn app_config_is_a_tab_in_the_active_group() {
+    let d = temp_dir("app-split-config");
+    let code = d.path().join("main.rs");
+    let config = d.path().join("config.yaml");
+    fs::write(&code, "fn main() {}\n").expect("write code");
+    fs::write(&config, "a: 1\n").expect("write config");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(code.clone(), 0);
+    app.toggle_editor_split();
+    app.open_config(config.clone());
+
+    assert_eq!(app.active_group_index(), 1);
+    assert_eq!(app.editor_groups.groups[1].tabs, vec![config.clone()]);
+    assert_eq!(app.pane, PaneMode::Config);
+    app.focus_editor_group(0);
+    assert_eq!(app.pane, PaneMode::Viewer);
+    app.select_tab(1, config);
+    assert_eq!(app.pane, PaneMode::Config);
+}
+
+#[test]
+fn app_config_error_tab_can_be_refocused_from_another_group() {
+    let d = temp_dir("app-split-config-error");
+    let code = d.path().join("main.rs");
+    let viewer = d.path().join("a.txt");
+    fs::write(&code, "fn main() {}\n").expect("write code");
+    fs::write(&viewer, "a\n").expect("write viewer");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(viewer, 0);
+    app.toggle_editor_split();
+    app.open_config(code);
+    app.focus_editor_group(0);
+    app.set_activity(frame::ActivityPanel::Config);
+    assert_eq!(app.active_group_index(), 1);
+    assert_eq!(app.pane, PaneMode::Config);
+}
+
+#[test]
+fn app_closing_group_with_config_closes_the_editor() {
+    let d = temp_dir("app-split-close-config");
+    let code = d.path().join("main.rs");
+    let config = d.path().join("config.yaml");
+    fs::write(&code, "fn main() {}\n").expect("write code");
+    fs::write(&config, "a: 1\n").expect("write config");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(code, 0);
+    app.toggle_editor_split();
+    app.open_config(config);
+    assert!(app.config_edits.is_some());
+
+    app.close_editor_group(1);
+    assert!(app.config_edits.is_none());
+    assert!(!app.editor_groups.is_split());
+    assert_eq!(app.pane, PaneMode::Viewer);
+}
+
+#[test]
+fn app_fs_change_refreshes_both_visible_viewers() {
+    let d = temp_dir("app-split-refresh");
+    let a = d.path().join("a.txt");
+    let b = d.path().join("b.txt");
+    fs::write(&a, "a\n").expect("write a");
+    fs::write(&b, "b\n").expect("write b");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(a.clone(), 0);
+    app.toggle_editor_split();
+    app.open_viewer(b.clone(), 1);
+    thread::sleep(Duration::from_millis(30));
+    fs::write(&a, "a\nmore\n").expect("edit a");
+    fs::write(&b, "b\nmore\n").expect("edit b");
+
+    assert!(app.process_fs_change());
+    assert_eq!(app.buffers.get_or_open(&a).expect("a").line_count(), 2);
+    assert_eq!(app.buffers.get_or_open(&b).expect("b").line_count(), 2);
+}
+
+#[test]
+fn app_wheel_routes_to_the_requested_editor_group() {
+    let d = temp_dir("app-split-wheel");
+    let a = d.path().join("a.txt");
+    let b = d.path().join("b.txt");
+    let lines = (0..40).map(|i| format!("line {i}\n")).collect::<String>();
+    fs::write(&a, &lines).expect("write a");
+    fs::write(&b, &lines).expect("write b");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(a.clone(), 0);
+    app.toggle_editor_split();
+    app.open_viewer(b.clone(), 1);
+    let rect = Rect { x: 0.0, y: 0.0, w: 400.0, h: 400.0 };
+
+    assert!(app.route_wheel_viewer_group(0, rect, WHEEL_PX));
+    assert_eq!(app.buffers.get_or_open(&a).expect("a").offset_lines(), 2);
+    assert_eq!(app.buffers.get_or_open(&b).expect("b").offset_lines(), 0);
+    assert!(app.route_wheel_viewer_group(1, rect, WHEEL_PX));
+    assert_eq!(app.buffers.get_or_open(&b).expect("b").offset_lines(), 2);
+}
+
+#[test]
+fn app_close_active_tab_prefers_the_editor_over_terminal_close() {
+    let d = temp_dir("app-close-active-tab");
+    let a = d.path().join("a.txt");
+    let b = d.path().join("b.txt");
+    fs::write(&a, "a\n").expect("write a");
+    fs::write(&b, "b\n").expect("write b");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let a_active = a.clone();
+    app.open_viewer(a, 0);
+    app.open_viewer(b.clone(), 0);
+
+    assert!(app.close_active_editor_tab());
+    assert_eq!(app.active_path().as_deref(), Some(a_active.as_path()));
+    assert!(!app.buffers.contains(&b));
+}
+
+#[test]
 fn app_tabs_select_viewer_and_close_config_or_file() {
     let d = temp_dir("app-tabs");
     let code = d.path().join("main.rs");
@@ -329,25 +481,24 @@ fn app_tabs_select_viewer_and_close_config_or_file() {
     let config = d.path().join("config.yaml");
     std::fs::write(&config, "a: 1\n").expect("write config");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
-    app.buffers.get_or_open(&code).expect("open code");
-    app.open_path = Some(code.clone());
+    app.open_viewer(code.clone(), 0);
     app.open_config(config.clone());
     assert_eq!(app.pane, PaneMode::Config);
 
     // Selecting the viewer tab returns to the read-only viewer.
-    app.select_tab(code.clone());
+    app.select_tab(0, code.clone());
     assert_eq!(app.pane, PaneMode::Viewer);
-    assert_eq!(app.open_path.as_deref(), Some(code.as_path()));
+    assert_eq!(app.active_path().as_deref(), Some(code.as_path()));
 
     // Selecting the config tab returns to the editor.
-    app.select_tab(config.clone());
+    app.select_tab(0, config.clone());
     assert_eq!(app.pane, PaneMode::Config);
 
     // Closing the config tab drops the editor; closing the file tab evicts it.
-    app.close_tab(config.clone());
+    app.close_tab(0, config.clone());
     assert!(app.config_edits.is_none());
-    app.close_tab(code.clone());
-    assert!(app.open_path.is_none());
+    app.close_tab(0, code.clone());
+    assert!(app.active_path().is_none());
     assert!(!app.buffers.contains(&code));
 }
 
@@ -378,7 +529,7 @@ fn app_diff_refresh_runs_in_the_project_root() {
 
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
     app.git = Some(Arc::new(crate::git::status(d.path()).expect("status")));
-    app.open_path = Some(p.clone());
+    app.open_viewer(p.clone(), 0);
     app.request_diff_refresh(); // no proxy → runs inline
 
     let (path, diff) = app.file_diff.as_ref().expect("diff applied");

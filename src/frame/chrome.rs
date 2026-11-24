@@ -2,6 +2,8 @@
 //! are drawn from static labels/fixed arrays; no chrome state or cache is
 //! retained between frames.
 
+use std::path::PathBuf;
+
 use cosmic_text::Weight;
 
 use crate::icons::{self, Icon};
@@ -9,7 +11,7 @@ use crate::render::ColorRgb;
 use crate::text::TextStyle;
 use crate::ui::{draw_button, Press, Rect};
 
-use super::{ActivityPanel, AppLayout, Frame, CARD_RADIUS};
+use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, CARD_RADIUS};
 
 fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, bold: bool) {
     let font_size = (size * f.scale) as f32;
@@ -474,10 +476,28 @@ pub(super) fn draw_source_control_breadcrumb(f: &mut Frame, pane: Rect) {
     }
 }
 
-pub(super) fn draw_editor_actions(f: &mut Frame, layout: &AppLayout) {
-    let tabs = layout.editor_tabs;
+#[derive(Default)]
+pub(super) struct EditorGroupEffects {
+    pub select: Option<PathBuf>,
+    pub close: Option<PathBuf>,
+    pub close_group: bool,
+    pub toggle_split: bool,
+    pub focus: bool,
+}
+
+pub(super) fn draw_editor_group_chrome(
+    f: &mut Frame,
+    layout: EditorGroupLayout,
+    group: &EditorGroup,
+    index: usize,
+    active_group: usize,
+    is_split: bool,
+    source_control_body: bool,
+) -> EditorGroupEffects {
+    let mut effects = EditorGroupEffects::default();
+    let tabs = layout.tabs;
     if tabs.w <= 0.0 || tabs.h <= 0.0 {
-        return;
+        return effects;
     }
     f.canvas.fill_rect(
         tabs.x + 1.0,
@@ -487,23 +507,157 @@ pub(super) fn draw_editor_actions(f: &mut Frame, layout: &AppLayout) {
         f.theme.bg_elevated,
         f.scale,
     );
-    let actions = [Icon::Split, Icon::More];
-    let count = editor_action_count(tabs.w);
-    let first = tabs.x + tabs.w - 18.0 - (count - 1) as f64 * 18.0;
-    for (index, glyph) in actions.into_iter().take(count).enumerate() {
-        icon(
-            f,
-            glyph,
-            first + index as f64 * 18.0,
-            tabs.y + tabs.h / 2.0,
-            14.0,
-            f.theme.text_muted,
+    if index == active_group {
+        f.canvas.fill_rect(
+            tabs.x + 1.0,
+            tabs.y + 1.0,
+            tabs.w - 2.0,
+            2.0,
+            f.theme.accent,
+            f.scale,
         );
     }
+
+    let actions: &[Icon] = if is_split {
+        if tabs.w >= 360.0 {
+            &[Icon::Close, Icon::Split, Icon::More]
+        } else if tabs.w >= 240.0 {
+            &[Icon::Close, Icon::Split]
+        } else {
+            &[Icon::Close]
+        }
+    } else if tabs.w >= 640.0 {
+        &[Icon::Split, Icon::More]
+    } else {
+        &[]
+    };
+    let reserve = match actions.len() {
+        3 => 76.0,
+        2 => 58.0,
+        1 => 38.0,
+        _ => 0.0,
+    };
+    let tab_pane = Rect {
+        x: tabs.x,
+        y: tabs.y,
+        w: (tabs.w - reserve).max(0.0),
+        h: tabs.h,
+    };
+    let font_size = (crate::text::UI_FONT_SIZE as f64 * f.scale) as f32;
+    let m = f
+        .text
+        .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+    let advance = f64::from(m.advance) / f.scale;
+    let rects = super::file_tab_rects(tab_pane, group.tabs.len());
+    for (rect, path) in rects.iter().zip(group.tabs.iter()) {
+        let active = group.active.as_deref() == Some(path.as_path());
+        if active {
+            f.canvas
+                .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.bg, f.scale);
+            f.canvas.fill_rect(
+                rect.x,
+                rect.y + rect.h - 2.0,
+                rect.w,
+                2.0,
+                f.theme.accent,
+                f.scale,
+            );
+        } else if rect.contains(f.pointer.x, f.pointer.y) {
+            f.canvas
+                .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.selection, f.scale);
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+        let max_chars = (((rect.w - 44.0) / advance).floor()).max(1.0) as usize;
+        let label = crate::frame::truncate_chars(name.as_ref(), max_chars);
+        let baseline = (rect.y + rect.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
+        f.text.draw_line(
+            f.canvas,
+            &label,
+            ((rect.x + 10.0) * f.scale) as f32,
+            baseline as f32,
+            TextStyle {
+                color: f.theme.fg,
+                font_size,
+                weight: Weight::NORMAL,
+            },
+        );
+        let close = Rect {
+            x: rect.x + rect.w - 22.0,
+            y: rect.y + (rect.h - 16.0) / 2.0,
+            w: 16.0,
+            h: 16.0,
+        };
+        f.text.draw_line(
+            f.canvas,
+            "\u{d7}",
+            ((close.x + 4.0) * f.scale) as f32,
+            baseline as f32,
+            TextStyle {
+                color: f.theme.fg_dim,
+                font_size,
+                weight: Weight::NORMAL,
+            },
+        );
+        if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
+            if close.contains(f.pointer.x, f.pointer.y) {
+                effects.close = Some(path.clone());
+            } else {
+                effects.select = Some(path.clone());
+                effects.focus = true;
+            }
+        }
+    }
+
+    if !actions.is_empty() {
+        let first = tabs.x + tabs.w - 18.0 - (actions.len() - 1) as f64 * 18.0;
+        for (action_index, glyph) in actions.iter().enumerate() {
+            let cx = first + action_index as f64 * 18.0;
+            icon(
+                f,
+                *glyph,
+                cx,
+                tabs.y + tabs.h / 2.0,
+                14.0,
+                f.theme.text_muted,
+            );
+            let rect = Rect {
+                x: cx - 9.0,
+                y: tabs.y + (tabs.h - 18.0) / 2.0,
+                w: 18.0,
+                h: 18.0,
+            };
+            if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
+                match glyph {
+                    Icon::Close if is_split && index == 1 => effects.close_group = true,
+                    Icon::Split => effects.toggle_split = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if source_control_body && index == active_group {
+        draw_source_control_breadcrumb(f, layout.breadcrumb);
+    } else if let Some(path) = group.active.as_deref() {
+        super::draw_path_breadcrumb(f, layout.breadcrumb, path);
+    } else {
+        f.canvas.fill_rect(
+            layout.breadcrumb.x,
+            layout.breadcrumb.y,
+            layout.breadcrumb.w,
+            layout.breadcrumb.h,
+            f.theme.bg,
+            f.scale,
+        );
+    }
+    draw_minimap_rect(f, layout.minimap);
+    effects
 }
 
-pub(super) fn draw_minimap(f: &mut Frame, layout: &AppLayout) {
-    let map = layout.minimap;
+pub(super) fn draw_minimap_rect(f: &mut Frame, map: Rect) {
     if map.w <= 0.0 || map.h <= 0.0 {
         return;
     }
@@ -953,6 +1107,7 @@ pub(super) fn draw_status_bar(f: &mut Frame, layout: &AppLayout) {
 }
 
 /// Width reserved for the editor actions that are visible at this width.
+#[cfg(test)]
 pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
     let reserve = match editor_action_count(layout.editor_tabs.w) {
         2 => 58.0,
@@ -966,6 +1121,7 @@ pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
     }
 }
 
+#[cfg(test)]
 fn editor_action_count(width: f64) -> usize {
     if width >= 320.0 {
         2

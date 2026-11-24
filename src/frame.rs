@@ -8,6 +8,7 @@ use cosmic_text::Weight;
 
 use crate::commit::{self, CommitPanel};
 use crate::configed::ConfigEditor;
+use crate::editor_groups::EditorGroup;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::render::{Canvas, Theme};
@@ -42,6 +43,14 @@ const SIDEBAR_HANDLE_W: f64 = 16.0;
 const SIDEBAR_HANDLE_H: f64 = 24.0;
 /// Height of the "changed on disk" flash strip (viewer pane top edge).
 pub const FLASH_STRIP_H: f64 = 3.0;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EditorGroupLayout {
+    pub tabs: Rect,
+    pub breadcrumb: Rect,
+    pub body: Rect,
+    pub minimap: Rect,
+}
+
 /// Geometry of one frame in LOGICAL px, derived from the window size and
 /// the current split position. Pure — tests pin it.
 pub struct AppLayout {
@@ -63,10 +72,19 @@ pub struct AppLayout {
     pub split_area: Rect,
     /// Editor card, tab strip, breadcrumbs, body and minimap.
     pub editor_card: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub editor_tabs: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub breadcrumb: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub viewer_pane: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub minimap: Rect,
+    /// Per-editor-group chrome/body rects. Index 1 is degenerate when unsplit.
+    pub editor_groups: [EditorGroupLayout; 2],
+    pub editor_group_count: usize,
+    /// Draggable divider strip between the two editor groups.
+    pub editor_group_split: Rect,
     /// Bottom terminal card and its chrome/body regions.
     pub term_dock: Rect,
     pub terminal_toolbar: Rect,
@@ -81,14 +99,26 @@ pub fn app_layout(w: f64, h: f64, split_x: f64) -> AppLayout {
     app_layout_with_commit(w, h, split_x, false, false)
 }
 
-/// [`app_layout`] with the M8 commit panel shown under the tree and the
-/// optional M12 terminal dock at the bottom of the editor column.
+/// [`app_layout`] with the optional terminal dock and one editor group.
 pub fn app_layout_with_commit(
+    w: f64,
+    h: f64,
+    split_x: f64,
+    show_commit: bool,
+    show_term: bool,
+) -> AppLayout {
+    app_layout_with_groups(w, h, split_x, show_commit, show_term, 0.5, 1)
+}
+
+/// Full workbench layout with one or two side-by-side editor groups.
+pub fn app_layout_with_groups(
     w: f64,
     h: f64,
     split_x: f64,
     _show_commit: bool,
     show_term: bool,
+    group_divider: f64,
+    group_count: usize,
 ) -> AppLayout {
     let w = w.max(0.0);
     let h = h.max(0.0);
@@ -219,6 +249,72 @@ pub fn app_layout_with_commit(
         h: viewer_pane.h,
     };
 
+    let empty = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 0.0,
+        h: 0.0,
+    };
+    let mut editor_groups = [
+        EditorGroupLayout {
+            tabs: editor_tabs,
+            breadcrumb,
+            body: viewer_pane,
+            minimap,
+        },
+        EditorGroupLayout {
+            tabs: empty,
+            breadcrumb: empty,
+            body: empty,
+            minimap: empty,
+        },
+    ];
+    let mut editor_group_split = Rect {
+        x: editor_card.x,
+        y: editor_card.y,
+        w: 0.0,
+        h: editor_card.h,
+    };
+    if group_count >= 2 && editor_card.w > 0.0 {
+        let usable = (editor_card.w - gap).max(0.0);
+        let min_w = 180.0_f64.min(usable / 2.0);
+        let min_ratio = if usable > 0.0 { min_w / usable } else { 0.0 };
+        let divider = if group_divider.is_finite() {
+            group_divider.clamp(min_ratio, 1.0 - min_ratio)
+        } else {
+            0.5
+        };
+        let left_w = (usable * divider).floor();
+        let right_w = usable - left_w;
+        let left = Rect {
+            x: editor_card.x,
+            y: editor_card.y,
+            w: left_w,
+            h: editor_card.h,
+        };
+        let right = Rect {
+            x: editor_card.x + left_w + gap,
+            y: editor_card.y,
+            w: right_w,
+            h: editor_card.h,
+        };
+        editor_groups = [
+            editor_group_layout(left, editor_tab_h, breadcrumb_h, pad, gap),
+            editor_group_layout(right, editor_tab_h, breadcrumb_h, pad, gap),
+        ];
+        editor_group_split = Rect {
+            x: editor_card.x + left_w,
+            y: editor_card.y,
+            w: gap,
+            h: editor_card.h,
+        };
+    }
+    let editor_tabs = editor_groups[0].tabs;
+    let breadcrumb = editor_groups[0].breadcrumb;
+    let viewer_pane = editor_groups[0].body;
+    let minimap = editor_groups[0].minimap;
+    let editor_group_count = if group_count >= 2 { 2 } else { 1 };
+
     let terminal = Rect {
         x: editor_card.x,
         y: editor_card.y + editor_card.h + if dock_h > 0.0 { gap } else { 0.0 },
@@ -277,6 +373,9 @@ pub fn app_layout_with_commit(
         breadcrumb,
         viewer_pane,
         minimap,
+        editor_groups,
+        editor_group_count,
+        editor_group_split,
         term_dock: terminal,
         terminal_toolbar,
         term_grid,
@@ -290,9 +389,55 @@ pub fn app_layout_with_commit(
     }
 }
 
+fn editor_group_layout(
+    card: Rect,
+    tab_h: f64,
+    breadcrumb_h: f64,
+    pad: f64,
+    gap: f64,
+) -> EditorGroupLayout {
+    let tabs = Rect {
+        x: card.x,
+        y: card.y,
+        w: card.w,
+        h: tab_h,
+    };
+    let breadcrumb = Rect {
+        x: card.x,
+        y: tabs.y + tab_h,
+        w: card.w,
+        h: breadcrumb_h,
+    };
+    let minimap_w = if card.w >= 480.0 { MINIMAP_W } else { 0.0 };
+    let body = Rect {
+        x: card.x + pad,
+        y: breadcrumb.y + breadcrumb_h,
+        w: (card.w - 2.0 * pad - minimap_w - if minimap_w > 0.0 { gap } else { 0.0 }).max(0.0),
+        h: (card.h - tab_h - breadcrumb_h - pad).max(0.0),
+    };
+    let minimap = Rect {
+        x: card.x + card.w - pad - minimap_w,
+        y: body.y,
+        w: minimap_w,
+        h: body.h,
+    };
+    EditorGroupLayout {
+        tabs,
+        breadcrumb,
+        body,
+        minimap,
+    }
+}
+
 /// Body rect for the Source Control card. Wide windows use the left card;
 /// compact windows use the editor body so the feature remains reachable.
+#[cfg(test)]
 pub fn source_control_panel(layout: &AppLayout) -> Option<Rect> {
+    source_control_panel_for_group(layout, 0)
+}
+
+/// Source Control body rect for a specific active editor group.
+pub fn source_control_panel_for_group(layout: &AppLayout, active_group: usize) -> Option<Rect> {
     if layout.explorer_card.w > 0.0 && layout.explorer_header.h > 0.0 {
         Some(Rect {
             x: layout.explorer_card.x + 1.0,
@@ -300,10 +445,12 @@ pub fn source_control_panel(layout: &AppLayout) -> Option<Rect> {
             w: (layout.explorer_card.w - 2.0).max(0.0),
             h: (layout.explorer_card.h - layout.explorer_header.h - 1.0).max(0.0),
         })
-    } else if layout.viewer_pane.w > 0.0 && layout.viewer_pane.h > 0.0 {
-        Some(layout.viewer_pane)
     } else {
-        None
+        layout
+            .editor_groups
+            .get(active_group)
+            .map(|group| group.body)
+            .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
     }
 }
 
@@ -371,151 +518,13 @@ fn file_tab_rects(pane: Rect, count: usize) -> Vec<Rect> {
         .collect()
 }
 
-/// Draw the file/config tab strip. Clicks report select/close; no second
-/// open-files model exists (labels come from the LRU + config editor).
-fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf>) {
-    let mut select = None;
-    let mut close = None;
-    if pane.w <= 0.0 || pane.h <= 0.0 {
-        return (select, close);
-    }
-    f.canvas
-        .fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg_elevated, f.scale);
-    let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
-    let m = f
-        .text
-        .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
-    let advance = f64::from(m.advance) / f.scale;
-    let active_is_config = f
-        .config
-        .as_ref()
-        .is_some_and(|c| f.active_path == Some(c.path()));
-    // On compact strips the actions already consume the right edge; omit the
-    // optional READ-ONLY badge rather than letting it cover a file tab.
-    let badge_w = if !active_is_config && pane.w >= 480.0 {
-        92.0
-    } else {
-        0.0
-    };
-    let tab_area = Rect {
-        w: (pane.w - badge_w - if badge_w > 0.0 { 8.0 } else { 0.0 }).max(0.0),
-        ..pane
-    };
-    let rects = file_tab_rects(tab_area, f.open_files.len());
-    for (rect, path) in rects.iter().zip(f.open_files.iter()) {
-        let active = f.active_path == Some(path.as_path());
-        if active {
-            f.canvas
-                .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.bg, f.scale);
-            f.canvas.fill_rect(
-                rect.x,
-                rect.y + rect.h - 2.0,
-                rect.w,
-                2.0,
-                f.theme.accent,
-                f.scale,
-            );
-        } else if rect.contains(f.pointer.x, f.pointer.y) {
-            f.canvas
-                .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.selection, f.scale);
-        }
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "(unset)".into());
-        let max_chars = (((rect.w - 44.0) / advance).floor()).max(1.0) as usize;
-        let label: String = name.chars().take(max_chars).collect();
-        let baseline = (rect.y + rect.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
-        f.text.draw_line(
-            f.canvas,
-            &label,
-            ((rect.x + 10.0) * f.scale) as f32,
-            baseline as f32,
-            TextStyle {
-                color: f.theme.fg,
-                font_size,
-                weight: Weight::NORMAL,
-            },
-        );
-        if let Some(badge) = f.git.and_then(|g| g.badge_for(path)) {
-            let (letter, color) = crate::tree::badge_glyph(badge, f.theme);
-            f.text.draw_line(
-                f.canvas,
-                letter,
-                ((rect.x + rect.w - 30.0) * f.scale) as f32,
-                baseline as f32,
-                TextStyle {
-                    color,
-                    font_size,
-                    weight: Weight::BOLD,
-                },
-            );
-        }
-        let close_rect = Rect {
-            x: rect.x + rect.w - 22.0,
-            y: rect.y + (rect.h - 16.0) / 2.0,
-            w: 16.0,
-            h: 16.0,
-        };
-        f.text.draw_line(
-            f.canvas,
-            "\u{d7}",
-            ((close_rect.x + 4.0) * f.scale) as f32,
-            baseline as f32,
-            TextStyle {
-                color: f.theme.fg_dim,
-                font_size,
-                weight: Weight::NORMAL,
-            },
-        );
-        if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
-            if close_rect.contains(f.pointer.x, f.pointer.y) {
-                close = Some(path.clone());
-            } else {
-                select = Some(path.clone());
-            }
-        }
-    }
-    // READ-ONLY badge at the strip's right edge (not for the writable config
-    // editor tab).
-    if f.open_files.is_empty() || badge_w == 0.0 {
-        return (select, close);
-    }
-    let badge = Rect {
-        x: pane.x + pane.w - badge_w - 8.0,
-        y: pane.y + 5.0,
-        w: badge_w,
-        h: pane.h - 10.0,
-    };
-    if badge.x > pane.x {
-        f.canvas
-            .fill_rect(badge.x, badge.y, badge.w, badge.h, f.theme.bg, f.scale);
-        f.canvas
-            .stroke_rect_strips(badge.x, badge.y, badge.w, badge.h, f.theme.border, f.scale);
-        let baseline = (badge.y + badge.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
-        f.text.draw_line(
-            f.canvas,
-            "READ-ONLY",
-            ((badge.x + 12.0) * f.scale) as f32,
-            baseline as f32,
-            TextStyle {
-                color: f.theme.fg_dim,
-                font_size: (11.0 * f.scale) as f32,
-                weight: Weight::BOLD,
-            },
-        );
-    }
-    (select, close)
-}
-
-/// Draw the breadcrumb for the active path, relative to the project root.
-fn draw_breadcrumb(f: &mut Frame, pane: Rect) {
+/// Draw a root-relative path breadcrumb for one editor group.
+fn draw_path_breadcrumb(f: &mut Frame, pane: Rect, path: &Path) {
     if pane.w <= 0.0 || pane.h <= 0.0 {
         return;
     }
     f.canvas
         .fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg, f.scale);
-    let Some(path) = f.active_path else { return };
     let rel = path.strip_prefix(f.root).unwrap_or(path);
     let font_size = (11.0 * f.scale) as f32;
     let m = f.text.mono_metrics(font_size, font_size * 1.35);
@@ -623,6 +632,14 @@ pub struct Frame<'a> {
     pub active_path: Option<&'a Path>,
     /// Active workbench panel (activity bar highlight).
     pub activity: ActivityPanel,
+    /// Editor groups. `None` selects the legacy single-pane test surface.
+    pub groups: Option<&'a [EditorGroup]>,
+    pub active_group: usize,
+    pub group_viewers: [Option<&'a mut Viewer>; 2],
+    pub group_flash: [bool; 2],
+    pub group_scrollbars: Option<&'a mut [Scrollbar]>,
+    pub group_split: Option<&'a mut f64>,
+    pub group_split_drag: Option<&'a mut SplitDrag>,
     pub pointer: Pointer,
     /// Armed together with `pointer.click`: this click completes a
     /// double-click (the App tracks time+distance).
@@ -647,6 +664,7 @@ pub struct Frame<'a> {
     pub config: Option<&'a mut ConfigEditor>,
     /// Most recent config-open failure (rendered instead of the editor).
     pub config_error: Option<&'a str>,
+    pub config_error_path: Option<&'a Path>,
     /// Terminal tabs to draw (M6): Some only while the App's pane mode is
     /// Terminals; tabs keep running while hidden.
     pub terms: Option<&'a mut TerminalTabs>,
@@ -687,9 +705,17 @@ pub struct FrameEffects {
     /// An activity-bar icon was clicked (M12).
     pub set_activity: Option<ActivityPanel>,
     /// A file/config tab was clicked.
-    pub select_tab: Option<PathBuf>,
+    pub select_tab: Option<(usize, PathBuf)>,
     /// A file/config tab close button was clicked.
-    pub close_tab: Option<PathBuf>,
+    pub close_tab: Option<(usize, PathBuf)>,
+    /// The secondary editor group's close action was clicked.
+    pub close_group: Option<usize>,
+    /// An editor group body/tab was clicked.
+    pub focus_group: Option<usize>,
+    /// The Split editor action was clicked.
+    pub toggle_split: bool,
+    /// The editor-group divider moved.
+    pub group_split_moved: bool,
 }
 
 /// Draw the existing per-file Commit & Push panel in the active Source
@@ -697,7 +723,7 @@ pub struct FrameEffects {
 /// only supplies the current responsive rect and git snapshot.
 fn draw_source_control(f: &mut Frame, layout: &AppLayout) -> commit::PanelEffects {
     let effects = commit::PanelEffects::default();
-    let Some(rect) = source_control_panel(layout) else {
+    let Some(rect) = source_control_panel_for_group(layout, f.active_group) else {
         return effects;
     };
     if rect.w <= 0.0 || rect.h <= 0.0 {
@@ -735,13 +761,46 @@ pub fn draw_frame(
     split: &mut Split,
     split_drag: &mut SplitDrag,
     scrollbar: &mut Scrollbar,
-    viewer_scrollbar: &mut Scrollbar,
+    _viewer_scrollbar: &mut Scrollbar,
 ) -> FrameEffects {
     let mut effects = FrameEffects::default();
     if !f.scale.is_finite() || f.scale <= 0.0 {
         return effects;
     }
     let lw = f.canvas.width() as f64 / f.scale;
+
+    // Production frames supply editor groups. The legacy fields remain as a
+    // single-group adapter for existing frame tests and callers.
+    let legacy_groups;
+    let groups: &[EditorGroup] = if let Some(groups) = f.groups {
+        groups
+    } else {
+        legacy_groups = [EditorGroup {
+            tabs: f.open_files.to_vec(),
+            active: f.active_path.map(Path::to_path_buf),
+            error: f.viewer_error.map(str::to_owned),
+        }];
+        &legacy_groups
+    };
+    let mut group_viewers = std::mem::take(&mut f.group_viewers);
+    let mut group_scrollbars_state = std::mem::take(&mut f.group_scrollbars);
+    let mut group_split = std::mem::take(&mut f.group_split);
+    let mut group_split_drag = std::mem::take(&mut f.group_split_drag);
+    let mut legacy_viewers = [None, None];
+    let viewers: &mut [Option<&mut Viewer>] = if f.groups.is_some() {
+        &mut group_viewers
+    } else {
+        legacy_viewers[0] = f.viewer.take();
+        &mut legacy_viewers
+    };
+    let mut fallback_scrollbars = [Scrollbar::default(), Scrollbar::default()];
+    let group_scrollbars: &mut [Scrollbar] = if f.groups.is_some() {
+        group_scrollbars_state
+            .as_deref_mut()
+            .unwrap_or(&mut fallback_scrollbars)
+    } else {
+        std::slice::from_mut(_viewer_scrollbar)
+    };
 
     f.canvas.fill(f.theme.surface_chrome);
     chrome::draw_cards(f, layout);
@@ -781,6 +840,42 @@ pub fn draw_frame(
     }
     if let Some(handle) = handle {
         draw_sidebar_handle(f, handle, split_drag.dragging);
+    }
+
+    // Editor-group divider: independent from the Explorer resize handle.
+    if layout.editor_group_count == 2 && layout.editor_group_split.w > 0.0 {
+        if let (Some(divider), Some(drag)) =
+            (group_split.as_deref_mut(), group_split_drag.as_deref_mut())
+        {
+            let area = layout.editor_group_split;
+            let hovered = area.contains(f.pointer.x, f.pointer.y);
+            let usable = (layout.editor_card.w - area.w).max(0.0);
+            let min_w = 180.0_f64.min(usable / 2.0);
+            let min_ratio = if usable > 0.0 { min_w / usable } else { 0.0 };
+            if f.pointer.down && (drag.dragging || hovered) {
+                if !drag.dragging {
+                    let divider_x = layout.editor_card.x + usable * *divider;
+                    drag.grab_dx = f.pointer.x - divider_x;
+                }
+                drag.dragging = true;
+                let next = (f.pointer.x - drag.grab_dx - layout.editor_card.x) / usable;
+                let clamped = next.clamp(min_ratio, 1.0 - min_ratio);
+                if (*divider - clamped).abs() > f64::EPSILON {
+                    *divider = clamped;
+                    effects.group_split_moved = true;
+                }
+            } else if !f.pointer.down {
+                drag.dragging = false;
+            }
+            if drag.dragging || hovered {
+                f.canvas
+                    .fill_rect(area.x, area.y, area.w, area.h, f.theme.accent, f.scale);
+            }
+            if f.dbl_click && hovered {
+                *divider = 0.5;
+                effects.group_split_moved = true;
+            }
+        }
     }
 
     if f.activity == ActivityPanel::SourceControl {
@@ -834,21 +929,31 @@ pub fn draw_frame(
         effects.set_activity = Some(panel);
     }
 
-    // Editor tabs, breadcrumbs, actions and placeholder minimap.
-    let (select_tab, close_tab) = draw_file_tabs(f, chrome::tab_strip(layout));
-    if select_tab.is_some() {
-        effects.select_tab = select_tab;
+    // Per-group tabs, breadcrumbs, actions and minimaps.
+    let active_group = f.active_group.min(groups.len().saturating_sub(1));
+    for index in 0..layout.editor_group_count.min(groups.len()) {
+        let gx = chrome::draw_editor_group_chrome(
+            f,
+            layout.editor_groups[index],
+            &groups[index],
+            index,
+            active_group,
+            layout.editor_group_count == 2,
+            f.activity == ActivityPanel::SourceControl && layout.explorer_card.w <= 0.0,
+        );
+        if let Some(path) = gx.select {
+            effects.select_tab = Some((index, path));
+            effects.focus_group = Some(index);
+        }
+        if let Some(path) = gx.close {
+            effects.close_tab = Some((index, path));
+        }
+        if gx.close_group {
+            effects.close_group = Some(index);
+        }
+        effects.toggle_split |= gx.toggle_split;
+        effects.focus_group = effects.focus_group.or(gx.focus.then_some(index));
     }
-    if close_tab.is_some() {
-        effects.close_tab = close_tab;
-    }
-    if f.activity == ActivityPanel::SourceControl && layout.explorer_card.w <= 0.0 {
-        chrome::draw_source_control_breadcrumb(f, layout.breadcrumb);
-    } else {
-        draw_breadcrumb(f, layout.breadcrumb);
-    }
-    chrome::draw_editor_actions(f, layout);
-    chrome::draw_minimap(f, layout);
 
     // Terminal card: static panel chrome plus the existing functional PTY,
     // new/close actions and vertical session switcher.
@@ -887,90 +992,130 @@ pub fn draw_frame(
         }
     }
 
-    // Editor body. Compact windows host Source Control here; wide windows
-    // already drew it in the left card.
-    if f.activity == ActivityPanel::SourceControl {
-        if layout.explorer_card.w <= 0.0 {
+    // Per-group editor bodies. Config is a tab in one group; every other
+    // active tab borrows its pinned viewer from the shared cache.
+    for index in 0..layout.editor_group_count.min(groups.len()) {
+        let pane = layout.editor_groups[index].body;
+        let group = &groups[index];
+        if pane.w <= 0.0 || pane.h <= 0.0 {
+            continue;
+        }
+        if f.pointer.click && pane.contains(f.pointer.x, f.pointer.y) {
+            effects.focus_group = Some(index);
+        }
+        if f.activity == ActivityPanel::SourceControl
+            && layout.explorer_card.w <= 0.0
+            && index == active_group
+        {
             let fx = draw_source_control(f, layout);
             effects.commit_toggled |= fx.toggled;
             effects.commit_clicked |= fx.commit;
             effects.push_clicked |= fx.push;
+            continue;
         }
-    } else if let Some(config) = f.config.as_deref_mut() {
-        let fx = config.draw(
-            f.canvas,
-            f.text,
-            f.theme,
-            f.scale,
-            layout.viewer_pane,
-            f.pointer,
-            f.highlighter,
-        );
-        effects.config_save |= fx.save;
-        effects.config_reload |= fx.reload;
-        effects.config_changed |= fx.changed;
-    } else if let Some(err) = f.config_error {
-        draw_pane_message(
-            f,
-            layout.viewer_pane,
-            "config editor failed —",
-            &truncate_chars(err, 60),
-        );
-    } else if f.viewer.is_some() {
-        let viewer = f.viewer.as_deref_mut().expect("checked");
-        let pane = layout.viewer_pane;
-        let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
-        let m = f.text.mono_metrics(font_size, font_size * 1.35);
-        let advance = f64::from(m.advance) / f.scale;
-        let viewport_lines = (pane.h / LINE_H).floor() as usize;
-        if viewer.set_offset_lines(viewer.offset_lines(), viewport_lines) {
-            effects.viewer_scrolled = true;
-        }
-        if viewer::handle_pointer(viewer, pane, f.pointer, advance) {
-            effects.tree_changed = true;
-        }
-        viewer::draw_viewer_panel(
-            f.canvas,
-            f.text,
-            f.theme,
-            f.scale,
-            pane,
-            viewer,
-            f.highlighter,
-            f.file_diff,
-        );
-        if pane.w > tree::TRACK_W {
-            let viewport_lines = (pane.h / LINE_H).floor() as usize;
-            let content = viewer.line_count() as f64 * LINE_H;
-            viewer_scrollbar.offset = viewer.offset_lines() as f64 * LINE_H;
-            if viewer_scrollbar.on_pointer(pane_scroll_track(pane), f.pointer, content, pane.h) {
-                let lines = (viewer_scrollbar.offset / LINE_H).ceil() as usize;
-                if viewer.set_offset_lines(lines, viewport_lines) {
-                    effects.viewer_scrolled = true;
-                }
-            }
-            viewer_scrollbar.draw(
+        let is_config = if f.groups.is_some() {
+            f.config
+                .as_ref()
+                .is_some_and(|config| Some(config.path()) == group.active.as_deref())
+        } else {
+            f.config.is_some()
+        };
+        if is_config {
+            let config = f.config.as_deref_mut().expect("checked config path");
+            let fx = config.draw(
                 f.canvas,
-                pane_scroll_track(pane),
-                content,
-                pane.h,
+                f.text,
                 f.theme,
                 f.scale,
+                pane,
+                f.pointer,
+                f.highlighter,
             );
-        }
-        if f.viewer_flash {
-            f.canvas.fill_rect(
-                pane.x,
-                pane.y,
-                pane.w,
-                FLASH_STRIP_H,
-                f.theme.accent,
+            effects.config_save |= fx.save;
+            effects.config_reload |= fx.reload;
+            effects.config_changed |= fx.changed;
+        } else if index == active_group
+            && viewers[index].is_none()
+            && (group.active.is_none()
+                || f.config_error_path
+                    .is_some_and(|path| Some(path) == group.active.as_deref()))
+        {
+            if let Some(err) = f.config_error {
+                draw_pane_message(f, pane, "config editor failed —", &truncate_chars(err, 60));
+            } else {
+                draw_placeholder(f, pane, group.error.as_deref());
+            }
+        } else if let Some(viewer) = viewers[index].as_deref_mut() {
+            let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
+            let m = f
+                .text
+                .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+            let advance = f64::from(m.advance) / f.scale;
+            let viewport_lines = (pane.h / LINE_H).floor() as usize;
+            if viewer.set_offset_lines(viewer.offset_lines(), viewport_lines) {
+                effects.viewer_scrolled = true;
+            }
+            if viewer::handle_pointer(viewer, pane, f.pointer, advance) {
+                effects.tree_changed = true;
+            }
+            let diff = if index == active_group {
+                f.file_diff
+            } else {
+                None
+            };
+            viewer::draw_viewer_panel(
+                f.canvas,
+                f.text,
+                f.theme,
                 f.scale,
+                pane,
+                viewer,
+                f.highlighter,
+                diff,
             );
+            if pane.w > tree::TRACK_W {
+                let content = viewer.line_count() as f64 * LINE_H;
+                let scrollbar = &mut group_scrollbars[index];
+                scrollbar.offset = viewer.offset_lines() as f64 * LINE_H;
+                if scrollbar.on_pointer(pane_scroll_track(pane), f.pointer, content, pane.h) {
+                    let lines = (scrollbar.offset / LINE_H).ceil() as usize;
+                    if viewer.set_offset_lines(lines, viewport_lines) {
+                        effects.viewer_scrolled = true;
+                    }
+                }
+                scrollbar.draw(
+                    f.canvas,
+                    pane_scroll_track(pane),
+                    content,
+                    pane.h,
+                    f.theme,
+                    f.scale,
+                );
+            }
+            if (f.groups.is_some() && f.group_flash[index])
+                || (f.groups.is_none() && index == 0 && f.viewer_flash)
+            {
+                f.canvas.fill_rect(
+                    pane.x,
+                    pane.y,
+                    pane.w,
+                    FLASH_STRIP_H,
+                    f.theme.accent,
+                    f.scale,
+                );
+            }
+        } else {
+            draw_placeholder(f, pane, group.error.as_deref());
         }
-    } else {
-        draw_placeholder(f, layout.viewer_pane, f.viewer_error);
     }
+
+    if f.groups.is_none() {
+        f.viewer = legacy_viewers[0].take();
+    }
+    f.group_viewers = group_viewers;
+    f.group_scrollbars = group_scrollbars_state;
+    f.group_split = group_split;
+    f.group_split_drag = group_split_drag;
 
     chrome::draw_status_bar(f, layout);
     effects

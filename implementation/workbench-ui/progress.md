@@ -201,6 +201,26 @@ five open viewers, two shells + fake agent tab):
 - Tree row names now use char-boundary-safe ellipsis clipping before the git
   badge and scrollbar track, so long names cannot cross the sidebar boundary.
 
+## Split editor groups
+
+- Added two bounded side-by-side editor groups with per-group tab strips,
+  active-tab underlines, tab close buttons, group close, and Split toggle.
+- Each group has independent viewer scroll/selection for different files. A
+  file appears in only one group; opening it again focuses the owning group.
+- Reused the global LRU cache and pinned both visible viewers during open,
+  refresh, and eviction. Added simultaneous mutable borrows without duplicating
+  mmap/index memory.
+- Config files are tabs in a group; keyboard/IME/copy/wheel/diff routing follows
+  the active group. FS refresh checks both visible viewers.
+- Responsive geometry clamps the divider and hides split minimaps in narrow
+  groups. Split is offered only when the editor card is at least 640 px wide.
+- Verification: `cargo test` **266 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy clean. Live two-file split smoke confirmed both per-group tab strips,
+  viewers, and controls.
+- Split stress with five large viewers, two shells, and a 400×300 → 1440×900
+  resize: **65,420 KiB = 63.9 MiB RSS**, **57,660 KiB = 56.3 MiB PSS** — below
+  the 100 MiB budget.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

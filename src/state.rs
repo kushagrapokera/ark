@@ -46,22 +46,58 @@ impl BufferCache {
     /// here). A hit promotes the entry to most-recently-used; a miss that
     /// pushes the cache over the cap evicts the least-recently-used viewer,
     /// dropping its mmap and line index.
+    #[cfg(test)]
     pub fn get_or_open(&mut self, path: &Path) -> Result<&mut Viewer, ViewerError> {
+        self.get_or_open_pinned(path, &[])
+    }
+
+    /// Open/promote `path` without evicting any visible split-pane paths.
+    pub fn get_or_open_pinned(
+        &mut self,
+        path: &Path,
+        pinned: &[&Path],
+    ) -> Result<&mut Viewer, ViewerError> {
         if self.entries.contains_key(path) {
             self.promote(path);
         } else {
             let viewer = Viewer::open(path)?;
-            if self.entries.len() >= self.cap {
-                self.evict_oldest();
+            while self.entries.len() >= self.cap {
+                if !self.evict_oldest_except(pinned) {
+                    break;
+                }
             }
             self.entries.insert(path.to_path_buf(), viewer);
             self.order.push_back(path.to_path_buf());
-            self.enforce_index_budget();
+            let mut protected = pinned.to_vec();
+            protected.push(path);
+            self.enforce_index_budget_except(&protected);
         }
         Ok(self
             .entries
             .get_mut(path)
             .expect("just inserted or promoted"))
+    }
+
+    /// Borrow several distinct cached viewers at once. Callers pin/open every
+    /// requested visible path first; a missing path is an invariant violation.
+    pub fn viewers_mut(&mut self, paths: &[&Path]) -> Vec<&mut Viewer> {
+        let mut picked: Vec<_> = self
+            .entries
+            .iter_mut()
+            .filter(|(path, _)| paths.contains(&path.as_path()))
+            .collect();
+        assert_eq!(
+            picked.len(),
+            paths.len(),
+            "visible viewers must be cached before frame borrow"
+        );
+        picked.sort_by_key(|(path, _)| {
+            paths
+                .iter()
+                .position(|wanted| *wanted == path.as_path())
+                .expect("picked path came from requested paths")
+        });
+        picked.into_iter().map(|(_, viewer)| viewer).collect()
     }
 
     /// Move `path` to the most-recently-used position (O(n) over ≤ cap
@@ -73,10 +109,15 @@ impl BufferCache {
         }
     }
 
-    /// Drop the least-recently-used viewer (its mmap and index free with it).
-    /// Returns whether an entry was removed.
-    fn evict_oldest(&mut self) -> bool {
-        if let Some(oldest) = self.order.pop_front() {
+    /// Drop the least-recently-used viewer that is not pinned by a visible
+    /// editor group. Returns whether an entry was removed.
+    fn evict_oldest_except(&mut self, pinned: &[&Path]) -> bool {
+        for index in 0..self.order.len() {
+            let path = &self.order[index];
+            if pinned.contains(&path.as_path()) {
+                continue;
+            }
+            let oldest = self.order.remove(index).expect("index from len");
             if let Some(evicted) = self.entries.remove(&oldest) {
                 log::debug!("evicted viewer for {} (cache at cap)", evicted.path().display());
                 return true;
@@ -93,9 +134,10 @@ impl BufferCache {
     /// MEMORY RULE (M11): evict LRU viewers until the summed line indices fit
     /// `index_budget`. The most-recently-opened entry is always kept, so the
     /// pane can never lose its open file to the budget.
-    fn enforce_index_budget(&mut self) {
+    /// Enforce the aggregate index budget without evicting visible split panes.
+    fn enforce_index_budget_except(&mut self, pinned: &[&Path]) {
         while self.entries.len() > 1 && self.total_index_bytes() > self.index_budget {
-            if !self.evict_oldest() {
+            if !self.evict_oldest_except(pinned) {
                 break;
             }
         }
@@ -107,14 +149,26 @@ impl BufferCache {
     /// the selection drops with the old view. On open failure the OLD viewer
     /// stays cached — a vanished/binary file never blanks the pane — and the
     /// error is returned.
+    #[cfg(test)]
     pub fn refresh(&mut self, path: &Path) -> Result<&mut Viewer, ViewerError> {
+        self.refresh_pinned(path, &[])
+    }
+
+    /// Re-open `path` while keeping every visible split pane resident.
+    pub fn refresh_pinned(
+        &mut self,
+        path: &Path,
+        pinned: &[&Path],
+    ) -> Result<&mut Viewer, ViewerError> {
         let old_offset = self.entries.get(path).map(|v| v.offset_lines());
         let mut viewer = Viewer::open(path)?;
         if let Some(off) = old_offset {
             viewer.restore_offset(off);
         }
         self.entries.insert(path.to_path_buf(), viewer);
-        self.enforce_index_budget();
+        let mut protected = pinned.to_vec();
+        protected.push(path);
+        self.enforce_index_budget_except(&protected);
         Ok(self
             .entries
             .get_mut(path)
@@ -128,6 +182,7 @@ impl BufferCache {
     }
 
     /// Cached paths in MOST-RECENTLY-FIRST order (the file-tab strip order).
+    #[cfg(test)]
     pub fn lru_paths(&self) -> Vec<PathBuf> {
         self.order.iter().rev().cloned().collect()
     }
@@ -275,6 +330,94 @@ mod tests {
         tiny.get_or_open(&b).expect("open second");
         assert_eq!(tiny.len(), 1, "keeps exactly the open file when over budget");
         assert!(tiny.contains(&b));
+    }
+
+    #[test]
+    fn pinned_open_evicts_only_unpinned_viewers() {
+        let d = temp_dir("lru-pinned");
+        let a = make_file(d.path(), "a.txt");
+        let b = make_file(d.path(), "b.txt");
+        let c = make_file(d.path(), "c.txt");
+        let e = make_file(d.path(), "e.txt");
+        let mut cache = BufferCache::new(3);
+        cache.get_or_open(&a).expect("a");
+        cache.get_or_open(&b).expect("b");
+        cache
+            .get_or_open_pinned(&c, &[a.as_path(), b.as_path()])
+            .expect("c");
+        assert_eq!(cache.len(), 3);
+
+        cache
+            .get_or_open_pinned(&e, &[a.as_path(), b.as_path()])
+            .expect("e");
+        assert_eq!(cache.len(), 3);
+        assert!(cache.contains(&a) && cache.contains(&b) && cache.contains(&e));
+        assert!(!cache.contains(&c), "unpinned LRU is evicted before a visible pane");
+    }
+
+    #[test]
+    fn visible_pinners_survive_the_index_budget() {
+        let d = temp_dir("lru-pinned-budget");
+        let lines: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let a = d.path().join("a.txt");
+        let b = d.path().join("b.txt");
+        fs::write(&a, &lines).expect("write a");
+        fs::write(&b, &lines).expect("write b");
+        let index_bytes = {
+            let mut probe = BufferCache::new(8);
+            probe.get_or_open(&a).expect("probe").index_bytes()
+        };
+        let mut cache = BufferCache::with_budget(8, index_bytes + index_bytes / 2);
+        cache.get_or_open(&a).expect("a");
+        cache
+            .get_or_open_pinned(&b, &[a.as_path()])
+            .expect("b");
+        assert_eq!(cache.len(), 2, "both visible viewers stay resident over budget");
+        assert!(cache.contains(&a) && cache.contains(&b));
+    }
+
+    #[test]
+    fn viewers_mut_returns_distinct_borrows_in_requested_order() {
+        let d = temp_dir("lru-two-borrows");
+        let a = make_file(d.path(), "a.txt");
+        let b = make_file(d.path(), "b.txt");
+        fs::write(&b, "b\nc\n").expect("two-line b");
+        let mut cache = BufferCache::new(3);
+        cache.get_or_open(&a).expect("a");
+        cache.get_or_open(&b).expect("b");
+
+        let mut viewers = cache.viewers_mut(&[b.as_path(), a.as_path()]);
+        assert_eq!(viewers.len(), 2);
+        assert_eq!(viewers[0].path(), b.as_path());
+        assert_eq!(viewers[1].path(), a.as_path());
+        assert!(viewers[0].set_offset_lines(1, 1));
+        assert_eq!(viewers[1].offset_lines(), 0);
+    }
+
+    #[test]
+    fn refresh_pinned_keeps_both_visible_viewers() {
+        let d = temp_dir("lru-refresh-pinned");
+        let lines: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let a = d.path().join("a.txt");
+        let b = d.path().join("b.txt");
+        fs::write(&a, &lines).expect("write a");
+        fs::write(&b, &lines).expect("write b");
+        let index_bytes = {
+            let mut probe = BufferCache::new(8);
+            probe.get_or_open(&a).expect("probe").index_bytes()
+        };
+        let mut cache = BufferCache::with_budget(8, index_bytes + index_bytes / 2);
+        cache.get_or_open(&a).expect("a");
+        cache
+            .get_or_open_pinned(&b, &[a.as_path()])
+            .expect("b");
+        fs::write(&a, format!("{lines}changed\n")).expect("edit a");
+
+        cache
+            .refresh_pinned(&a, &[a.as_path(), b.as_path()])
+            .expect("refresh a");
+        assert_eq!(cache.len(), 2, "refresh cannot evict the other visible pane");
+        assert!(cache.contains(&a) && cache.contains(&b));
     }
 
     // ---- M5: refresh ----

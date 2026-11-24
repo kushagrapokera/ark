@@ -27,6 +27,7 @@ use winit::{
 mod commit;
 mod config;
 mod configed;
+mod editor_groups;
 mod frame;
 mod fs;
 mod git;
@@ -45,6 +46,8 @@ mod watch;
 #[cfg(test)]
 mod demo;
 
+use configed::ConfigEditor;
+use editor_groups::EditorGroups;
 use frame::{AppLayout, Frame, SplitDrag};
 use git::{FileDiff as GitFileDiff, GitStatus};
 use highlight::Highlighter;
@@ -56,7 +59,6 @@ use tree::FileTree;
 use ui::{Pointer, Rect, Scrollbar, Split};
 use viewer::{Viewer, LINE_H};
 use watch::{Wake, Watcher};
-use configed::ConfigEditor;
 
 /// Logical px scrolled per wheel notch.
 const WHEEL_PX: f64 = 40.0;
@@ -180,6 +182,7 @@ fn route_wheel_term(app: &mut App, dy: f64, grid: &Rect) -> bool {
 /// delta into whole lines, scroll the viewer, and mark ONLY the viewer pane
 /// rect (the status line carries no viewer scroll info). Returns whether
 /// anything was damaged.
+#[cfg(test)]
 fn route_wheel_viewer(
     viewer: &mut Viewer,
     dy: f64,
@@ -229,11 +232,10 @@ struct App {
     scrollbar: Scrollbar,
     /// LRU cache of open viewers (bounded, M4).
     buffers: BufferCache,
-    /// The currently viewed file, if any (always `buffers`-resident).
-    open_path: Option<PathBuf>,
-    /// Most recent failed open attempt (rendered in the pane, logged).
-    viewer_error: Option<String>,
-    viewer_scrollbar: Scrollbar,
+    /// Bounded per-group tabs and the active editor group.
+    editor_groups: EditorGroups,
+    group_scrollbars: [Scrollbar; 2],
+    group_split_drag: SplitDrag,
     /// Shared regex highlighter (compiled once, bounded).
     highlighter: Highlighter,
     /// Active keyboard modifiers (Ctrl+C copy routing).
@@ -255,6 +257,8 @@ struct App {
     term_paint_due: bool,
     /// "Changed on disk" flash deadline (cleared by a scheduled redraw).
     flash_until: Option<Instant>,
+    /// Group/path that owns the current change flash.
+    flash_path: Option<PathBuf>,
     /// Last tree re-list (debounce reference point).
     last_tree_refresh: Option<Instant>,
     /// fs activity arrived while the tree refresh was debounced away.
@@ -275,6 +279,8 @@ struct App {
     config_edits: Option<ConfigEditor>,
     /// Most recent config-open failure (rendered in the pane).
     config_error: Option<String>,
+    /// Tab path that owns a config-open failure.
+    config_error_path: Option<PathBuf>,
     /// Window IME state (follows PaneMode::Config).
     ime_allowed: bool,
     /// Last input/fs/git/PTY activity (M11 idle trim gate).
@@ -332,9 +338,9 @@ impl App {
             split_drag: SplitDrag::default(),
             scrollbar: Scrollbar::default(),
             buffers: BufferCache::new(BUFFER_CACHE_CAP),
-            open_path: None,
-            viewer_error: None,
-            viewer_scrollbar: Scrollbar::default(),
+            editor_groups: EditorGroups::new(),
+            group_scrollbars: [Scrollbar::default(), Scrollbar::default()],
+            group_split_drag: SplitDrag::default(),
             highlighter: Highlighter::new(),
             modifiers: winit::event::Modifiers::default(),
             last_click: None,
@@ -345,6 +351,7 @@ impl App {
             last_render: None,
             term_paint_due: false,
             flash_until: None,
+            flash_path: None,
             last_tree_refresh: None,
             fs_dirty: false,
             git: None,
@@ -355,6 +362,7 @@ impl App {
             settings,
             config_edits: None,
             config_error: None,
+            config_error_path: None,
             ime_allowed: false,
             last_activity: Instant::now(),
             last_trim: None,
@@ -363,6 +371,102 @@ impl App {
             smoke,
             pending_exit: false,
         }
+    }
+
+    /// Active editor-group index, clamped to the current group count.
+    fn active_group_index(&self) -> usize {
+        self.editor_groups
+            .active
+            .min(self.editor_groups.groups.len().saturating_sub(1))
+    }
+
+    fn active_path(&self) -> Option<PathBuf> {
+        self.editor_groups.active_path().map(Path::to_path_buf)
+    }
+
+    fn config_path(&self) -> Option<PathBuf> {
+        self.config_edits
+            .as_ref()
+            .map(|editor| editor.path().to_path_buf())
+            .or_else(|| self.config_error_path.clone())
+    }
+
+    /// Open/pin every visible viewer, then lend distinct mutable borrows to the
+    /// frame. The return lifetime is tied only to the buffer cache.
+    fn prepare_group_viewers<'a>(
+        buffers: &'a mut BufferCache,
+        groups: &mut EditorGroups,
+        config_path: Option<PathBuf>,
+    ) -> [Option<&'a mut Viewer>; 2] {
+        let desired: Vec<PathBuf> = groups
+            .visible_paths()
+            .into_iter()
+            .filter(|path| Some(*path) != config_path.as_deref())
+            .map(Path::to_path_buf)
+            .collect();
+        let pins: Vec<&Path> = desired.iter().map(PathBuf::as_path).collect();
+        for path in &desired {
+            match buffers.get_or_open_pinned(path, &pins) {
+                Ok(_) => {
+                    if let Some(group) = groups
+                        .groups
+                        .iter_mut()
+                        .find(|group| group.active.as_deref() == Some(path.as_path()))
+                    {
+                        group.error = None;
+                    }
+                }
+                Err(e) => {
+                    error!("viewer: {e}");
+                    if let Some(group) = groups
+                        .groups
+                        .iter_mut()
+                        .find(|group| group.active.as_deref() == Some(path.as_path()))
+                    {
+                        group.error = Some(e.to_string());
+                    }
+                }
+            }
+        }
+        let ready: Vec<PathBuf> = desired
+            .into_iter()
+            .filter(|path| buffers.contains(path))
+            .collect();
+        let refs: Vec<&Path> = ready.iter().map(PathBuf::as_path).collect();
+        let mut viewers = buffers.viewers_mut(&refs).into_iter();
+        let mut out = [None, None];
+        for (index, group) in groups.groups.iter().enumerate() {
+            if index >= out.len() {
+                break;
+            }
+            if group
+                .active
+                .as_ref()
+                .is_some_and(|path| ready.contains(path))
+            {
+                out[index] = viewers.next();
+            }
+        }
+        out
+    }
+
+    fn evict_group_tabs(&mut self, paths: Vec<PathBuf>) {
+        let config_path = self.config_path();
+        for path in paths {
+            if Some(path.as_path()) != config_path.as_deref() {
+                self.buffers.evict(&path);
+            }
+        }
+    }
+
+    fn sync_active_pane(&mut self) {
+        let is_config = (self.config_edits.is_some() || self.config_error.is_some())
+            && self.config_path().as_deref() == self.editor_groups.active_path();
+        self.pane = if is_config {
+            PaneMode::Config
+        } else {
+            PaneMode::Viewer
+        };
     }
 
     /// Request one redraw when a window exists.
@@ -380,24 +484,15 @@ impl App {
         if size.width == 0 || size.height == 0 {
             return None;
         }
-        Some(match &self.git {
-            // M8: a repo root gets the commit panel under the tree; M12 keeps
-            // the terminal dock visible whenever tabs exist.
-            Some(_) => frame::app_layout_with_commit(
-                size.width as f64 / self.scale,
-                size.height as f64 / self.scale,
-                self.split.position,
-                true,
-                true,
-            ),
-            None => frame::app_layout_with_commit(
-                size.width as f64 / self.scale,
-                size.height as f64 / self.scale,
-                self.split.position,
-                false,
-                true,
-            ),
-        })
+        Some(frame::app_layout_with_groups(
+            size.width as f64 / self.scale,
+            size.height as f64 / self.scale,
+            self.split.position,
+            self.git.is_some(),
+            true,
+            self.editor_groups.divider,
+            self.editor_groups.groups.len(),
+        ))
     }
 
     /// Terminal grid as if the dock were open (new tab spawn size).
@@ -419,6 +514,36 @@ impl App {
         )
     }
 
+    /// Scroll the viewer in the group under the pointer, pinning both visible
+    /// paths while the cache is touched.
+    fn route_wheel_viewer_group(&mut self, group: usize, rect: Rect, dy: f64) -> bool {
+        let Some(path) = self.editor_groups.groups.get(group).and_then(|g| g.active.clone()) else {
+            return false;
+        };
+        if Some(path.as_path()) == self.config_path().as_deref() {
+            return false;
+        }
+        let visible: Vec<PathBuf> = self
+            .editor_groups
+            .visible_paths()
+            .into_iter()
+            .filter(|path| Some(*path) != self.config_path().as_deref())
+            .map(Path::to_path_buf)
+            .collect();
+        let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+        let Ok(viewer) = self.buffers.get_or_open_pinned(&path, &pins) else {
+            return false;
+        };
+        let viewport_lines = (rect.h / LINE_H).floor() as usize;
+        let dy_lines = (dy / LINE_H).round() as i64;
+        if !viewer.scroll_by_lines(dy_lines, viewport_lines) {
+            return false;
+        }
+        let (cw, ch) = (self.canvas.width(), self.canvas.height());
+        self.damage.mark(damage_rect(rect, self.scale, cw, ch));
+        true
+    }
+
     /// Whether the tracked pointer is inside the window (logical px) — for
     /// arming the click flag on release.
     fn pointer_in_window(&self) -> bool {        let Some(window) = &self.window else { return false };
@@ -438,6 +563,14 @@ impl App {
         // app_layout borrows all of self; it must finish before the surface
         // borrow below.
         let Some(layout) = self.app_layout() else { return };
+        let active_group = self.active_group_index();
+        let active_path = self.active_path();
+        let config_path = self.config_path();
+        let group_viewers = Self::prepare_group_viewers(
+            &mut self.buffers,
+            &mut self.editor_groups,
+            config_path,
+        );
         let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
             return;
         };
@@ -466,49 +599,32 @@ impl App {
         let pointer = self.pointer;
         self.pointer.click = false;
         let dbl = std::mem::take(&mut self.pending_dbl);
-        // Tab strip order: LRU files (most-recent first) + the one config
-        // editor. Bounded by the cache cap plus one.
-        let mut open_files = self.buffers.lru_paths();
-        if let Some(editor) = &self.config_edits {
-            let config_path = editor.path().to_path_buf();
-            if !open_files.contains(&config_path) {
-                open_files.push(config_path);
-            }
-        }
-        let active_path = match self.pane {
-            PaneMode::Config => self.config_edits.as_ref().map(|e| e.path().to_path_buf()),
-            _ => self.open_path.clone(),
-        };
-        // The open viewer (editor body) — borrowed from the LRU cache; the
-        // open file is always most-recently-used, so the cache never evicts
-        // it mid-frame. Terminal tabs no longer replace the editor body.
-        let viewer = match (self.pane, self.open_path.as_deref()) {
-            (PaneMode::Config, _) => None,
-            (_, Some(p)) => self.buffers.get_or_open(Path::new(p)).ok(),
-            (_, None) => None,
-        };
         let terms = if self.terms.is_open() {
             Some(&mut self.terms)
         } else {
             None
         };
-        let config = if self.pane == PaneMode::Config {
-            self.config_edits.as_mut()
-        } else {
-            None
-        };
-        let config_error = if self.pane == PaneMode::Config {
-            self.config_error.as_deref()
-        } else {
-            None
-        };
-        let viewer_error = self.viewer_error.as_deref();
+        let config = self.config_edits.as_mut();
+        let config_error = self.config_error.as_deref();
+        let config_error_path = self.config_error_path.as_deref();
         let git = self.git.as_deref();
         let file_diff = self
             .file_diff
             .as_ref()
-            .filter(|(p, _)| Some(p) == self.open_path.as_ref())
-            .map(|(_, d)| d.as_ref());
+            .filter(|(path, _)| Some(path) == active_path.as_ref())
+            .map(|(_, diff)| diff.as_ref());
+        let flash_path = if self.flash_until.is_some_and(|deadline| Instant::now() < deadline) {
+            self.flash_path.clone()
+        } else {
+            None
+        };
+        let mut group_flash = [false; 2];
+        for (index, group) in self.editor_groups.groups.iter().enumerate() {
+            if index >= group_flash.len() {
+                break;
+            }
+            group_flash[index] = group.active.as_deref() == flash_path.as_deref();
+        }
         let effects = frame::draw_frame(
             &mut Frame {
                 canvas: &mut self.canvas,
@@ -517,13 +633,20 @@ impl App {
                 scale: self.scale,
                 title: &self.title,
                 root: &self.root,
-                open_files: &open_files,
+                open_files: &[],
                 active_path: active_path.as_deref(),
                 activity: self.activity,
+                groups: Some(&self.editor_groups.groups),
+                active_group,
+                group_viewers,
+                group_flash,
+                group_scrollbars: Some(&mut self.group_scrollbars),
+                group_split: Some(&mut self.editor_groups.divider),
+                group_split_drag: Some(&mut self.group_split_drag),
                 pointer,
                 dbl_click: dbl,
-                viewer,
-                viewer_error,
+                viewer: None,
+                viewer_error: None,
                 viewer_flash: self.flash_until.is_some_and(|d| Instant::now() < d),
                 highlighter: &self.highlighter,
                 git,
@@ -531,6 +654,7 @@ impl App {
                 commit: Some(&mut self.commit),
                 config,
                 config_error,
+                config_error_path,
                 terms,
                 term_focused: self.term_focused,
             },
@@ -539,7 +663,7 @@ impl App {
             &mut self.split,
             &mut self.split_drag,
             &mut self.scrollbar,
-            &mut self.viewer_scrollbar,
+            &mut Scrollbar::default(),
         );
         // Post-raster damage for state changes made during the frame (the
         // marks schedule the next present).
@@ -553,36 +677,18 @@ impl App {
         }
         if effects.viewer_scrolled {
             let (cw, ch) = (self.canvas.width(), self.canvas.height());
-            self.damage.mark(damage_rect(layout.viewer_pane, self.scale, cw, ch));
+            for group in layout.editor_groups.iter().take(layout.editor_group_count) {
+                self.damage.mark(damage_rect(group.body, self.scale, cw, ch));
+            }
         }
         let mut need_redraw = false;
         let mut pending_config: Option<PathBuf> = None;
+        let mut pending_viewer: Option<(PathBuf, usize)> = None;
         if let Some(path) = effects.opened {
             if config::is_editable(&self.root, &path, &self.settings.editable) {
-                // Whitelisted config → open the enforced editor AFTER the
-                // present (the method needs &mut self, which the surface
-                // borrow above still holds).
                 pending_config = Some(path);
             } else {
-                // Double-click open: goes through the LRU cache; a failure
-                // (Io / binary refusal) surfaces in the pane and logs.
-                match self.buffers.get_or_open(&path) {
-                    Ok(_) => {
-                        info!("viewer: opened {}", path.display());
-                        self.open_path = Some(path);
-                        self.viewer_error = None;
-                        self.pane = PaneMode::Viewer;
-                        self.activity = frame::ActivityPanel::Explorer;
-                        self.term_focused = false;
-                        self.commit.message.focused = false;
-                    }
-                    Err(e) => {
-                        error!("viewer: {e}");
-                        self.viewer_error = Some(e.to_string());
-                        self.pane = PaneMode::Viewer;
-                    }
-                }
-                self.damage.mark_full();
+                pending_viewer = Some((path, active_group));
             }
             need_redraw = true;
         }
@@ -613,11 +719,26 @@ impl App {
         if let Some(panel) = effects.set_activity {
             self.set_activity(panel);
         }
-        if let Some(path) = effects.select_tab {
-            self.select_tab(path);
+        if effects.commit_toggled || effects.group_split_moved {
+            self.damage.mark_full();
         }
-        if let Some(path) = effects.close_tab {
-            self.close_tab(path);
+        if let Some(group) = effects.focus_group {
+            self.focus_editor_group(group);
+        }
+        if effects.toggle_split {
+            self.toggle_editor_split();
+        }
+        if let Some(group) = effects.close_group {
+            self.close_editor_group(group);
+        }
+        if let Some((group, path)) = effects.select_tab {
+            self.select_tab(group, path);
+        }
+        if let Some((group, path)) = effects.close_tab {
+            self.close_tab(group, path);
+        }
+        if let Some((path, group)) = pending_viewer {
+            self.open_viewer(path, group);
         }
         if let Some(path) = pending_config {
             self.open_config(path);
@@ -688,7 +809,7 @@ impl App {
     /// no longer open) is dropped on arrival. Without a proxy (tests) it
     /// runs inline.
     fn request_diff_refresh(&mut self) {
-        let Some(p) = self.open_path.clone() else {
+        let Some(p) = self.active_path() else {
             self.file_diff = None;
             return;
         };
@@ -769,16 +890,31 @@ impl App {
                 }
             }
             frame::ActivityPanel::Config => {
-                if self.config_edits.is_some() {
+                if let Some(path) = self.config_path() {
+                    if let Some(group) = self.editor_groups.group_owning(&path) {
+                        self.editor_groups.active = group;
+                        self.sync_active_pane();
+                    }
+                }
+                if self.config_edits.is_some() || self.config_error.is_some() {
                     self.pane = PaneMode::Config;
                 }
                 self.term_focused = false;
                 self.commit.message.focused = false;
             }
             frame::ActivityPanel::Explorer => {
-                if self.config_edits.is_some() || self.pane == PaneMode::Config {
-                    self.pane = PaneMode::Viewer;
+                if let Some(group) = self
+                    .editor_groups
+                    .groups
+                    .iter()
+                    .position(|group| {
+                        group.active.is_some()
+                            && group.active.as_deref() != self.config_path().as_deref()
+                    })
+                {
+                    self.editor_groups.active = group;
                 }
+                self.sync_active_pane();
                 self.term_focused = false;
                 self.commit.message.focused = false;
             }
@@ -790,94 +926,253 @@ impl App {
         self.request_redraw();
     }
 
-    /// M12: select a file/config tab. Config paths enter the config editor;
-    /// every other path opens through the LRU cache.
-    fn select_tab(&mut self, path: PathBuf) {
-        if Some(path.as_path()) == self.config_edits.as_ref().map(|e| e.path()) {
-            self.pane = PaneMode::Config;
-            self.activity = frame::ActivityPanel::Config;
-            self.term_focused = false;
-            self.damage.mark_full();
-            self.request_redraw();
-            return;
+    /// Open a viewer in a group, or focus the group that already owns it.
+    fn open_viewer(&mut self, path: PathBuf, group: usize) {
+        if group < self.editor_groups.groups.len() {
+            self.editor_groups.active = group;
         }
-        match self.buffers.get_or_open(&path) {
+        let result = self.editor_groups.open(path.clone());
+        let owner = match result {
+            editor_groups::OpenResult::Opened { group, evicted } => {
+                if let Some(evicted) = evicted {
+                    self.buffers.evict(&evicted);
+                }
+                group
+            }
+            editor_groups::OpenResult::FocusedExisting(group) => group,
+        };
+        self.editor_groups.active = owner;
+        let visible: Vec<PathBuf> = self
+            .editor_groups
+            .visible_paths()
+            .into_iter()
+            .filter(|path| Some(*path) != self.config_path().as_deref())
+            .map(Path::to_path_buf)
+            .collect();
+        let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+        match self.buffers.get_or_open_pinned(&path, &pins) {
             Ok(_) => {
-                self.open_path = Some(path);
-                self.viewer_error = None;
-                self.pane = PaneMode::Viewer;
-                self.activity = frame::ActivityPanel::Explorer;
-                self.term_focused = false;
-                self.request_diff_refresh();
+                info!("viewer: opened {}", path.display());
+                self.editor_groups.groups[owner].error = None;
             }
             Err(e) => {
                 error!("viewer: {e}");
-                self.viewer_error = Some(e.to_string());
+                self.editor_groups.groups[owner].error = Some(e.to_string());
             }
         }
+        self.pane = PaneMode::Viewer;
+        self.activity = frame::ActivityPanel::Explorer;
+        self.term_focused = false;
+        self.commit.message.focused = false;
+        self.request_diff_refresh();
         self.damage.mark_full();
         self.request_redraw();
     }
 
-    /// M12: close a file/config tab. Closing the active viewer tab selects
-    /// the most recently used remaining file.
-    fn close_tab(&mut self, path: PathBuf) {
-        if Some(path.as_path()) == self.config_edits.as_ref().map(|e| e.path()) {
-            self.close_config();
-            self.activity = frame::ActivityPanel::Explorer;
+    fn focus_editor_group(&mut self, group: usize) {
+        if group >= self.editor_groups.groups.len() {
             return;
         }
-        let was_active = self.open_path.as_deref() == Some(path.as_path());
-        self.buffers.evict(&path);
-        if was_active {
-            self.open_path = self
-                .buffers
-                .lru_paths()
-                .into_iter()
-                .next()
-                .filter(|p| Some(p.as_path()) != self.config_edits.as_ref().map(|e| e.path()));
-            if self.open_path.is_none() {
-                self.viewer_error = None;
-            }
-            self.pane = PaneMode::Viewer;
-            self.request_diff_refresh();
-        }
+        self.editor_groups.active = group;
+        self.sync_active_pane();
+        self.activity = if self.pane == PaneMode::Config {
+            frame::ActivityPanel::Config
+        } else {
+            frame::ActivityPanel::Explorer
+        };
+        self.term_focused = false;
+        self.request_diff_refresh();
         self.damage.mark_full();
         self.request_redraw();
     }
 
-    /// Open a whitelisted config file in the enforced editor. Failures render
-    /// in the pane (never a silent viewer fallback).
-    fn open_config(&mut self, path: PathBuf) {        match ConfigEditor::open(&self.root, &path, &self.settings.editable) {
+    fn toggle_editor_split(&mut self) {
+        let was_split = self.editor_groups.is_split();
+        if !was_split {
+            if let Some(layout) = self.app_layout() {
+                if layout.editor_card.w < 640.0 {
+                    return;
+                }
+            }
+        }
+        let closed = self.editor_groups.toggle_split();
+        let closed_config = self
+            .config_path()
+            .is_some_and(|path| closed.contains(&path));
+        self.evict_group_tabs(closed);
+        if closed_config {
+            self.close_config();
+        }
+        if was_split {
+            self.editor_groups.active = 0;
+        }
+        self.sync_active_pane();
+        self.activity = if self.pane == PaneMode::Config {
+            frame::ActivityPanel::Config
+        } else {
+            frame::ActivityPanel::Explorer
+        };
+        self.term_focused = false;
+        self.request_diff_refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn close_editor_group(&mut self, group: usize) {
+        if group != 1 || !self.editor_groups.is_split() {
+            return;
+        }
+        let closed = self.editor_groups.close_secondary_group();
+        let closed_config = self
+            .config_path()
+            .is_some_and(|path| closed.contains(&path));
+        self.evict_group_tabs(closed);
+        if closed_config {
+            self.close_config();
+        }
+        self.sync_active_pane();
+        self.activity = if self.pane == PaneMode::Config {
+            frame::ActivityPanel::Config
+        } else {
+            frame::ActivityPanel::Explorer
+        };
+        self.request_diff_refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Close the active group's tab. Returns false when both groups are empty.
+    fn close_active_editor_tab(&mut self) -> bool {
+        let group = self.active_group_index();
+        let Some(path) = self
+            .editor_groups
+            .groups
+            .get(group)
+            .and_then(|group| group.active.clone())
+        else {
+            return false;
+        };
+        if Some(path.as_path()) == self.config_path().as_deref() {
+            self.close_config();
+        } else {
+            self.close_tab(group, path);
+        }
+        true
+    }
+
+    /// Select a tab in its owning group. Config paths enter the enforced editor.
+    fn select_tab(&mut self, group: usize, path: PathBuf) {
+        let Some(owner) = self.editor_groups.select(group, &path) else {
+            return;
+        };
+        if Some(path.as_path()) == self.config_path().as_deref() {
+            self.pane = PaneMode::Config;
+            self.activity = frame::ActivityPanel::Config;
+        } else {
+            let visible: Vec<PathBuf> = self
+                .editor_groups
+                .visible_paths()
+                .into_iter()
+                .filter(|path| Some(*path) != self.config_path().as_deref())
+                .map(Path::to_path_buf)
+                .collect();
+            let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+            if let Err(e) = self.buffers.get_or_open_pinned(&path, &pins) {
+                error!("viewer: {e}");
+                self.editor_groups.groups[owner].error = Some(e.to_string());
+            }
+            self.pane = PaneMode::Viewer;
+            self.activity = frame::ActivityPanel::Explorer;
+            self.request_diff_refresh();
+        }
+        self.term_focused = false;
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Close one tab and evict its viewer after the last group reference.
+    fn close_tab(&mut self, group: usize, path: PathBuf) {
+        if self.editor_groups.close_tab(group, &path).is_none() {
+            return;
+        }
+        if Some(path.as_path()) == self.config_path().as_deref() {
+            self.close_config();
+        } else {
+            self.buffers.evict(&path);
+        }
+        self.sync_active_pane();
+        self.activity = if self.pane == PaneMode::Config {
+            frame::ActivityPanel::Config
+        } else {
+            frame::ActivityPanel::Explorer
+        };
+        self.request_diff_refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Open a whitelisted config file as a tab in the active editor group.
+    fn open_config(&mut self, path: PathBuf) {
+        if let Some(old) = self.config_path() {
+            for group in &mut self.editor_groups.groups {
+                if let Some(index) = group.tabs.iter().position(|tab| tab == &old) {
+                    group.tabs.remove(index);
+                    if group.active.as_ref() == Some(&old) {
+                        group.active = group.tabs.get(index).or_else(|| index.checked_sub(1).and_then(|i| group.tabs.get(i))).cloned();
+                    }
+                }
+            }
+        }
+        if let editor_groups::OpenResult::Opened { evicted: Some(evicted), .. } =
+            self.editor_groups.open(path.clone())
+        {
+            self.buffers.evict(&evicted);
+        }
+        self.buffers.evict(&path);
+        self.config_error_path = Some(path.clone());
+        match ConfigEditor::open(&self.root, &path, &self.settings.editable) {
             Ok(editor) => {
                 info!("config editor: {} ({:?})", path.display(), editor.kind());
                 self.config_edits = Some(editor);
                 self.config_error = None;
-                self.pane = PaneMode::Config;
-                self.activity = frame::ActivityPanel::Config;
-                self.term_focused = false;
-                self.commit.message.focused = false;
-                self.viewer_error = None;
+                self.config_error_path = None;
             }
             Err(e) => {
                 error!("config editor: {e}");
                 self.config_edits = None;
                 self.config_error = Some(e.to_string());
-                self.pane = PaneMode::Config;
-                self.activity = frame::ActivityPanel::Config;
-                self.term_focused = false;
             }
         }
+        self.pane = PaneMode::Config;
+        self.activity = frame::ActivityPanel::Config;
+        self.term_focused = false;
+        self.commit.message.focused = false;
         self.damage.mark_full();
         self.request_redraw();
     }
 
-    /// Close the config editor and return to the last viewed file.
+    /// Close the config tab and return focus to the group's remaining tab.
     fn close_config(&mut self) {
+        let path = self.config_path();
+        if let Some(path) = path {
+            for group in &mut self.editor_groups.groups {
+                if let Some(index) = group.tabs.iter().position(|tab| tab == &path) {
+                    group.tabs.remove(index);
+                    if group.active.as_ref() == Some(&path) {
+                        group.active = group.tabs.get(index).or_else(|| index.checked_sub(1).and_then(|i| group.tabs.get(i))).cloned();
+                    }
+                }
+            }
+        }
         self.config_edits = None;
         self.config_error = None;
-        self.pane = PaneMode::Viewer;
-        self.activity = frame::ActivityPanel::Explorer;
+        self.config_error_path = None;
+        self.sync_active_pane();
+        self.activity = if self.pane == PaneMode::Config {
+            frame::ActivityPanel::Config
+        } else {
+            frame::ActivityPanel::Explorer
+        };
         self.damage.mark_full();
         self.request_redraw();
     }
@@ -932,7 +1227,9 @@ impl App {
 
     /// Pane to show after the last terminal tab closes (config wins if open).
     fn pane_after_terminals(&self) -> PaneMode {
-        if self.config_edits.is_some() || self.config_error.is_some() {
+        if (self.config_edits.is_some() || self.config_error.is_some())
+            && self.config_path().as_deref() == self.editor_groups.active_path()
+        {
             PaneMode::Config
         } else {
             PaneMode::Viewer
@@ -1092,24 +1389,32 @@ impl App {
                 viewer_changed = true;
             }
         }
-        if let Some(p) = self.open_path.clone() {
+        let config_path = self.config_path();
+        let visible: Vec<PathBuf> = self
+            .editor_groups
+            .visible_paths()
+            .into_iter()
+            .filter(|path| Some(*path) != config_path.as_deref())
+            .map(Path::to_path_buf)
+            .collect();
+        let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+        for path in &visible {
             let disk_changed = self
                 .buffers
-                .get_or_open(&p)
-                .map(|v| v.changed_on_disk())
+                .get_or_open_pinned(path, &pins)
+                .map(|viewer| viewer.changed_on_disk())
                 .unwrap_or(false);
             if disk_changed {
-                match self.buffers.refresh(&p) {
+                match self.buffers.refresh_pinned(path, &pins) {
                     Ok(_) => {
-                        info!("viewer refreshed (changed on disk): {}", p.display());
+                        info!("viewer refreshed: {}", path.display());
                         self.flash_until = Some(Instant::now() + FLASH_DURATION);
+                        self.flash_path = Some(path.clone());
                         viewer_changed = true;
                         self.request_diff_refresh();
                     }
                     Err(e) => {
-                        // Keep the old view: a vanished/binary file never
-                        // blanks the pane.
-                        error!("viewer refresh failed (keeping the old view): {e}");
+                        error!("viewer refresh failed (keeping old view): {e}");
                     }
                 }
             }
@@ -1225,7 +1530,7 @@ impl ApplicationHandler<Wake> for App {
             Wake::GitStatus(status) => self.apply_git_status(status),
             Wake::GitDiff { path, diff } => {
                 // Stale-diff guard: only the currently open file applies.
-                if self.open_path.as_deref() == Some(path.as_path()) {
+                if self.active_path().as_deref() == Some(path.as_path()) {
                     self.file_diff = Some((path, diff));
                     self.damage.mark_full();
                     self.request_redraw();
@@ -1273,6 +1578,7 @@ impl ApplicationHandler<Wake> for App {
         if let Some(d) = self.flash_until {
             if now >= d {
                 self.flash_until = None;
+                self.flash_path = None;
                 self.damage.mark_full();
                 self.request_redraw();
             } else {
@@ -1326,7 +1632,12 @@ impl ApplicationHandler<Wake> for App {
                 let over_commit = self.activity == frame::ActivityPanel::SourceControl
                     && layout
                         .as_ref()
-                        .and_then(frame::source_control_panel)
+                        .and_then(|layout| {
+                            frame::source_control_panel_for_group(
+                                layout,
+                                self.active_group_index(),
+                            )
+                        })
                         .is_some_and(|rect| rect.contains(self.pointer.x, self.pointer.y));
                 let over_grid = layout
                     .as_ref()
@@ -1388,8 +1699,11 @@ impl ApplicationHandler<Wake> for App {
                 // Source Control owns the wheel while its card is active,
                 // whether it is hosted in the sidebar or compact editor body.
                 if self.activity == frame::ActivityPanel::SourceControl {
-                    if let Some(rect) = frame::source_control_panel(&layout)
-                        .filter(|rect| rect.contains(x, y))
+                    if let Some(rect) = frame::source_control_panel_for_group(
+                        &layout,
+                        self.active_group_index(),
+                    )
+                    .filter(|rect| rect.contains(x, y))
                     {
                         if self.git.is_some() {
                             let total = self.git.as_ref().map_or(0, |g| g.entries.len());
@@ -1403,32 +1717,55 @@ impl ApplicationHandler<Wake> for App {
                         return;
                     }
                 }
-                // M9: wheel over the config pane scrolls its list/textarea.
-                if self.pane == PaneMode::Config && layout.viewer_pane.contains(x, y) {
-                    if let Some(editor) = &mut self.config_edits {
-                        if editor.scroll_by(dy) {
-                            let (cw, ch) = (self.canvas.width(), self.canvas.height());
-                            let rect = damage_rect(layout.viewer_pane, self.scale, cw, ch);
-                            self.damage.mark(rect);
-                            self.request_redraw();
+                // Config wheel routing follows the group under the pointer.
+                if self.pane == PaneMode::Config {
+                    for (index, group_layout) in layout
+                        .editor_groups
+                        .iter()
+                        .take(layout.editor_group_count)
+                        .enumerate()
+                    {
+                        if !group_layout.body.contains(x, y) {
+                            continue;
+                        }
+                        let is_config = self
+                            .editor_groups
+                            .groups
+                            .get(index)
+                            .and_then(|group| group.active.as_deref())
+                            == self.config_path().as_deref();
+                        if is_config {
+                            if let Some(editor) = &mut self.config_edits {
+                                if editor.scroll_by(dy) {
+                                    let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                                    let rect = damage_rect(group_layout.body, self.scale, cw, ch);
+                                    self.damage.mark(rect);
+                                    self.request_redraw();
+                                }
+                            }
+                            return;
                         }
                     }
-                    return;
                 }
                 let grid = layout.term_grid;
-                let (scale, canvas, damage) = (self.scale, &self.canvas, &mut self.damage);
                 let scrolled = if layout.tree_panel.contains(x, y) {
-                    route_wheel_scroll(&mut self.tree, dy, &layout, scale, canvas, damage)
+                    route_wheel_scroll(
+                        &mut self.tree,
+                        dy,
+                        &layout,
+                        self.scale,
+                        &self.canvas,
+                        &mut self.damage,
+                    )
                 } else if grid.contains(x, y) && self.terms.is_open() {
                     route_wheel_term(self, dy, &grid)
-                } else if layout.viewer_pane.contains(x, y) {
-                    match self.open_path.as_deref() {
-                        Some(p) => match self.buffers.get_or_open(Path::new(p)) {
-                            Ok(v) => route_wheel_viewer(v, dy, &layout, scale, canvas, damage),
-                            Err(_) => false,
-                        },
-                        None => false,
-                    }
+                } else if let Some(group) = layout
+                    .editor_groups
+                    .iter()
+                    .take(layout.editor_group_count)
+                    .position(|group| group.body.contains(x, y))
+                {
+                    self.route_wheel_viewer_group(group, layout.editor_groups[group].body, dy)
                 } else {
                     false
                 };
@@ -1471,8 +1808,7 @@ impl ApplicationHandler<Wake> for App {
                                 return;
                             }
                             "w" | "W" => {
-                                if self.pane == PaneMode::Config {
-                                    self.close_config();
+                                if self.close_active_editor_tab() {
                                     return;
                                 }
                                 self.close_terminal_tab();
@@ -1533,15 +1869,25 @@ impl ApplicationHandler<Wake> for App {
                 if !is_c {
                     return;
                 }
-                let copied = self
-                    .open_path
-                    .as_deref()
-                    .and_then(|p| self.buffers.get_or_open(Path::new(p)).ok())
-                    .and_then(|v| v.selection_text())
-                    .map(|text| {
-                        let n = text.chars().count();
-                        viewer::copy_to_clipboard(&text).map(|_| n)
-                    });
+                let copied = self.active_path().and_then(|path| {
+                    let config_path = self.config_path();
+                    let visible: Vec<PathBuf> = self
+                        .editor_groups
+                        .visible_paths()
+                        .into_iter()
+                        .filter(|path| Some(*path) != config_path.as_deref())
+                        .map(Path::to_path_buf)
+                        .collect();
+                    let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+                    self.buffers
+                        .get_or_open_pinned(&path, &pins)
+                        .ok()
+                        .and_then(|viewer| viewer.selection_text())
+                        .map(|text| {
+                            let n = text.chars().count();
+                            viewer::copy_to_clipboard(&text).map(|_| n)
+                        })
+                });
                 match copied {
                     Some(Ok(n)) => info!("copied {n} chars to the clipboard"),
                     Some(Err(e)) => error!("copy failed: {e}"),
