@@ -253,8 +253,6 @@ struct App {
     last_render: Option<Instant>,
     /// A terminal-area repaint was deferred past the frame budget.
     term_paint_due: bool,
-    /// Retained terminal tab-strip widget (labels synced with the tabs).
-    term_tabbar: ui::TabBar,
     /// "Changed on disk" flash deadline (cleared by a scheduled redraw).
     flash_until: Option<Instant>,
     /// Last tree re-list (debounce reference point).
@@ -330,7 +328,7 @@ impl App {
             pointer: Pointer::default(),
             proxy,
             tree,
-            split: Split { position: 280.0 },
+            split: Split { position: 304.0 },
             split_drag: SplitDrag::default(),
             scrollbar: Scrollbar::default(),
             buffers: BufferCache::new(BUFFER_CACHE_CAP),
@@ -346,7 +344,6 @@ impl App {
             term_focused: false,
             last_render: None,
             term_paint_due: false,
-            term_tabbar: ui::TabBar::default(),
             flash_until: None,
             last_tree_refresh: None,
             fs_dirty: false,
@@ -391,14 +388,14 @@ impl App {
                 size.height as f64 / self.scale,
                 self.split.position,
                 true,
-                self.terms.is_open(),
+                true,
             ),
             None => frame::app_layout_with_commit(
                 size.width as f64 / self.scale,
                 size.height as f64 / self.scale,
                 self.split.position,
                 false,
-                self.terms.is_open(),
+                true,
             ),
         })
     }
@@ -531,12 +528,10 @@ impl App {
                 highlighter: &self.highlighter,
                 git,
                 file_diff,
-                commit: &mut self.commit,
                 config,
                 config_error,
                 terms,
                 term_focused: self.term_focused,
-                tabbar: &mut self.term_tabbar,
             },
             &layout,
             &mut self.tree,
@@ -596,13 +591,11 @@ impl App {
             self.pending_exit = true;
         }
         self.last_render = Some(Instant::now());
-        // M8 submit actions run AFTER the raster pass that detected them
-        // (they open a PTY tab and schedule a fresh frame).
-        if effects.commit_clicked {
-            self.commit_now();
+        if effects.open_terminal {
+            self.open_terminal_tab();
         }
-        if effects.push_clicked {
-            self.push_now();
+        if effects.close_terminal {
+            self.close_terminal_tab();
         }
         if effects.config_save {
             self.save_config();
@@ -738,6 +731,23 @@ impl App {
             }
             Err(e) => error!("terminal open failed: {e}"),
         }
+    }
+
+    /// Close the active terminal tab and return focus to the remaining editor
+    /// surface when the last shell is gone.
+    fn close_terminal_tab(&mut self) {
+        self.terms.close_active();
+        if !self.terms.is_open() {
+            self.pane = self.pane_after_terminals();
+            self.activity = if self.pane == PaneMode::Config {
+                frame::ActivityPanel::Config
+            } else {
+                frame::ActivityPanel::Explorer
+            };
+            self.term_focused = false;
+        }
+        self.damage.mark_full();
+        self.request_redraw();
     }
 
     /// M12: activity-bar focus routing. The bar highlights the active panel;
@@ -921,6 +931,7 @@ impl App {
     /// M8: run an exact git action in a terminal tab so its output streams
     /// (the M6 PTY reader does the streaming — ark keeps no capture buffer).
     /// Returns whether the tab opened.
+    #[allow(dead_code)] // retained for the future Source Control card
     fn run_git_command(&mut self, label: &str, command: &str) -> bool {
         let Some(proxy) = self.proxy.clone() else {
             error!("{label}: cannot run without an event-loop proxy");
@@ -957,6 +968,7 @@ impl App {
 
     /// M8 Commit: validate the panel, then stage the checked paths and commit
     /// with the typed message in a streaming terminal tab.
+    #[allow(dead_code)] // retained for the future Source Control card
     fn commit_now(&mut self) {
         let Some(status) = self.git.clone() else {
             self.commit.error = Some("not a git repository".into());
@@ -987,6 +999,7 @@ impl App {
     }
 
     /// M8 Push: `git push` in a streaming terminal tab.
+    #[allow(dead_code)] // retained for the future Source Control card
     fn push_now(&mut self) {
         if self.git.is_none() {
             self.commit.error = Some("not a git repository".into());
@@ -1447,18 +1460,7 @@ impl ApplicationHandler<Wake> for App {
                                     self.close_config();
                                     return;
                                 }
-                                self.terms.close_active();
-                                if !self.terms.is_open() {
-                                    self.pane = self.pane_after_terminals();
-                                    self.activity = if self.pane == PaneMode::Config {
-                                        frame::ActivityPanel::Config
-                                    } else {
-                                        frame::ActivityPanel::Explorer
-                                    };
-                                    self.term_focused = false;
-                                }
-                                self.damage.mark_full();
-                                self.request_redraw();
+                                self.close_terminal_tab();
                                 return;
                             }
                             "s" | "S" if self.pane == PaneMode::Config => {

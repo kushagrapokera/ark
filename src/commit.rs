@@ -12,6 +12,10 @@
 //! quoted `git add … && git commit …` line that the app streams through a
 //! PTY terminal tab (M6); `git::PUSH_COMMAND` does the same for push.
 
+// Retained for the future Source Control card; the current supplied design
+// shows a static activity-bar placeholder instead of this panel.
+#![allow(dead_code)]
+
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};

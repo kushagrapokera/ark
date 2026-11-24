@@ -10,59 +10,691 @@ use std::fs;
 // ---- layout ----
 
 #[test]
-fn app_layout_matches_spec() {
-    let l = app_layout(1024.0, 768.0, 280.0);
-    assert_eq!(l.activity_bar, Rect { x: 0.0, y: 88.0, w: 48.0, h: 656.0 });
-    assert_eq!(l.tree_panel, Rect { x: 56.0, y: 88.0, w: 216.0, h: 656.0 });
-    assert_eq!(l.scroll_track, Rect { x: 264.0, y: 88.0, w: 8.0, h: 656.0 });
-    assert_eq!(l.editor_tabs, Rect { x: 296.0, y: 88.0, w: 720.0, h: 30.0 });
-    assert_eq!(l.breadcrumb, Rect { x: 296.0, y: 118.0, w: 720.0, h: 22.0 });
-    assert_eq!(l.viewer_pane, Rect { x: 296.0, y: 140.0, w: 720.0, h: 604.0 });
-    assert_eq!(l.term_dock, Rect { x: 296.0, y: 744.0, w: 720.0, h: 0.0 });
-    assert_eq!(l.split_area, Rect { x: 0.0, y: 88.0, w: 1024.0, h: 656.0 });
-    assert_eq!(l.status, Rect { x: 0.0, y: 744.0, w: 1024.0, h: 24.0 });
+fn app_layout_matches_card_design() {
+    let l = app_layout(1024.0, 768.0, 304.0);
+    assert_eq!(
+        l.title_bar,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1024.0,
+            h: 36.0
+        }
+    );
+    assert_eq!(
+        l.workbench,
+        Rect {
+            x: 8.0,
+            y: 44.0,
+            w: 1008.0,
+            h: 692.0
+        }
+    );
+    assert_eq!(
+        l.activity_bar,
+        Rect {
+            x: 8.0,
+            y: 44.0,
+            w: 48.0,
+            h: 692.0
+        }
+    );
+    assert_eq!(
+        l.explorer_card,
+        Rect {
+            x: 64.0,
+            y: 44.0,
+            w: 240.0,
+            h: 692.0
+        }
+    );
+    assert_eq!(
+        l.tree_panel,
+        Rect {
+            x: 72.0,
+            y: 108.0,
+            w: 224.0,
+            h: 564.0
+        }
+    );
+    assert_eq!(
+        l.scroll_track,
+        Rect {
+            x: 288.0,
+            y: 108.0,
+            w: 8.0,
+            h: 564.0
+        }
+    );
+    assert_eq!(
+        l.editor_card,
+        Rect {
+            x: 312.0,
+            y: 44.0,
+            w: 704.0,
+            h: 692.0
+        }
+    );
+    assert_eq!(
+        l.editor_tabs,
+        Rect {
+            x: 312.0,
+            y: 44.0,
+            w: 704.0,
+            h: 36.0
+        }
+    );
+    assert_eq!(
+        l.breadcrumb,
+        Rect {
+            x: 312.0,
+            y: 80.0,
+            w: 704.0,
+            h: 24.0
+        }
+    );
+    assert_eq!(
+        l.viewer_pane,
+        Rect {
+            x: 320.0,
+            y: 104.0,
+            w: 624.0,
+            h: 624.0
+        }
+    );
+    assert_eq!(
+        l.minimap,
+        Rect {
+            x: 952.0,
+            y: 104.0,
+            w: 56.0,
+            h: 624.0
+        }
+    );
+    assert_eq!(
+        l.term_dock,
+        Rect {
+            x: 312.0,
+            y: 736.0,
+            w: 704.0,
+            h: 0.0
+        }
+    );
+    assert_eq!(
+        l.split_area,
+        Rect {
+            x: 304.0,
+            y: 44.0,
+            w: 8.0,
+            h: 692.0
+        }
+    );
+    assert_eq!(
+        l.status,
+        Rect {
+            x: 0.0,
+            y: 744.0,
+            w: 1024.0,
+            h: 24.0
+        }
+    );
 
     // Degenerate window sizes never produce negative extents.
     let tiny = app_layout(400.0, 300.0, 160.0);
     assert!(tiny.tree_panel.w >= 0.0 && tiny.tree_panel.h >= 0.0);
     assert!(tiny.viewer_pane.w >= 0.0 && tiny.status.y >= 0.0);
-    assert_eq!(app_layout(1024.0, 768.0, 8.0).tree_panel.w, 0.0, "split at the margin");
-    assert_eq!(l.commit_panel, Rect { x: 56.0, y: 744.0, w: 216.0, h: 0.0 }, "hidden by default");
-}
-
-#[test]
-fn app_layout_commit_panel_splits_the_sidebar() {
-    let l = app_layout_with_commit(1024.0, 768.0, 280.0, true, false);
-    // 656px content − 236px panel = a 420px tree; the editor is unchanged.
-    assert_eq!(l.tree_panel, Rect { x: 56.0, y: 88.0, w: 216.0, h: 420.0 });
-    assert_eq!(l.scroll_track, Rect { x: 264.0, y: 88.0, w: 8.0, h: 420.0 });
     assert_eq!(
-        l.commit_panel,
-        Rect { x: 56.0, y: 508.0, w: 216.0, h: crate::commit::PANEL_H }
+        app_layout(1024.0, 768.0, 8.0).explorer_card.w,
+        160.0,
+        "minimum explorer width"
     );
-    assert_eq!(l.viewer_pane, Rect { x: 296.0, y: 140.0, w: 720.0, h: 604.0 });
-
-    // Tiny windows: the panel caps at 60% of the content area, never negative.
-    let tiny = app_layout_with_commit(400.0, 300.0, 160.0, true, false);
-    assert!((tiny.commit_panel.h - 112.8).abs() < 1e-9, "60% of 188px");
-    assert!((tiny.tree_panel.h - 75.2).abs() < 1e-9);
-    // No repo → full-height tree, zero-height panel.
-    let no_git = app_layout_with_commit(1024.0, 768.0, 280.0, false, false);
-    assert_eq!(no_git.tree_panel.h, 656.0);
-    assert_eq!(no_git.commit_panel.h, 0.0);
+    assert_eq!(
+        l.commit_panel.h, 0.0,
+        "commit panel hidden in the card design"
+    );
 }
 
 #[test]
-fn app_layout_terminal_dock_reserves_the_bottom() {
-    let l = app_layout_with_commit(1024.0, 768.0, 280.0, true, true);
-    assert_eq!(l.term_dock, Rect { x: 296.0, y: 524.0, w: 720.0, h: 220.0 });
-    assert_eq!(l.term_tabbar, Rect { x: 296.0, y: 524.0, w: 660.0, h: 30.0 });
-    assert_eq!(l.term_grid, Rect { x: 296.0, y: 554.0, w: 720.0, h: 190.0 });
-    assert_eq!(l.viewer_pane, Rect { x: 296.0, y: 140.0, w: 720.0, h: 384.0 });
-    // Tiny windows cap the dock at 40% of the content area.
+fn responsive_layout_prioritizes_editor_on_small_windows() {
+    let small = app_layout_with_commit(480.0, 640.0, 304.0, true, true);
+    assert_eq!(small.explorer_card.w, 0.0, "compact width hides Explorer");
+    assert_eq!(small.tree_panel.w, 0.0);
+    assert_eq!(
+        small.split_area.w, 0.0,
+        "hidden Explorer has no resize handle"
+    );
+    assert!(sidebar_handle(&small, 304.0).is_none());
+    assert_eq!(small.minimap.w, 0.0, "narrow editor hides minimap");
+    assert_eq!(small.activity_bar.w, 40.0, "compact activity card");
+    assert!(
+        small.editor_card.w > small.workbench.w * 0.75,
+        "editor receives the space freed by Explorer"
+    );
+    assert_eq!(
+        small.term_dock.h, 140.0,
+        "compact width shrinks the terminal"
+    );
+    assert_eq!(small.terminal_sessions.w, 0.0);
+
+    let short = app_layout_with_commit(600.0, 480.0, 304.0, true, true);
+    assert_eq!(short.explorer_card.w, 0.0);
+    assert_eq!(short.minimap.w, 0.0);
+    assert_eq!(short.terminal_toolbar.h, 30.0);
+    assert!(short.term_grid.h > 0.0 && short.viewer_pane.h > 0.0);
+
+    let full = app_layout_with_commit(1440.0, 900.0, 304.0, true, true);
+    assert_eq!(full.explorer_card.w, 240.0);
+    assert_eq!(full.minimap.w, 56.0);
+    assert!(
+        full.editor_card.w > 1_000.0,
+        "large window expands the editor"
+    );
+    assert_eq!(full.term_dock.h, 224.0);
+
+    // Every region remains non-negative at the window's minimum size.
+    let minimum = app_layout_with_commit(400.0, 300.0, 304.0, true, true);
+    for rect in [
+        minimum.activity_bar,
+        minimum.explorer_card,
+        minimum.editor_card,
+        minimum.viewer_pane,
+        minimum.term_dock,
+        minimum.term_grid,
+        minimum.status,
+    ] {
+        assert!(rect.w >= 0.0 && rect.h >= 0.0, "degenerate rect: {rect:?}");
+    }
+}
+
+#[test]
+fn compact_editor_tabs_stay_clear_of_actions() {
+    let layout = app_layout_with_commit(480.0, 640.0, 304.0, false, true);
+    let strip = chrome::tab_strip(&layout);
+    assert!(
+        strip.w >= layout.editor_card.w - 60.0,
+        "narrow strips reserve only the actions that are drawn"
+    );
+    let rects = file_tab_rects(strip, 9);
+    assert!(!rects.is_empty());
+    assert!(
+        rects.last().expect("tab").x + rects.last().expect("tab").w <= strip.x + strip.w,
+        "bounded tab cache never paints under editor actions"
+    );
+
+    let full = app_layout(1024.0, 768.0, 304.0);
+    assert_eq!(
+        chrome::tab_strip(&full).w,
+        588.0,
+        "full layout keeps all actions"
+    );
+}
+
+#[test]
+fn hidden_explorer_does_not_draw_a_resize_handle() {
+    let (_d, mut tree) = scene_fixture("hidden-handle");
+    let theme = frame_theme();
+    let layout = app_layout_with_commit(480.0, 640.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(480, 640);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.fg_dim, 296, 44, 320, 80),
+        0,
+        "the divider handle disappears with the Explorer card"
+    );
+}
+
+#[test]
+fn compact_terminal_plus_button_opens_the_first_shell() {
+    let (_d, mut tree) = scene_fixture("compact-terminal");
+    let theme = frame_theme();
+    let layout = app_layout_with_commit(480.0, 640.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(480, 640);
+    let plus_x = layout.term_dock.x + layout.term_dock.w - 58.0;
+    let plus_y = layout.term_dock.y + layout.terminal_toolbar.h / 2.0;
+    let effects = draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: plus_x,
+            y: plus_y,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+    );
+    assert!(
+        effects.open_terminal,
+        "compact toolbar keeps + aligned and clickable"
+    );
+}
+
+#[test]
+fn short_activity_bar_keeps_config_action_reachable() {
+    let (_d, mut tree) = scene_fixture("compact-activity");
+    let theme = frame_theme();
+    let layout = app_layout_with_commit(400.0, 300.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(400, 300);
+    let effects = draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: 28.0,
+            y: 190.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+    );
+    assert_eq!(
+        effects.set_activity,
+        Some(ActivityPanel::Config),
+        "functional actions stay reachable when optional activity icons are hidden"
+    );
+}
+
+#[test]
+fn compact_breadcrumb_stays_inside_the_editor_card() {
+    let (_d, mut tree) = scene_fixture("compact-breadcrumb");
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    let layout = app_layout_with_commit(480.0, 640.0, 304.0, false, true);
+    let path = PathBuf::from(
+        "/repo/a/very/long/project/path/with/many/components/that/overflows/the/editor/breadcrumb.rs",
+    );
+    let files = vec![path.clone()];
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(480, 640);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &files,
+        Some(&path),
+    );
+    let pad_x = (layout.breadcrumb.x + layout.breadcrumb.w) as u32;
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(
+            &canvas,
+            theme.surface_chrome,
+            pad_x,
+            layout.breadcrumb.y as u32,
+            480,
+            (layout.breadcrumb.y + layout.breadcrumb.h) as u32,
+        ),
+        0,
+        "breadcrumb ink is clipped to the editor card"
+    );
+}
+
+#[test]
+fn compact_title_bar_keeps_controls_inside_the_window() {
+    let (_d, mut tree) = scene_fixture("compact-title");
+    let mut theme = frame_theme();
+    theme.text_muted = (77, 77, 77);
+
+    let narrow = app_layout_with_commit(400.0, 300.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(400, 300);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &narrow,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.accent, 399, 7, 400, 29),
+        0,
+        "Update never extends past the title bar"
+    );
+
+    let medium = app_layout_with_commit(900.0, 700.0, 304.0, false, true);
+    let mut canvas = Canvas::new(900, 700);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &medium,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.text_muted, 720, 9, 774, 27),
+        0,
+        "optional title icons do not overlap Update"
+    );
+}
+
+#[test]
+fn compact_status_bar_drops_optional_items_before_the_left_cluster() {
+    let (_d, mut tree) = scene_fixture("compact-status");
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.text_muted = (77, 77, 77);
+    let layout = app_layout_with_commit(400.0, 300.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(400, 300);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(
+            &canvas,
+            theme.surface_chrome,
+            180,
+            layout.status.y as u32 + 1,
+            240,
+            layout.status.y as u32 + 23,
+        ),
+        0,
+        "right-aligned status items leave a gap after the branch controls"
+    );
+    assert!(
+        crate::ui::testutil::count_not_color_in(
+            &canvas,
+            theme.surface_chrome,
+            300,
+            layout.status.y as u32 + 1,
+            400,
+            layout.status.y as u32 + 23,
+        ) > 0,
+        "essential status items remain visible"
+    );
+}
+
+#[test]
+fn app_layout_keeps_commit_panel_hidden() {
+    let l = app_layout_with_commit(1024.0, 768.0, 304.0, true, false);
+    assert_eq!(
+        l.tree_panel,
+        Rect {
+            x: 72.0,
+            y: 108.0,
+            w: 224.0,
+            h: 564.0
+        }
+    );
+    assert_eq!(l.commit_panel.h, 0.0);
+    assert_eq!(
+        l.viewer_pane,
+        Rect {
+            x: 320.0,
+            y: 104.0,
+            w: 624.0,
+            h: 624.0
+        }
+    );
+}
+
+#[test]
+fn app_layout_terminal_card_reserves_the_bottom() {
+    let l = app_layout_with_commit(1024.0, 768.0, 304.0, true, true);
+    assert_eq!(
+        l.term_dock,
+        Rect {
+            x: 312.0,
+            y: 512.0,
+            w: 704.0,
+            h: 224.0
+        }
+    );
+    assert_eq!(
+        l.terminal_toolbar,
+        Rect {
+            x: 312.0,
+            y: 512.0,
+            w: 704.0,
+            h: 36.0
+        }
+    );
+    assert_eq!(
+        l.term_grid,
+        Rect {
+            x: 320.0,
+            y: 548.0,
+            w: 652.0,
+            h: 180.0
+        }
+    );
+    assert_eq!(
+        l.terminal_sessions,
+        Rect {
+            x: 980.0,
+            y: 548.0,
+            w: 36.0,
+            h: 188.0
+        }
+    );
+    assert_eq!(
+        l.viewer_pane,
+        Rect {
+            x: 320.0,
+            y: 104.0,
+            w: 624.0,
+            h: 392.0
+        }
+    );
+    // Tiny windows use the compact terminal fraction and smaller headers.
     let tiny = app_layout_with_commit(400.0, 300.0, 160.0, false, true);
-    assert!((tiny.term_dock.h - 75.2).abs() < 1e-9, "40% of 188px");
-    assert_eq!(tiny.viewer_pane.h, 60.8);
+    assert!((tiny.term_dock.h - 81.2).abs() < 1e-9, "35% of 232px");
+    assert!((tiny.viewer_pane.h - 90.8).abs() < 1e-9);
+    assert!((tiny.term_grid.h - 47.2).abs() < 1e-9);
+}
+
+#[test]
+fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
+    let (_d, mut tree) = scene_fixture("terminal-placeholder");
+    let mut theme = frame_theme();
+    theme.text_muted = (77, 77, 77);
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, true, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let mut split = Split { position: 304.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+    let effects = {
+        let mut frame = Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            root: Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
+            pointer: Pointer::default(),
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
+            config: None,
+            config_error: None,
+            terms: None,
+            term_focused: false,
+        };
+        draw_frame(
+            &mut frame,
+            &layout,
+            &mut tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            &mut viewer_scrollbar,
+        )
+    };
+    assert!(!effects.open_terminal && !effects.close_terminal);
+    let (plus, _) = chrome::terminal_actions(&layout);
+    let plus = plus.expect("terminal toolbar action");
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.text_muted,
+            plus.x as u32,
+            plus.y as u32,
+            (plus.x + plus.w) as u32,
+            (plus.y + plus.h) as u32
+        ) > 0,
+        "terminal + glyph paints above its hit-area background"
+    );
+    assert!(count_color_in(&canvas, theme.border_subtle, 312, 512, 1016, 736) > 1000);
+    assert!(count_color_in(&canvas, theme.text_dim, 320, 548, 900, 620) > 0);
+
+    let effects = {
+        let mut frame = Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            root: Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
+            pointer: Pointer {
+                x: 898.0,
+                y: 522.0,
+                down: false,
+                click: true,
+            },
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
+            config: None,
+            config_error: None,
+            terms: None,
+            term_focused: false,
+        };
+        draw_frame(
+            &mut frame,
+            &layout,
+            &mut tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            &mut viewer_scrollbar,
+        )
+    };
+    assert!(
+        effects.open_terminal,
+        "placeholder terminal + opens the first PTY tab"
+    );
+}
+
+#[test]
+fn vertical_terminal_sessions_switch_the_active_pty() {
+    let d = temp_dir("terminal-sessions");
+    let size = term::GridSize { cols: 80, rows: 24 };
+    let mut terms = TerminalTabs::default();
+    for label in ["first", "second"] {
+        terms.tabs.push(
+            term::Terminal::spawn_program_with(d.path(), Path::new("/bin/cat"), label, size, || {})
+                .expect("spawn test terminal"),
+        );
+    }
+    terms.active = 0;
+    assert_eq!(terms.tabs.len(), 2);
+    let (_tree_dir, mut tree) = scene_fixture("terminal-sessions-frame");
+    let theme = frame_theme();
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let mut split = Split { position: 304.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+    let sessions = layout.terminal_sessions;
+    let click = Pointer {
+        x: sessions.x + 18.0,
+        y: sessions.y + 8.0 + 32.0 + 12.0,
+        down: false,
+        click: true,
+    };
+    assert!(Rect {
+        x: sessions.x + 6.0,
+        y: sessions.y + 40.0,
+        w: 24.0,
+        h: 24.0
+    }
+    .contains(click.x, click.y));
+    draw_frame(
+        &mut Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            root: Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
+            pointer: click,
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
+            config: None,
+            config_error: None,
+            terms: Some(&mut terms),
+            term_focused: false,
+        },
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert_eq!(
+        terms.active, 1,
+        "second session icon selects the second PTY"
+    );
 }
 
 // ---- status line ----
@@ -94,9 +726,15 @@ fn frame_status_formats_tree_state() {
         fs::File::create(d2.path().join(format!("f{i}.txt"))).expect("create");
     }
     let mut big = FileTree::new(d2.path());
-    assert!(big.scroll_by(1000.0, 66.0), "10 rows in a 3-row viewport overflows");
+    assert!(
+        big.scroll_by(1000.0, 66.0),
+        "10 rows in a 3-row viewport overflows"
+    );
     assert_eq!(big.offset, 154.0, "clamped to the max offset");
-    assert!(frame_status(&big, None, None, None, None, 66.0).contains("scroll 100% · no git"), "max offset → 100%");
+    assert!(
+        frame_status(&big, None, None, None, None, 66.0).contains("scroll 100% · no git"),
+        "max offset → 100%"
+    );
     big.select(&big.root.join("f3.txt"));
     assert!(
         frame_status(&big, None, None, None, None, 66.0).contains("selected f3.txt"),
@@ -108,7 +746,10 @@ fn frame_status_formats_tree_state() {
     let missing = temp_dir("status-missing");
     let gone = missing.path().join("gone");
     let err_tree = FileTree::new(&gone);
-    assert!(frame_status(&err_tree, None, None, None, None, 66.0).contains("cannot list"), "error surfaces");
+    assert!(
+        frame_status(&err_tree, None, None, None, None, 66.0).contains("cannot list"),
+        "error surfaces"
+    );
 }
 
 #[test]
@@ -141,7 +782,8 @@ fn frame_status_formats_viewer_state() {
     let trunc = Viewer::open_with_cap(&big, 50).expect("opens");
     assert!(trunc.truncated());
     assert!(
-        frame_status(&tree, Some(&trunc), None, None, None, 632.0).contains("big.txt 25 lines · truncated"),
+        frame_status(&tree, Some(&trunc), None, None, None, 632.0)
+            .contains("big.txt 25 lines · truncated"),
         "{}",
         frame_status(&tree, Some(&trunc), None, None, None, 632.0)
     );
@@ -160,16 +802,70 @@ fn scene_fixture(label: &str) -> (TempDir, FileTree) {
     (d, tree)
 }
 
+#[allow(clippy::too_many_arguments)] // one explicit test-frame context
+fn draw_static_frame(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    tree: &mut FileTree,
+    layout: &AppLayout,
+    pointer: Pointer,
+    open_files: &[PathBuf],
+    active_path: Option<&Path>,
+) -> FrameEffects {
+    let mut split = Split { position: 304.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+    draw_frame(
+        &mut Frame {
+            canvas,
+            text,
+            theme,
+            scale: 1.0,
+            title: "ark",
+            root: Path::new("/repo"),
+            open_files,
+            active_path,
+            activity: ActivityPanel::Explorer,
+            pointer,
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: None,
+            file_diff: None,
+            config: None,
+            config_error: None,
+            terms: None,
+            term_focused: false,
+        },
+        layout,
+        tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    )
+}
+
 /// Chrome-invisible theme: only the tokens under pin are distinct.
 fn frame_theme() -> Theme {
     let bg = (0, 0, 0);
     Theme {
         bg,
+        surface_chrome: bg,
+        surface: bg,
         bg_elevated: (10, 20, 30),
+        surface_hover: bg,
         fg: (255, 255, 255),
         fg_dim: (90, 90, 90),
+        text_muted: bg,
+        text_dim: bg,
         accent: (200, 220, 255),
         border: (60, 60, 70),
+        border_subtle: bg,
         selection: (40, 50, 60),
         syntax_keyword: (203, 166, 247),
         syntax_string: (166, 227, 161),
@@ -202,8 +898,12 @@ fn frame_theme() -> Theme {
 #[test]
 fn frame_scene_renders_spec_surfaces() {
     let (_d, mut tree) = scene_fixture("scene");
-    let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.surface = (2, 2, 2);
+    theme.border_subtle = (3, 3, 3);
+    theme.text_muted = (90, 90, 90);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
     let mut split = Split { position: 280.0 };
@@ -218,10 +918,10 @@ fn frame_scene_renders_spec_surfaces() {
             theme: &theme,
             scale: 1.0,
             title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
+            root: std::path::Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
             pointer: Pointer::default(),
             dbl_click: false,
             viewer: None,
@@ -230,12 +930,10 @@ fn frame_scene_renders_spec_surfaces() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
-            commit: &mut CommitPanel::default(),
             config: None,
             config_error: None,
             terms: None,
             term_focused: false,
-            tabbar: &mut TabBar::default(),
         },
         &layout,
         &mut tree,
@@ -244,32 +942,53 @@ fn frame_scene_renders_spec_surfaces() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    assert!(!effects.tree_changed && !effects.scrolled, "static frame changes nothing");
+    assert!(
+        !effects.tree_changed && !effects.scrolled,
+        "static frame changes nothing"
+    );
     assert_eq!(effects.opened, None);
 
-    // Header (accent) + info line (dim) ink.
-    assert!(count_color_in(&canvas, theme.accent, 0, 20, 400, 50) > 0, "header ink");
-    assert_eq!(
-        count_color_in(&canvas, theme.fg_dim, 0, 50, 260, 70),
-        0,
-        "debug info line is removed"
+    // Title bar, card chrome, tree, minimap and status surfaces.
+    assert!(
+        count_color_in(&canvas, theme.accent, 0, 0, 40, 36) > 0,
+        "title icon"
     );
-    assert_eq!(
-        count_color_in(&canvas, theme.bg, 700, 8, 1016, 30),
-        316 * 22,
-        "agent launcher buttons are removed"
+    assert!(
+        count_color_in(&canvas, theme.border_subtle, 64, 44, 304, 736) > 1000,
+        "explorer card border"
     );
-    // Tree rows: fg ink inside the panel's top rows.
-    assert!(count_color_in(&canvas, theme.fg, 56, 88, 272, 200) > 0, "tree row ink");
-    // Scrollbar track + thumb ink at the panel's right edge.
-    assert!(count_color_in(&canvas, theme.bg_elevated, 264, 88, 272, 744) > 100, "track");
-    assert!(count_color_in(&canvas, theme.fg_dim, 264, 88, 272, 744) > 100, "thumb");
-    // Placeholder pane (no viewer open): border ink + centered dim text.
-    assert!(count_color_in(&canvas, theme.border, 296, 140, 1016, 744) > 2000, "border");
-    assert!(count_color_in(&canvas, theme.fg_dim, 400, 300, 912, 500) > 0, "placeholder text");
-    // Status bar: accent fill + on-accent text.
-    assert!(count_color_in(&canvas, theme.accent, 0, 744, 1024, 768) > 10_000, "status accent bar");
-    assert!(count_color_in(&canvas, theme.on_accent, 0, 744, 900, 768) > 0, "status ink");
+    assert!(
+        count_color_in(&canvas, theme.border_subtle, 312, 44, 1016, 736) > 1000,
+        "editor card border"
+    );
+    assert!(
+        count_color_in(&canvas, theme.fg, 72, 108, 296, 300) > 0,
+        "tree row ink"
+    );
+    assert!(
+        count_color_in(&canvas, theme.bg_elevated, 288, 108, 296, 672) > 100,
+        "track"
+    );
+    assert!(
+        count_color_in(&canvas, theme.fg_dim, 288, 108, 296, 672) > 100,
+        "thumb"
+    );
+    assert!(
+        count_color_in(&canvas, theme.text_dim, 952, 104, 1008, 300) > 0,
+        "minimap placeholder"
+    );
+    assert!(
+        count_color_in(&canvas, theme.fg_dim, 320, 104, 944, 728) > 0,
+        "placeholder text"
+    );
+    assert!(
+        count_color_in(&canvas, theme.accent, 0, 744, 32, 768) > 500,
+        "status remote block"
+    );
+    assert!(
+        count_color_in(&canvas, theme.text_muted, 32, 744, 1024, 768) > 0,
+        "status ink"
+    );
 }
 
 #[test]
@@ -282,10 +1001,10 @@ fn frame_viewer_pane_renders_over_placeholder() {
     let mut viewer = Viewer::open(&file).expect("opens");
 
     let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
+    let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
@@ -297,10 +1016,10 @@ fn frame_viewer_pane_renders_over_placeholder() {
             theme: &theme,
             scale: 1.0,
             title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
+            root: std::path::Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
             pointer: Pointer::default(),
             dbl_click: false,
             viewer: Some(&mut viewer),
@@ -309,12 +1028,10 @@ fn frame_viewer_pane_renders_over_placeholder() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
-            commit: &mut CommitPanel::default(),
             config: None,
             config_error: None,
             terms: None,
             term_focused: false,
-            tabbar: &mut TabBar::default(),
         },
         &layout,
         &mut tree,
@@ -328,23 +1045,20 @@ fn frame_viewer_pane_renders_over_placeholder() {
     // dim ink and code fg ink inside the pane; NO placeholder text below it
     // would remain (the viewer fills the pane).
     assert!(
-        count_color_in(&canvas, theme.bg_elevated, 296, 140, 300, 744) > 300,
+        count_color_in(&canvas, theme.bg_elevated, 320, 104, 324, 300) > 300,
         "viewer gutter mark strip"
     );
-    assert!(count_color_in(&canvas, theme.fg_dim, 296, 140, 1016, 250) > 0, "line numbers");
-    assert!(count_color_in(&canvas, theme.fg, 300, 140, 1008, 250) > 0, "code text ink");
     assert!(
-        count_color_in(&canvas, theme.syntax_keyword, 300, 140, 1008, 250) > 0,
-        "`fn` keyword ink in the first lines"
+        count_color_in(&canvas, theme.fg_dim, 320, 104, 944, 250) > 0,
+        "line numbers"
     );
-    // No border rect anymore (the viewer pane has no outline): border ink in
-    // the pane's bottom strip is gone compared to the placeholder.
-    // The x-range excludes the scrollbar track (whose outline is
-    // border-colored).
-    assert_eq!(
-        count_color_in(&canvas, theme.border, 296, 724, 1000, 742),
-        0,
-        "viewer pane paints no placeholder border"
+    assert!(
+        count_color_in(&canvas, theme.fg, 320, 104, 944, 250) > 0,
+        "code text ink"
+    );
+    assert!(
+        count_color_in(&canvas, theme.syntax_keyword, 320, 104, 944, 250) > 0,
+        "`fn` keyword ink in the first lines"
     );
 }
 
@@ -352,10 +1066,10 @@ fn frame_viewer_pane_renders_over_placeholder() {
 fn frame_interactions_report_effects() {
     let (_d, mut tree) = scene_fixture("effects");
     let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
+    let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
@@ -379,12 +1093,10 @@ fn frame_interactions_report_effects() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
-        commit: &mut CommitPanel::default(),
         config: None,
         config_error: None,
         terms: None,
         term_focused: false,
-        tabbar: &mut TabBar::default(),
     };
     let mut draw_at = |frame: &mut Frame,
                        pointer: Pointer,
@@ -394,25 +1106,79 @@ fn frame_interactions_report_effects() {
                        viewer_scrollbar: &mut Scrollbar| {
         frame.pointer = pointer;
         frame.dbl_click = dbl;
-        draw_frame(frame, &layout, tree, &mut split, &mut split_drag, scrollbar, viewer_scrollbar)
+        draw_frame(
+            frame,
+            &layout,
+            tree,
+            &mut split,
+            &mut split_drag,
+            scrollbar,
+            viewer_scrollbar,
+        )
     };
 
     // Click the chevron of row 0 (dir "A") → toggles, full-damage flag.
-    let click_chevron = Pointer { x: 63.0, y: 99.0, down: false, click: true };
-    let effects = draw_at(&mut frame, click_chevron, false, &mut tree, &mut scrollbar, &mut viewer_scrollbar);
-    assert!(effects.tree_changed && !effects.scrolled, "chevron click toggles");
+    let click_chevron = Pointer {
+        x: 80.0,
+        y: 119.0,
+        down: false,
+        click: true,
+    };
+    let effects = draw_at(
+        &mut frame,
+        click_chevron,
+        false,
+        &mut tree,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(
+        effects.tree_changed && !effects.scrolled,
+        "chevron click toggles"
+    );
     assert!(tree.is_expanded(&tree.root.join("A")));
 
     // Scrollbar thumb drag: press the thumb at the track top (offset 0),
     // drag past the free-span end → offset clamps to max, scrolled flag.
-    let press = Pointer { x: 268.0, y: 89.0, down: true, click: false };
-    let effects = draw_at(&mut frame, press, false, &mut tree, &mut scrollbar, &mut viewer_scrollbar);
+    let press = Pointer {
+        x: 292.0,
+        y: 110.0,
+        down: true,
+        click: false,
+    };
+    let effects = draw_at(
+        &mut frame,
+        press,
+        false,
+        &mut tree,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
     assert!(!effects.scrolled, "grabbing the thumb doesn't move it yet");
-    let drag = Pointer { x: 268.0, y: 600.0, down: true, click: false };
-    let effects = draw_at(&mut frame, drag, false, &mut tree, &mut scrollbar, &mut viewer_scrollbar);
-    assert!(effects.scrolled && !effects.tree_changed, "thumb drag scrolls");
+    let drag = Pointer {
+        x: 292.0,
+        y: 600.0,
+        down: true,
+        click: false,
+    };
+    let effects = draw_at(
+        &mut frame,
+        drag,
+        false,
+        &mut tree,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(
+        effects.scrolled && !effects.tree_changed,
+        "thumb drag scrolls"
+    );
     let content = tree.visible_count() as f64 * ROW_H;
-    assert_eq!(tree.offset, content - 656.0, "drag past the end clamps to max offset");
+    assert_eq!(
+        tree.offset,
+        content - layout.tree_panel.h,
+        "drag past the end clamps to max offset"
+    );
 
     // Collapse-while-scrolled self-heal: the row set shrinks underneath a
     // large offset (API-level mutation standing in for any out-of-frame
@@ -421,22 +1187,36 @@ fn frame_interactions_report_effects() {
     assert!(tree.toggle(&tree.root.join("A"), true), "collapse A");
     let stale_content = tree.visible_count() as f64 * ROW_H;
     assert!(
-        tree.offset > stale_content - 656.0,
+        tree.offset > stale_content - layout.tree_panel.h,
         "offset is stale-large after the collapse"
     );
-    let effects = draw_at(&mut frame, Pointer::default(), false, &mut tree, &mut scrollbar, &mut viewer_scrollbar);
-    assert!(effects.scrolled && !effects.tree_changed, "clamp reports the heal as a scroll");
-    assert_eq!(tree.offset, stale_content - 656.0, "offset re-clamped to the new max");
+    let effects = draw_at(
+        &mut frame,
+        Pointer::default(),
+        false,
+        &mut tree,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(
+        effects.scrolled && !effects.tree_changed,
+        "clamp reports the heal as a scroll"
+    );
+    assert_eq!(
+        tree.offset,
+        stale_content - layout.tree_panel.h,
+        "offset re-clamped to the new max"
+    );
 }
 
 #[test]
 fn frame_double_click_opens_and_viewer_scrolls() {
     let (_d, mut tree) = scene_fixture("dbl-open");
     let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, true, true);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
+    let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
@@ -444,7 +1224,11 @@ fn frame_double_click_opens_and_viewer_scrolls() {
     // A viewed file OUTSIDE the tree fixture dir (100 lines for overflow).
     let vd = temp_dir("dbl-open-file");
     let file = vd.path().join("viewed.txt");
-    fs::write(&file, (0..100).map(|i| format!("line {i}\n")).collect::<String>()).expect("write");
+    fs::write(
+        &file,
+        (0..100).map(|i| format!("line {i}\n")).collect::<String>(),
+    )
+    .expect("write");
     let mut viewer = Viewer::open(&file).expect("opens");
 
     // The viewer stays open in the pane for every frame (the App keeps the
@@ -467,12 +1251,10 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
-        commit: &mut CommitPanel::default(),
         config: None,
         config_error: None,
         terms: None,
         term_focused: false,
-        tabbar: &mut TabBar::default(),
     };
     let mut draw_at = |frame: &mut Frame,
                        pointer: Pointer,
@@ -481,21 +1263,39 @@ fn frame_double_click_opens_and_viewer_scrolls() {
                        viewer_scrollbar: &mut Scrollbar| {
         frame.pointer = pointer;
         frame.dbl_click = dbl;
-        draw_frame(frame, &layout, tree, &mut split, &mut split_drag, &mut scrollbar, viewer_scrollbar)
+        draw_frame(
+            frame,
+            &layout,
+            tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            viewer_scrollbar,
+        )
     };
 
-    // Double-click on file row 1 ("f00.txt", band [110, 132)) → Opened.
+    // Double-click on file row 1 ("f00.txt", band [130, 152)) → Opened.
     // (The first click already selected it in a prior frame.)
     let _ = draw_at(
         &mut frame,
-        Pointer { x: 100.0, y: 121.0, down: false, click: true },
+        Pointer {
+            x: 100.0,
+            y: 141.0,
+            down: false,
+            click: true,
+        },
         false,
         &mut tree,
         &mut viewer_scrollbar,
     );
     let effects = draw_at(
         &mut frame,
-        Pointer { x: 100.0, y: 121.0, down: false, click: true },
+        Pointer {
+            x: 100.0,
+            y: 141.0,
+            down: false,
+            click: true,
+        },
         true,
         &mut tree,
         &mut viewer_scrollbar,
@@ -508,18 +1308,32 @@ fn frame_double_click_opens_and_viewer_scrolls() {
 
     // Viewer scrollbar thumb drag past the end → offset clamps to the max
     // line offset and reports viewer_scrolled (viewer rect damage only).
-    let press = Pointer { x: 1012.0, y: 141.0, down: true, click: false };
+    let press = Pointer {
+        x: 940.0,
+        y: 110.0,
+        down: true,
+        click: false,
+    };
     let effects = draw_at(&mut frame, press, false, &mut tree, &mut viewer_scrollbar);
-    assert!(!effects.viewer_scrolled, "grabbing the viewer thumb doesn't move it");
-    let drag = Pointer { x: 1012.0, y: 700.0, down: true, click: false };
+    assert!(
+        !effects.viewer_scrolled,
+        "grabbing the viewer thumb doesn't move it"
+    );
+    let drag = Pointer {
+        x: 940.0,
+        y: 700.0,
+        down: true,
+        click: false,
+    };
     let effects = draw_at(&mut frame, drag, false, &mut tree, &mut viewer_scrollbar);
     // The same drag extends the text selection (tree_changed rides the
     // event-level full damage); the scrollbar reports viewer_scrolled.
     assert!(effects.viewer_scrolled, "viewer thumb drag scrolls");
+    let viewport_lines = (layout.viewer_pane.h / LINE_H).floor() as usize;
     assert_eq!(
         viewer.offset_lines(),
-        68,
-        "drag past the end clamps to the scrollbar's last line"
+        viewer.line_count().saturating_sub(viewport_lines),
+        "drag past the end clamps to the last full viewport"
     );
 }
 
@@ -538,18 +1352,23 @@ fn viewer_flash_paints_accent_strip() {
     let mut canvas = Canvas::new(1024, 768);
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
-    let mut tabbar = TabBar::default();
 
     // draw_frame fills the background itself; a free fn (not a closure) so
     // canvas borrows end before each pixel assertion.
     #[allow(clippy::too_many_arguments)] // borrows must outlive no closure: explicit beats bundled
-    fn draw(flash: bool, viewer: &mut Viewer, canvas: &mut Canvas, text: &mut TextSystem,
-            theme: &Theme, tree: &mut FileTree, scrollbar: &mut Scrollbar,
-            viewer_scrollbar: &mut Scrollbar, tabbar: &mut TabBar) {
-        let layout = app_layout(1024.0, 768.0, 280.0);
-        let mut split = Split { position: 280.0 };
+    fn draw(
+        flash: bool,
+        viewer: &mut Viewer,
+        canvas: &mut Canvas,
+        text: &mut TextSystem,
+        theme: &Theme,
+        tree: &mut FileTree,
+        scrollbar: &mut Scrollbar,
+        viewer_scrollbar: &mut Scrollbar,
+    ) -> FrameEffects {
+        let layout = app_layout(1024.0, 768.0, 304.0);
+        let mut split = Split { position: 304.0 };
         let mut split_drag = SplitDrag::default();
-        let mut commit = CommitPanel::default();
         draw_frame(
             &mut Frame {
                 canvas,
@@ -557,10 +1376,10 @@ fn viewer_flash_paints_accent_strip() {
                 theme,
                 scale: 1.0,
                 title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
+                root: std::path::Path::new("/"),
+                open_files: &[],
+                active_path: None,
+                activity: ActivityPanel::Explorer,
                 pointer: Pointer::default(),
                 dbl_click: false,
                 viewer: Some(viewer),
@@ -569,12 +1388,10 @@ fn viewer_flash_paints_accent_strip() {
                 highlighter: &Highlighter::new(),
                 git: None,
                 file_diff: None,
-                commit: &mut commit,
                 config: None,
                 config_error: None,
                 terms: None,
                 term_focused: false,
-                tabbar,
             },
             &layout,
             tree,
@@ -582,156 +1399,38 @@ fn viewer_flash_paints_accent_strip() {
             &mut split_drag,
             scrollbar,
             viewer_scrollbar,
-        );
+        )
     }
 
-    draw(true, &mut viewer, &mut canvas, &mut text, &theme, &mut tree, &mut scrollbar, &mut viewer_scrollbar, &mut tabbar);
-    assert!(
-        count_color_in(&canvas, theme.accent, 296, 140, 1016, 143) >= 720 * 3,
-        "flash paints the accent strip across the pane's top edge"
-    );
-    draw(false, &mut viewer, &mut canvas, &mut text, &theme, &mut tree, &mut scrollbar, &mut viewer_scrollbar, &mut tabbar);
-    assert_eq!(
-        count_color_in(&canvas, theme.accent, 296, 140, 1016, 143),
-        0,
-        "no flash → no strip"
-    );
-}
-
-#[test]
-fn frame_draws_commit_panel_and_reports_clicks() {
-    let (_d, mut tree) = scene_fixture("commit-frame");
-    let status = crate::git::parse_status(
-        "? new.txt\n1 .M N... 000000 100644 100644 111 222 src/main.rs\n",
-    )
-    .rooted(tree.root.as_path());
-    let theme = frame_theme();
-    let layout = app_layout_with_commit(1024.0, 768.0, 280.0, true, false);
-    let mut text = TextSystem::new();
-    let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
-    let mut split_drag = SplitDrag::default();
-    let mut scrollbar = Scrollbar::default();
-    let mut viewer_scrollbar = Scrollbar::default();
-
-    // One full frame with the panel: title, checked boxes and buttons paint.
-    let effects = draw_frame(
-        &mut Frame {
-            canvas: &mut canvas,
-            text: &mut text,
-            theme: &theme,
-            scale: 1.0,
-            title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
-            pointer: Pointer::default(),
-            dbl_click: false,
-            viewer: None,
-            viewer_error: None,
-            viewer_flash: false,
-            highlighter: &Highlighter::new(),
-            git: Some(&status),
-            file_diff: None,
-            commit: &mut CommitPanel::default(),
-            config: None,
-            config_error: None,
-            terms: None,
-            term_focused: false,
-            tabbar: &mut TabBar::default(),
-        },
-        &layout,
+    draw(
+        true,
+        &mut viewer,
+        &mut canvas,
+        &mut text,
+        &theme,
         &mut tree,
-        &mut split,
-        &mut split_drag,
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    assert!(!effects.commit_toggled && !effects.commit_clicked && !effects.push_clicked);
-    // Panel title ink (56..272 × 508..538), checked boxes + badges in the
-    // list (rows start at 538), two button fills at 712..736.
-    assert!(count_color_in(&canvas, theme.fg_dim, 56, 508, 272, 538) > 0, "panel title");
     assert!(
-        count_color_in(&canvas, theme.accent, 56, 538, 272, 672) >= 2 * 100,
-        "both changed files start checked"
+        count_color_in(&canvas, theme.accent, 320, 104, 944, 107) >= 624 * 3,
+        "flash paints the accent strip across the pane's top edge"
     );
-    assert!(count_color_in(&canvas, theme.git_untracked, 56, 538, 272, 558) > 0, "U badge row");
-    assert!(count_color_in(&canvas, theme.git_modified, 56, 558, 272, 578) > 0, "M badge row");
-    assert!(count_color_in(&canvas, theme.bg_elevated, 64, 712, 264, 736) > 1000, "buttons");
-
-    // Interactions: row toggle, Commit, Push, then message-field focus.
-    let mut commit = CommitPanel::default();
-    let mut frame = Frame {
-        canvas: &mut canvas,
-        text: &mut text,
-        theme: &theme,
-        scale: 1.0,
-        title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
-        pointer: Pointer::default(),
-        dbl_click: false,
-        viewer: None,
-        viewer_error: None,
-        viewer_flash: false,
-        highlighter: &Highlighter::new(),
-        git: Some(&status),
-        file_diff: None,
-        commit: &mut commit,
-        config: None,
-        config_error: None,
-        terms: None,
-        term_focused: false,
-        tabbar: &mut TabBar::default(),
-    };
-    {
-        let mut draw = |frame: &mut Frame, pointer: Pointer| {
-            frame.pointer = pointer;
-            draw_frame(
-                frame,
-                &layout,
-                &mut tree,
-                &mut split,
-                &mut split_drag,
-                &mut scrollbar,
-                &mut viewer_scrollbar,
-            )
-        };
-        let row_click = Pointer { x: 120.0, y: 548.0, down: false, click: true };
-        assert!(draw(&mut frame, row_click).commit_toggled, "file row toggles");
-        let commit_click = Pointer { x: 112.0, y: 724.0, down: false, click: true };
-        let effects = draw(&mut frame, commit_click);
-        assert!(effects.commit_clicked && !effects.push_clicked, "Commit button");
-        let push_click = Pointer { x: 216.0, y: 724.0, down: false, click: true };
-        let effects = draw(&mut frame, push_click);
-        assert!(effects.push_clicked && !effects.commit_clicked, "Push button");
-        let field_click = Pointer { x: 120.0, y: 692.0, down: false, click: true };
-        let _ = draw(&mut frame, field_click);
-    }
-    assert!(commit.message.focused, "message field takes keyboard focus");
-    assert!(!commit.is_checked(&status.entries[0].path), "row click unchecked it");
-}
-
-#[test]
-fn term_tabbar_syncs_a_newly_opened_tab() {
-    let mut bar = TabBar { tabs: vec!["fish".into()], active: 0 };
-    // Opening the M8 push tab: the model's active index must win over the
-    // bar's retained index.
-    sync_term_tabbar(&mut bar, vec!["fish".into(), "git push".into()], 1);
-    assert_eq!(bar.tabs.len(), 2);
-    assert_eq!(bar.active, 1, "newly opened tab becomes active");
-
-    // An unchanged list keeps the user's bar-click selection.
-    bar.active = 0;
-    sync_term_tabbar(&mut bar, vec!["fish".into(), "git push".into()], 1);
-    assert_eq!(bar.active, 0, "unchanged labels never reset the active tab");
-
-    // Closing a tab carries the model's clamped index.
-    sync_term_tabbar(&mut bar, vec!["fish".into()], 0);
-    assert_eq!(bar.active, 0);
+    draw(
+        false,
+        &mut viewer,
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert_eq!(
+        count_color_in(&canvas, theme.accent, 320, 104, 944, 107),
+        0,
+        "no flash → no strip"
+    );
 }
 
 #[test]
@@ -744,10 +1443,10 @@ fn frame_config_pane_renders_and_reports_save_click() {
         ConfigEditor::open(cd.path(), &yaml, &crate::config::Config::default().editable)
             .expect("open config");
     let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
+    let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
@@ -759,10 +1458,10 @@ fn frame_config_pane_renders_and_reports_save_click() {
             theme: &theme,
             scale: 1.0,
             title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
+            root: std::path::Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
             pointer: Pointer::default(),
             dbl_click: false,
             viewer: None,
@@ -771,12 +1470,10 @@ fn frame_config_pane_renders_and_reports_save_click() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
-            commit: &mut CommitPanel::default(),
             config: Some(&mut editor),
             config_error: None,
             terms: None,
             term_focused: false,
-            tabbar: &mut TabBar::default(),
         },
         &layout,
         &mut tree,
@@ -787,16 +1484,24 @@ fn frame_config_pane_renders_and_reports_save_click() {
     );
     assert!(!effects.config_save && !effects.config_reload);
     // Header title + textarea ink inside the editor body.
-    assert!(count_color_in(&canvas, theme.fg, 296, 140, 1016, 300) > 0, "config ink");
     assert!(
-        frame_status(&tree, None, Some(&editor), None, None, 604.0)
+        count_color_in(&canvas, theme.fg, 320, 104, 944, 300) > 0,
+        "config ink"
+    );
+    assert!(
+        frame_status(&tree, None, Some(&editor), None, None, layout.viewer_pane.h)
             .contains("config config.yaml"),
         "{}",
-        frame_status(&tree, None, Some(&editor), None, None, 604.0)
+        frame_status(&tree, None, Some(&editor), None, None, layout.viewer_pane.h)
     );
 
     // Header Save button (panel right edge) reports the effect.
-    let save_click = Pointer { x: 977.0, y: 159.0, down: false, click: true };
+    let save_click = Pointer {
+        x: 900.0,
+        y: 123.0,
+        down: false,
+        click: true,
+    };
     let effects = draw_frame(
         &mut Frame {
             canvas: &mut canvas,
@@ -804,10 +1509,10 @@ fn frame_config_pane_renders_and_reports_save_click() {
             theme: &theme,
             scale: 1.0,
             title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
+            root: std::path::Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
             pointer: save_click,
             dbl_click: false,
             viewer: None,
@@ -816,12 +1521,10 @@ fn frame_config_pane_renders_and_reports_save_click() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
-            commit: &mut CommitPanel::default(),
             config: Some(&mut editor),
             config_error: None,
             terms: None,
             term_focused: false,
-            tabbar: &mut TabBar::default(),
         },
         &layout,
         &mut tree,
@@ -840,11 +1543,13 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         PathBuf::from("/repo/src/main.rs"),
         PathBuf::from("/repo/config.yaml"),
     ];
-    let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let mut theme = frame_theme();
+    theme.surface = (2, 2, 2);
+    theme.border_subtle = (3, 3, 3);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
+    let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
@@ -866,12 +1571,10 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
-        commit: &mut CommitPanel::default(),
         config: None,
         config_error: None,
         terms: None,
         term_focused: false,
-        tabbar: &mut TabBar::default(),
     };
     let effects = draw_frame(
         &mut frame,
@@ -885,22 +1588,31 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
     assert!(effects.select_tab.is_none() && effects.close_tab.is_none());
     // Tab strip and breadcrumb paint inside the editor column.
     assert!(
-        count_color_in(frame.canvas, theme.bg_elevated, 296, 88, 1016, 118) > 10_000,
+        count_color_in(frame.canvas, theme.bg_elevated, 312, 44, 900, 80) > 10_000,
         "tab strip background"
     );
     assert!(
-        crate::ui::testutil::count_not_color_in(frame.canvas, theme.bg, 296, 118, 1016, 140) > 0,
+        crate::ui::testutil::count_not_color_in(frame.canvas, theme.surface, 312, 80, 1016, 104)
+            > 0,
         "breadcrumb ink"
     );
     assert!(
-        crate::ui::testutil::count_not_color_in(frame.canvas, theme.bg, 900, 88, 1016, 118) > 0,
+        crate::ui::testutil::count_not_color_in(frame.canvas, theme.surface, 850, 44, 900, 80) > 0,
         "READ-ONLY badge"
     );
-    // Activity bar icons/badges paint left of the tree.
-    assert!(count_color_in(frame.canvas, theme.bg_elevated, 0, 88, 48, 744) > 10_000, "activity track");
+    // Activity card paints left of the tree.
+    assert!(
+        count_color_in(frame.canvas, theme.surface, 8, 44, 56, 736) > 10_000,
+        "activity card"
+    );
 
     // Second file tab selects; first tab's × closes.
-    frame.pointer = Pointer { x: 500.0, y: 103.0, down: false, click: true };
+    frame.pointer = Pointer {
+        x: 550.0,
+        y: 62.0,
+        down: false,
+        click: true,
+    };
     let effects = draw_frame(
         &mut frame,
         &layout,
@@ -911,7 +1623,12 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         &mut viewer_scrollbar,
     );
     assert_eq!(effects.select_tab.as_deref(), Some(files[1].as_path()));
-    frame.pointer = Pointer { x: 442.0, y: 103.0, down: false, click: true };
+    frame.pointer = Pointer {
+        x: 458.0,
+        y: 62.0,
+        down: false,
+        click: true,
+    };
     let effects = draw_frame(
         &mut frame,
         &layout,
@@ -923,7 +1640,12 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
     );
     assert_eq!(effects.close_tab.as_deref(), Some(files[0].as_path()));
     // Activity bar: click the Config icon (fourth slot).
-    frame.pointer = Pointer { x: 24.0, y: 270.0, down: false, click: true };
+    frame.pointer = Pointer {
+        x: 24.0,
+        y: 230.0,
+        down: false,
+        click: true,
+    };
     let effects = draw_frame(
         &mut frame,
         &layout,
@@ -947,11 +1669,17 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
-    let mut commit = CommitPanel::default();
-    let mut tabbar = TabBar::default();
 
-    let handle = sidebar_handle(280.0);
-    assert_eq!(handle, Rect { x: 272.0, y: 60.0, w: 16.0, h: 24.0 });
+    let handle = sidebar_handle(&layout, 280.0).expect("visible Explorer divider");
+    assert_eq!(
+        handle,
+        Rect {
+            x: 276.0,
+            y: 50.0,
+            w: 16.0,
+            h: 24.0
+        }
+    );
 
     draw_frame(
         &mut Frame {
@@ -972,12 +1700,10 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
-            commit: &mut commit,
             config: None,
             config_error: None,
             terms: None,
             term_focused: false,
-            tabbar: &mut tabbar,
         },
         &layout,
         &mut tree,
@@ -987,7 +1713,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut viewer_scrollbar,
     );
     assert!(
-        count_color_in(&canvas, theme.fg_dim, 272, 60, 288, 84) >= 3,
+        count_color_in(&canvas, theme.fg_dim, 276, 50, 292, 74) >= 3,
         "three-dot handle paints in the header gap"
     );
 
@@ -1011,12 +1737,10 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 highlighter: &Highlighter::new(),
                 git: None,
                 file_diff: None,
-                commit: &mut commit,
                 config: None,
                 config_error: None,
                 terms: None,
                 term_focused: false,
-                tabbar: &mut tabbar,
             },
             &layout,
             &mut tree,
@@ -1028,23 +1752,113 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
     };
 
     // Drag the handle itself: 280 → 340.
-    draw(&mut split, Pointer { x: 280.0, y: 72.0, down: true, click: false }, false);
-    draw(&mut split, Pointer { x: 340.0, y: 72.0, down: true, click: false }, false);
-    draw(&mut split, Pointer { x: 340.0, y: 72.0, down: false, click: false }, false);
-    assert_eq!(split.position, 340.0);
+    draw(
+        &mut split,
+        Pointer {
+            x: 284.0,
+            y: 62.0,
+            down: true,
+            click: false,
+        },
+        false,
+    );
+    draw(
+        &mut split,
+        Pointer {
+            x: 340.0,
+            y: 62.0,
+            down: true,
+            click: false,
+        },
+        false,
+    );
+    draw(
+        &mut split,
+        Pointer {
+            x: 340.0,
+            y: 62.0,
+            down: false,
+            click: false,
+        },
+        false,
+    );
+    assert_eq!(split.position, 336.0);
 
     // Double-click the handle at its new position resets to the default.
-    draw(&mut split, Pointer { x: 340.0, y: 72.0, down: false, click: true }, true);
+    draw(
+        &mut split,
+        Pointer {
+            x: 340.0,
+            y: 62.0,
+            down: false,
+            click: true,
+        },
+        true,
+    );
     assert_eq!(split.position, SIDEBAR_DEFAULT_PX);
 
     // The normal divider drag band still works and clamps.
-    draw(&mut split, Pointer { x: 280.0, y: 300.0, down: true, click: false }, false);
-    draw(&mut split, Pointer { x: 500.0, y: 300.0, down: true, click: false }, false);
-    draw(&mut split, Pointer { x: 500.0, y: 300.0, down: false, click: false }, false);
+    draw(
+        &mut split,
+        Pointer {
+            x: 284.0,
+            y: 300.0,
+            down: true,
+            click: false,
+        },
+        false,
+    );
+    draw(
+        &mut split,
+        Pointer {
+            x: 480.0,
+            y: 300.0,
+            down: true,
+            click: false,
+        },
+        false,
+    );
+    draw(
+        &mut split,
+        Pointer {
+            x: 480.0,
+            y: 300.0,
+            down: false,
+            click: false,
+        },
+        false,
+    );
     assert_eq!(split.position, 500.0);
-    draw(&mut split, Pointer { x: 500.0, y: 300.0, down: true, click: false }, false);
-    draw(&mut split, Pointer { x: 0.0, y: 300.0, down: true, click: false }, false);
-    draw(&mut split, Pointer { x: 0.0, y: 300.0, down: false, click: false }, false);
+    draw(
+        &mut split,
+        Pointer {
+            x: 504.0,
+            y: 62.0,
+            down: true,
+            click: false,
+        },
+        false,
+    );
+    draw(
+        &mut split,
+        Pointer {
+            x: 0.0,
+            y: 300.0,
+            down: true,
+            click: false,
+        },
+        false,
+    );
+    draw(
+        &mut split,
+        Pointer {
+            x: 0.0,
+            y: 300.0,
+            down: false,
+            click: false,
+        },
+        false,
+    );
     assert_eq!(split.position, SPLIT_MIN_PX);
 }
 
@@ -1058,10 +1872,10 @@ fn viewer_offset_self_heals_before_hit_testing() {
     viewer.restore_offset(50); // stale (e.g. the file shrank on refresh)
 
     let theme = frame_theme();
-    let layout = app_layout(1024.0, 768.0, 280.0);
+    let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
-    let mut split = Split { position: 280.0 };
+    let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
@@ -1073,10 +1887,10 @@ fn viewer_offset_self_heals_before_hit_testing() {
             theme: &theme,
             scale: 1.0,
             title: "ark",
-        root: std::path::Path::new("/"),
-        open_files: &[],
-        active_path: None,
-        activity: ActivityPanel::Explorer,
+            root: std::path::Path::new("/"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::Explorer,
             pointer: Pointer::default(),
             dbl_click: false,
             viewer: Some(&mut viewer),
@@ -1085,12 +1899,10 @@ fn viewer_offset_self_heals_before_hit_testing() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
-            commit: &mut CommitPanel::default(),
             config: None,
             config_error: None,
             terms: None,
             term_focused: false,
-            tabbar: &mut TabBar::default(),
         },
         &layout,
         &mut tree,

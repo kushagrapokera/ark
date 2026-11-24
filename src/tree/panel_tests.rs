@@ -31,11 +31,17 @@ fn panel_theme() -> Theme {
     let bg = (0, 0, 0);
     Theme {
         bg,
+        surface_chrome: bg,
+        surface: bg,
         bg_elevated: (10, 20, 30),
+        surface_hover: bg,
         fg: (255, 255, 255),
         fg_dim: bg,
+        text_muted: bg,
+        text_dim: bg,
         accent: bg,
         border: bg,
+        border_subtle: bg,
         selection: (40, 50, 60),
         syntax_keyword: bg,
         syntax_string: bg,

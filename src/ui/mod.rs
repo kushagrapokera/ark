@@ -23,6 +23,7 @@ mod button;
 mod checkbox;
 mod scrollbar;
 mod split;
+#[cfg(test)]
 mod tabbar;
 mod text_input;
 
@@ -32,6 +33,7 @@ pub use scrollbar::Scrollbar;
 pub use split::Split;
 pub use button::{draw_button, Press};
 pub use checkbox::draw_checkbox;
+#[cfg(test)]
 pub use tabbar::{TabBar, TAB_HEIGHT};
 pub use text_input::{TextInput, TextInputKey};
 

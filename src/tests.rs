@@ -70,7 +70,7 @@ fn viewer_wheel_marks_pane_damage_only() {
     let p = d.path().join("lines.txt");
     fs::write(&p, (0..40).map(|i| format!("line {i}\n")).collect::<String>()).expect("write");
     let mut viewer = Viewer::open(&p).expect("opens");
-    let layout = frame::app_layout(1024.0, 768.0, 280.0); // editor body 720×604
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, true, true); // editor body 624×392
     let canvas = Canvas::new(1024, 768);
     let mut damage = Damage::new(64);
     damage.take(canvas.width(), canvas.height()); // consume the initial full wave
@@ -81,12 +81,12 @@ fn viewer_wheel_marks_pane_damage_only() {
     let rects = damage.take(canvas.width(), canvas.height()).expect("scroll damage");
     assert_eq!(rects, vec![damage_rect(layout.viewer_pane, 1.0, 1024, 768)]);
 
-    // Notch to the clamp (40 lines − 31 viewport = 9), then one more notch
+    // Notch to the clamp (40 lines − 20 viewport = 20), then one more notch
     // moves nothing → no damage at all.
     while route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage) {
         let _ = damage.take(canvas.width(), canvas.height());
     }
-    assert_eq!(viewer.offset_lines(), 9, "max offset = line_count − viewport_lines");
+    assert_eq!(viewer.offset_lines(), 20, "max offset = line_count − viewport_lines");
     assert!(!route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
     assert!(damage.take(canvas.width(), canvas.height()).is_none(), "clamped: nothing pending");
 }
@@ -116,7 +116,7 @@ fn wheel_scroll_marks_panel_damage_only() {
         fs::File::create(d.path().join(format!("f{i:02}.txt"))).expect("create file");
     }
     let mut tree = FileTree::new(d.path());
-    let layout = frame::app_layout(1024.0, 768.0, 280.0); // tree viewport 656px
+    let layout = frame::app_layout(1024.0, 768.0, 304.0); // tree viewport 564px
     let canvas = Canvas::new(1024, 768);
     let mut damage = Damage::new(64);
     damage.take(canvas.width(), canvas.height()); // consume the initial full wave
@@ -138,7 +138,7 @@ fn wheel_scroll_marks_panel_damage_only() {
     while route_wheel_scroll(&mut tree, WHEEL_PX, &layout, 1.0, &canvas, &mut damage) {
         let _ = damage.take(canvas.width(), canvas.height());
     }
-    assert_eq!(tree.offset, 224.0, "max offset = content (40×22) − viewport (656)");
+    assert_eq!(tree.offset, 316.0, "max offset = content (40×22) − viewport (564)");
 
     // One notch past the clamp moves nothing → no damage at all.
     assert!(!route_wheel_scroll(&mut tree, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
@@ -147,11 +147,11 @@ fn wheel_scroll_marks_panel_damage_only() {
         "clamped: nothing pending"
     );
 
-    // Scale 2 doubles the rect and clamps to the canvas (656×2 extends past
+    // Scale 2 doubles the rect and clamps to the canvas (564×2 extends past
     // 768), never yielding out-of-bounds damage.
     assert_eq!(
         damage_rect(layout.tree_panel, 2.0, 1024, 768),
-        DamageRect { x: 112, y: 176, width: 432, height: 592 }
+        DamageRect { x: 144, y: 216, width: 448, height: 552 }
     );
 }
 
@@ -160,22 +160,22 @@ fn wheel_scroll_marks_panel_damage_only() {
 fn commit_panel_wheel_scrolls_rows_to_full_pages() {
     use crate::git::parse_status;
     let mut panel = commit::CommitPanel::default();
-    let layout = frame::app_layout_with_commit(1024.0, 768.0, 280.0, true, false);
-    assert_eq!(commit::layout(layout.commit_panel).rows, 6);
+    let panel_rect = Rect { x: 64.0, y: 400.0, w: 240.0, h: 236.0 };
+    assert_eq!(commit::layout(panel_rect).rows, 6);
 
     // One notch = 40px / 20px rows = 2 rows.
-    assert!(route_wheel_commit(&mut panel, WHEEL_PX, layout.commit_panel, 20));
+    assert!(route_wheel_commit(&mut panel, WHEEL_PX, panel_rect, 20));
     assert_eq!(panel.scroll, 2);
-    assert!(route_wheel_commit(&mut panel, 10_000.0, layout.commit_panel, 20));
+    assert!(route_wheel_commit(&mut panel, 10_000.0, panel_rect, 20));
     assert_eq!(panel.scroll, 14, "last page stays full (20 − 6)");
-    assert!(!route_wheel_commit(&mut panel, WHEEL_PX, layout.commit_panel, 20));
-    assert!(route_wheel_commit(&mut panel, -10_000.0, layout.commit_panel, 20));
+    assert!(!route_wheel_commit(&mut panel, WHEEL_PX, panel_rect, 20));
+    assert!(route_wheel_commit(&mut panel, -10_000.0, panel_rect, 20));
     assert_eq!(panel.scroll, 0);
 
     // A status smaller than the window never scrolls.
     let status = parse_status("? a.txt\n");
     assert_eq!(status.entries.len(), 1);
-    assert!(!route_wheel_commit(&mut panel, WHEEL_PX, layout.commit_panel, status.entries.len()));
+    assert!(!route_wheel_commit(&mut panel, WHEEL_PX, panel_rect, status.entries.len()));
 }
 
 /// M8: applying a new status snapshot prunes stale unchecks and leaves live
@@ -288,6 +288,39 @@ fn app_reloads_whitelist_after_saving_ark_toml() {
 }
 
 /// M12: LRU-backed tab selection and close routing.
+#[test]
+fn app_terminal_close_returns_focus_after_the_last_shell() {
+    let d = temp_dir("app-terminal-close");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let size = term::GridSize { cols: 80, rows: 24 };
+    for label in ["first", "second"] {
+        app.terms.tabs.push(
+            term::Terminal::spawn_program_with(
+                d.path(),
+                std::path::Path::new("/bin/cat"),
+                label,
+                size,
+                || {},
+            )
+            .expect("spawn test terminal"),
+        );
+    }
+    app.terms.active = 1;
+    app.activity = frame::ActivityPanel::Terminal;
+    app.term_focused = true;
+
+    app.close_terminal_tab();
+    assert_eq!(app.terms.tabs.len(), 1);
+    assert_eq!(app.terms.active, 0);
+    assert!(app.term_focused, "remaining shell keeps keyboard focus");
+
+    app.close_terminal_tab();
+    assert!(!app.terms.is_open());
+    assert_eq!(app.activity, frame::ActivityPanel::Explorer);
+    assert!(!app.term_focused);
+    assert_eq!(app.pane, PaneMode::Viewer);
+}
+
 #[test]
 fn app_tabs_select_viewer_and_close_config_or_file() {
     let d = temp_dir("app-tabs");

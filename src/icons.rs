@@ -17,13 +17,40 @@ pub enum Icon {
     ChevronRight,
     ChevronDown,
     File,
-#[allow(dead_code)] // frozen M2 test/demo surface; production icons arrive with the workbench
+    #[allow(dead_code)] // frozen M2 test/demo surface; production icons arrive with the workbench
     Folder,
     #[allow(dead_code)] // frozen M2 test/demo surface; production icons arrive with the workbench
     Dot,
     SourceControl,
     Terminal,
     Config,
+    Code,
+    Search,
+    Bug,
+    Extension,
+    More,
+    Split,
+    Plus,
+    Close,
+    Refresh,
+    Collapse,
+    NewFile,
+    NewFolder,
+    Bell,
+    Check,
+    Sync,
+    Warning,
+    Remote,
+    Zoom,
+    Forum,
+    Deploy,
+    Token,
+    Asterisk,
+    PanelLeft,
+    PanelBottom,
+    PanelRight,
+    ChevronUp,
+    ChevronLeft,
 }
 
 /// Stroke-based outline icon in LOGICAL space, centered on (cx, cy) with a
@@ -113,7 +140,14 @@ pub fn draw(
             pb.push_circle(cx - 0.16 * s, cy + 0.30 * s, 0.10 * s);
             pb.push_circle(cx + 0.24 * s, cy, 0.10 * s);
             pb.move_to(cx - 0.16 * s, cy + 0.04 * s);
-            pb.cubic_to(cx + 0.04 * s, cy + 0.04 * s, cx + 0.04 * s, cy, cx + 0.14 * s, cy);
+            pb.cubic_to(
+                cx + 0.04 * s,
+                cy + 0.04 * s,
+                cx + 0.04 * s,
+                cy,
+                cx + 0.14 * s,
+                cy,
+            );
             pb.finish().expect("valid source control path")
         }
         Icon::Terminal => {
@@ -145,11 +179,356 @@ pub fn draw(
             pb.line_to(cx + 0.38 * s, cy);
             pb.finish().expect("valid config path")
         }
+        Icon::Code => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.22 * s, cy - 0.30 * s);
+            pb.line_to(cx - 0.42 * s, cy);
+            pb.line_to(cx - 0.22 * s, cy + 0.30 * s);
+            pb.move_to(cx + 0.22 * s, cy - 0.30 * s);
+            pb.line_to(cx + 0.42 * s, cy);
+            pb.line_to(cx + 0.22 * s, cy + 0.30 * s);
+            pb.move_to(cx + 0.08 * s, cy - 0.38 * s);
+            pb.line_to(cx - 0.08 * s, cy + 0.38 * s);
+            pb.finish().expect("valid code path")
+        }
+        Icon::Search | Icon::Zoom => {
+            let mut pb = PathBuilder::new();
+            pb.push_circle(cx - 0.08 * s, cy - 0.08 * s, 0.25 * s);
+            pb.move_to(cx + 0.10 * s, cy + 0.10 * s);
+            pb.line_to(cx + 0.36 * s, cy + 0.36 * s);
+            if matches!(icon, Icon::Zoom) {
+                pb.move_to(cx - 0.08 * s, cy - 0.30 * s);
+                pb.line_to(cx - 0.08 * s, cy + 0.14 * s);
+                pb.move_to(cx - 0.30 * s, cy - 0.08 * s);
+                pb.line_to(cx + 0.14 * s, cy - 0.08 * s);
+            }
+            pb.finish().expect("valid search path")
+        }
+        Icon::Bug => {
+            let mut pb = PathBuilder::new();
+            pb.push_circle(cx, cy + 0.04 * s, 0.24 * s);
+            pb.move_to(cx, cy - 0.20 * s);
+            pb.line_to(cx, cy - 0.38 * s);
+            pb.move_to(cx - 0.24 * s, cy - 0.10 * s);
+            pb.line_to(cx - 0.40 * s, cy - 0.24 * s);
+            pb.move_to(cx + 0.24 * s, cy - 0.10 * s);
+            pb.line_to(cx + 0.40 * s, cy - 0.24 * s);
+            pb.move_to(cx - 0.24 * s, cy + 0.10 * s);
+            pb.line_to(cx - 0.40 * s, cy + 0.24 * s);
+            pb.move_to(cx + 0.24 * s, cy + 0.10 * s);
+            pb.line_to(cx + 0.40 * s, cy + 0.24 * s);
+            pb.finish().expect("valid bug path")
+        }
+        Icon::Extension => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.30 * s, cy - 0.30 * s);
+            pb.line_to(cx - 0.08 * s, cy - 0.30 * s);
+            pb.line_to(cx - 0.08 * s, cy - 0.08 * s);
+            pb.line_to(cx + 0.08 * s, cy - 0.08 * s);
+            pb.line_to(cx + 0.08 * s, cy - 0.30 * s);
+            pb.line_to(cx + 0.30 * s, cy - 0.30 * s);
+            pb.line_to(cx + 0.30 * s, cy + 0.08 * s);
+            pb.line_to(cx + 0.08 * s, cy + 0.08 * s);
+            pb.line_to(cx + 0.08 * s, cy + 0.30 * s);
+            pb.line_to(cx - 0.30 * s, cy + 0.30 * s);
+            pb.line_to(cx - 0.30 * s, cy - 0.30 * s);
+            pb.finish().expect("valid extension path")
+        }
+        Icon::More => {
+            let mut pb = PathBuilder::new();
+            for dx in [-0.28, 0.0, 0.28] {
+                pb.push_circle(cx + dx * s, cy, 0.055 * s);
+            }
+            pb.finish().expect("valid more path")
+        }
+        Icon::Split => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.36 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.36 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.36 * s, cy + 0.28 * s);
+            pb.line_to(cx - 0.36 * s, cy + 0.28 * s);
+            pb.close();
+            pb.move_to(cx, cy - 0.28 * s);
+            pb.line_to(cx, cy + 0.28 * s);
+            pb.finish().expect("valid split path")
+        }
+        Icon::Plus => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.30 * s, cy);
+            pb.line_to(cx + 0.30 * s, cy);
+            pb.move_to(cx, cy - 0.30 * s);
+            pb.line_to(cx, cy + 0.30 * s);
+            pb.finish().expect("valid plus path")
+        }
+        Icon::Close => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.28 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.28 * s, cy + 0.28 * s);
+            pb.move_to(cx + 0.28 * s, cy - 0.28 * s);
+            pb.line_to(cx - 0.28 * s, cy + 0.28 * s);
+            pb.finish().expect("valid close path")
+        }
+        Icon::Refresh | Icon::Sync => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
+            pb.cubic_to(
+                cx + 0.10 * s,
+                cy - 0.42 * s,
+                cx - 0.28 * s,
+                cy - 0.32 * s,
+                cx - 0.32 * s,
+                cy - 0.06 * s,
+            );
+            pb.cubic_to(
+                cx - 0.36 * s,
+                cy + 0.22 * s,
+                cx - 0.10 * s,
+                cy + 0.40 * s,
+                cx + 0.18 * s,
+                cy + 0.30 * s,
+            );
+            if matches!(icon, Icon::Sync) {
+                pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
+                pb.line_to(cx + 0.30 * s, cy - 0.02 * s);
+                pb.line_to(cx + 0.08 * s, cy - 0.12 * s);
+                pb.move_to(cx - 0.30 * s, cy + 0.24 * s);
+                pb.line_to(cx - 0.30 * s, cy + 0.02 * s);
+                pb.line_to(cx - 0.08 * s, cy + 0.12 * s);
+            } else {
+                pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
+                pb.line_to(cx + 0.08 * s, cy - 0.24 * s);
+                pb.line_to(cx + 0.16 * s, cy - 0.42 * s);
+            }
+            pb.finish().expect("valid refresh path")
+        }
+        Icon::Collapse => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.30 * s, cy - 0.18 * s);
+            pb.line_to(cx - 0.12 * s, cy);
+            pb.line_to(cx - 0.30 * s, cy + 0.18 * s);
+            pb.move_to(cx + 0.30 * s, cy - 0.18 * s);
+            pb.line_to(cx + 0.12 * s, cy);
+            pb.line_to(cx + 0.30 * s, cy + 0.18 * s);
+            pb.finish().expect("valid collapse path")
+        }
+        Icon::NewFile | Icon::NewFolder => {
+            let mut pb = PathBuilder::new();
+            if matches!(icon, Icon::NewFile) {
+                pb.move_to(cx - 0.30 * s, cy - 0.34 * s);
+                pb.line_to(cx + 0.12 * s, cy - 0.34 * s);
+                pb.line_to(cx + 0.30 * s, cy - 0.16 * s);
+                pb.line_to(cx + 0.30 * s, cy + 0.34 * s);
+                pb.line_to(cx - 0.30 * s, cy + 0.34 * s);
+                pb.close();
+            } else {
+                pb.move_to(cx - 0.34 * s, cy + 0.30 * s);
+                pb.line_to(cx - 0.34 * s, cy - 0.18 * s);
+                pb.line_to(cx - 0.08 * s, cy - 0.18 * s);
+                pb.line_to(cx + 0.04 * s, cy - 0.32 * s);
+                pb.line_to(cx + 0.34 * s, cy - 0.32 * s);
+                pb.line_to(cx + 0.34 * s, cy + 0.30 * s);
+                pb.close();
+            }
+            pb.move_to(cx + 0.10 * s, cy + 0.02 * s);
+            pb.line_to(cx + 0.10 * s, cy + 0.22 * s);
+            pb.move_to(cx, cy + 0.12 * s);
+            pb.line_to(cx + 0.20 * s, cy + 0.12 * s);
+            pb.finish().expect("valid new path")
+        }
+        Icon::Bell => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.28 * s, cy + 0.18 * s);
+            pb.cubic_to(
+                cx - 0.22 * s,
+                cy + 0.02 * s,
+                cx - 0.20 * s,
+                cy - 0.28 * s,
+                cx,
+                cy - 0.28 * s,
+            );
+            pb.cubic_to(
+                cx + 0.20 * s,
+                cy - 0.28 * s,
+                cx + 0.22 * s,
+                cy + 0.02 * s,
+                cx + 0.28 * s,
+                cy + 0.18 * s,
+            );
+            pb.close();
+            pb.move_to(cx - 0.10 * s, cy + 0.34 * s);
+            pb.line_to(cx + 0.10 * s, cy + 0.34 * s);
+            pb.finish().expect("valid bell path")
+        }
+        Icon::Check => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.30 * s, cy);
+            pb.line_to(cx - 0.08 * s, cy + 0.22 * s);
+            pb.line_to(cx + 0.32 * s, cy - 0.24 * s);
+            pb.finish().expect("valid check path")
+        }
+        Icon::Warning => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx, cy - 0.36 * s);
+            pb.line_to(cx + 0.36 * s, cy + 0.30 * s);
+            pb.line_to(cx - 0.36 * s, cy + 0.30 * s);
+            pb.close();
+            pb.move_to(cx, cy - 0.12 * s);
+            pb.line_to(cx, cy + 0.08 * s);
+            pb.push_circle(cx, cy + 0.20 * s, 0.025 * s);
+            pb.finish().expect("valid warning path")
+        }
+        Icon::Remote => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.36 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.36 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.36 * s, cy + 0.20 * s);
+            pb.line_to(cx - 0.36 * s, cy + 0.20 * s);
+            pb.close();
+            pb.move_to(cx - 0.18 * s, cy + 0.36 * s);
+            pb.line_to(cx + 0.18 * s, cy + 0.36 * s);
+            pb.move_to(cx, cy + 0.20 * s);
+            pb.line_to(cx, cy + 0.36 * s);
+            pb.finish().expect("valid remote path")
+        }
+        Icon::Forum => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.34 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.34 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.34 * s, cy + 0.16 * s);
+            pb.line_to(cx - 0.06 * s, cy + 0.16 * s);
+            pb.line_to(cx - 0.28 * s, cy + 0.34 * s);
+            pb.line_to(cx - 0.28 * s, cy + 0.12 * s);
+            pb.line_to(cx - 0.34 * s, cy + 0.12 * s);
+            pb.close();
+            pb.finish().expect("valid forum path")
+        }
+        Icon::Deploy => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.34 * s, cy - 0.18 * s);
+            pb.cubic_to(
+                cx - 0.40 * s,
+                cy + 0.18 * s,
+                cx - 0.10 * s,
+                cy + 0.34 * s,
+                cx,
+                cy + 0.34 * s,
+            );
+            pb.cubic_to(
+                cx + 0.10 * s,
+                cy + 0.34 * s,
+                cx + 0.40 * s,
+                cy + 0.18 * s,
+                cx + 0.34 * s,
+                cy - 0.18 * s,
+            );
+            pb.move_to(cx - 0.34 * s, cy - 0.18 * s);
+            pb.line_to(cx - 0.12 * s, cy - 0.34 * s);
+            pb.line_to(cx + 0.12 * s, cy - 0.34 * s);
+            pb.line_to(cx + 0.34 * s, cy - 0.18 * s);
+            pb.finish().expect("valid deploy path")
+        }
+        Icon::Token => {
+            let mut pb = PathBuilder::new();
+            pb.push_circle(cx, cy, 0.34 * s);
+            pb.move_to(cx - 0.16 * s, cy - 0.10 * s);
+            pb.line_to(cx - 0.04 * s, cy);
+            pb.line_to(cx - 0.16 * s, cy + 0.10 * s);
+            pb.move_to(cx + 0.04 * s, cy - 0.10 * s);
+            pb.line_to(cx + 0.16 * s, cy);
+            pb.line_to(cx + 0.04 * s, cy + 0.10 * s);
+            pb.finish().expect("valid token path")
+        }
+        Icon::Asterisk => {
+            let mut pb = PathBuilder::new();
+            for index in 0..6 {
+                let angle = index as f32 * std::f32::consts::PI / 3.0;
+                let (dx, dy) = (angle.cos(), angle.sin());
+                pb.move_to(cx - dx * 0.34 * s, cy - dy * 0.34 * s);
+                pb.line_to(cx + dx * 0.34 * s, cy + dy * 0.34 * s);
+            }
+            pb.finish().expect("valid asterisk path")
+        }
+        Icon::PanelLeft | Icon::PanelBottom | Icon::PanelRight => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.36 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.36 * s, cy - 0.28 * s);
+            pb.line_to(cx + 0.36 * s, cy + 0.28 * s);
+            pb.line_to(cx - 0.36 * s, cy + 0.28 * s);
+            pb.close();
+            match icon {
+                Icon::PanelLeft => {
+                    pb.move_to(cx - 0.36 * s, cy - 0.28 * s);
+                    pb.line_to(cx - 0.12 * s, cy - 0.28 * s);
+                    pb.line_to(cx - 0.12 * s, cy + 0.28 * s);
+                    pb.line_to(cx - 0.36 * s, cy + 0.28 * s);
+                }
+                Icon::PanelRight => {
+                    pb.move_to(cx + 0.36 * s, cy - 0.28 * s);
+                    pb.line_to(cx + 0.12 * s, cy - 0.28 * s);
+                    pb.line_to(cx + 0.12 * s, cy + 0.28 * s);
+                    pb.line_to(cx + 0.36 * s, cy + 0.28 * s);
+                }
+                Icon::PanelBottom => {
+                    pb.move_to(cx - 0.36 * s, cy + 0.28 * s);
+                    pb.line_to(cx + 0.36 * s, cy + 0.28 * s);
+                    pb.line_to(cx + 0.36 * s, cy + 0.08 * s);
+                    pb.line_to(cx - 0.36 * s, cy + 0.08 * s);
+                }
+                _ => unreachable!(),
+            }
+            pb.close();
+            pb.finish().expect("valid panel path")
+        }
+        Icon::ChevronUp => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.3 * s, cy + 0.2 * s);
+            pb.line_to(cx, cy - 0.2 * s);
+            pb.line_to(cx + 0.3 * s, cy + 0.2 * s);
+            pb.finish().expect("valid chevron up path")
+        }
+        Icon::ChevronLeft => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx + 0.2 * s, cy - 0.3 * s);
+            pb.line_to(cx - 0.2 * s, cy);
+            pb.line_to(cx + 0.2 * s, cy + 0.3 * s);
+            pb.finish().expect("valid chevron left path")
+        }
     };
 
     match icon {
-        Icon::File | Icon::ChevronRight | Icon::ChevronDown | Icon::SourceControl
-        | Icon::Terminal | Icon::Config => {
+        Icon::File
+        | Icon::ChevronRight
+        | Icon::ChevronDown
+        | Icon::ChevronUp
+        | Icon::ChevronLeft
+        | Icon::SourceControl
+        | Icon::Terminal
+        | Icon::Config
+        | Icon::Code
+        | Icon::Search
+        | Icon::Bug
+        | Icon::Extension
+        | Icon::More
+        | Icon::Split
+        | Icon::Plus
+        | Icon::Close
+        | Icon::Refresh
+        | Icon::Collapse
+        | Icon::NewFile
+        | Icon::NewFolder
+        | Icon::Bell
+        | Icon::Check
+        | Icon::Sync
+        | Icon::Warning
+        | Icon::Remote
+        | Icon::Zoom
+        | Icon::Forum
+        | Icon::Deploy
+        | Icon::Token
+        | Icon::Asterisk
+        | Icon::PanelLeft
+        | Icon::PanelBottom
+        | Icon::PanelRight => {
             pixmap.stroke_path(&path, &paint, &stroke, transform, None);
         }
         Icon::Folder | Icon::Dot => {
@@ -217,7 +596,12 @@ mod tests {
 
         // 2× position offset: every physical edge lands at twice the 1×
         // coordinate (±2px AA slop).
-        for (axis, a, b) in [(0, b1.0, b2.0), (1, b1.1, b2.1), (2, b1.2, b2.2), (3, b1.3, b2.3)] {
+        for (axis, a, b) in [
+            (0, b1.0, b2.0),
+            (1, b1.1, b2.1),
+            (2, b1.2, b2.2),
+            (3, b1.3, b2.3),
+        ] {
             assert!(
                 (f64::from(b) - 2.0 * f64::from(a)).abs() <= 2.0,
                 "bbox edge {axis}: scale-2 {b} must be 2× scale-1 {a} (±2px)"
@@ -227,14 +611,8 @@ mod tests {
         // ~2× extent: the constant AA-slop term keeps the ratio just under
         // 2.0; the old double-scaling bug inflated it past 2.1. Bands below
         // are pinned from measurement (see the MEASURE output note).
-        let ext1 = (
-            f64::from(b1.2 - b1.0) + 1.0,
-            f64::from(b1.3 - b1.1) + 1.0,
-        );
-        let ext2 = (
-            f64::from(b2.2 - b2.0) + 1.0,
-            f64::from(b2.3 - b2.1) + 1.0,
-        );
+        let ext1 = (f64::from(b1.2 - b1.0) + 1.0, f64::from(b1.3 - b1.1) + 1.0);
+        let ext2 = (f64::from(b2.2 - b2.0) + 1.0, f64::from(b2.3 - b2.1) + 1.0);
         for (axis, (a, b)) in [(0, (ext1.0, ext2.0)), (1, (ext1.1, ext2.1))] {
             let ratio = b / a;
             assert!(
@@ -250,7 +628,10 @@ mod tests {
         // extra width multiplication pushed it past ~5×.
         let n1 = count_ink(&pm1);
         let n2 = count_ink(&pm2);
-        assert!(n1 >= 20, "1× icon must rasterize a visible stroke, got {n1}");
+        assert!(
+            n1 >= 20,
+            "1× icon must rasterize a visible stroke, got {n1}"
+        );
         let ratio = n2 as f64 / n1.max(1) as f64;
         assert!(
             (2.5..=5.0).contains(&ratio),

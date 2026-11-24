@@ -91,6 +91,7 @@ pub struct Viewer {
     modified: SystemTime,
     /// Bytes of the file visible through this view (≤ file len, ≤ cap).
     view_len: u64,
+    #[allow(dead_code)] // retained for future status/inspector detail
     truncated: bool,
     /// Line-start offsets within the viewed region; `starts[0] == 0`.
     starts: Vec<u32>,
@@ -169,6 +170,7 @@ impl Viewer {
         self.lang
     }
 
+    #[allow(dead_code)] // retained for future status/inspector detail
     pub fn truncated(&self) -> bool {
         self.truncated
     }
@@ -269,6 +271,7 @@ impl Viewer {
     }
 
     /// Selected char count (0 when nothing selected).
+    #[allow(dead_code)] // retained for future status/inspector detail
     pub fn selection_len(&self) -> usize {
         let Some(((sl, sc), (el, ec))) = self.selection() else {
             return 0;

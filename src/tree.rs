@@ -134,6 +134,7 @@ impl FileTree {
 
     /// Status-line + memory-test surface: user-expanded directories (root
     /// excluded — it is always implicitly expanded).
+    #[allow(dead_code)] // retained for future explorer/status detail
     pub fn expanded_dir_count(&self) -> usize {
         self.expanded.iter().filter(|p| p.as_path() != self.root.as_path()).count()
     }

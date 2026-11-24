@@ -171,11 +171,17 @@ fn textarea_drag_keeps_its_selection_on_release() {
 fn panel_theme() -> crate::render::Theme {
     crate::render::Theme {
         bg: (0, 0, 0),
+        surface_chrome: (0, 0, 0),
+        surface: (0, 0, 0),
         bg_elevated: (10, 20, 30),
+        surface_hover: (0, 0, 0),
         fg: (255, 255, 255),
         fg_dim: (90, 90, 90),
+        text_muted: (0, 0, 0),
+        text_dim: (0, 0, 0),
         accent: (200, 220, 255),
         border: (60, 60, 70),
+        border_subtle: (0, 0, 0),
         selection: (40, 50, 60),
         syntax_keyword: (203, 166, 247),
         syntax_string: (166, 227, 161),

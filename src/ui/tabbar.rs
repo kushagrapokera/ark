@@ -97,11 +97,17 @@ mod tests {
         // palette pins.
         let theme = Theme {
             bg: (10, 0, 0),
+            surface_chrome: (10, 0, 0),
+            surface: (10, 0, 0),
             bg_elevated: (0, 20, 0),
+            surface_hover: (10, 0, 0),
             fg: (0, 0, 30),
             fg_dim: (0, 40, 0),
+            text_muted: (10, 0, 0),
+            text_dim: (10, 0, 0),
             accent: (255, 0, 0),
             border: (5, 5, 5),
+            border_subtle: (10, 0, 0),
             selection: (6, 6, 6),
             syntax_keyword: (7, 0, 0),
             syntax_string: (0, 7, 0),

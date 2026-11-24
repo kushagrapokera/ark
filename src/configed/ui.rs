@@ -99,7 +99,7 @@ pub(crate) fn draw(
         (err.clone(), theme.git_deleted)
     } else if editor.external_change {
         ("changed on disk — Reload to discard your edits".to_string(), theme.git_modified)
-    } else if editor.dirty {
+    } else if editor.is_dirty() {
         ("modified · Ctrl+S saves".to_string(), theme.git_modified)
     } else {
         ("saved".to_string(), theme.fg_dim)

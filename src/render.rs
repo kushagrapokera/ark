@@ -21,11 +21,23 @@ pub type ColorRgb = (u8, u8, u8);
 /// generic token palette the M4 regex highlighter maps to.
 pub struct Theme {
     pub bg: ColorRgb,
+    /// Window chrome background (`#181818` in Dark+).
+    pub surface_chrome: ColorRgb,
+    /// Card/editor surface (`#1F1F1F`).
+    pub surface: ColorRgb,
     pub bg_elevated: ColorRgb,
+    /// Hover/current-line surface (`#2A2D2E`).
+    pub surface_hover: ColorRgb,
     pub fg: ColorRgb,
     pub fg_dim: ColorRgb,
+    /// Muted chrome text (`#9D9D9D`).
+    pub text_muted: ColorRgb,
+    /// Dim code/minimap text (`#8B949E`).
+    pub text_dim: ColorRgb,
     pub accent: ColorRgb,
     pub border: ColorRgb,
+    /// Subtle card border (`#2B2B2B`).
+    pub border_subtle: ColorRgb,
     pub selection: ColorRgb,
     /// Keywords / control flow (mauve).
     pub syntax_keyword: ColorRgb,
@@ -81,11 +93,17 @@ impl Theme {
     #[allow(dead_code)]
     pub const DARK: Theme = Theme {
         bg: (0x1E, 0x1E, 0x2E),
+        surface_chrome: (0x18, 0x18, 0x24),
+        surface: (0x1E, 0x1E, 0x2E),
         bg_elevated: (0x24, 0x24, 0x37),
+        surface_hover: (0x31, 0x32, 0x44),
         fg: (0xCD, 0xD6, 0xF4),
         fg_dim: (0x93, 0x99, 0xB2),
+        text_muted: (0x93, 0x99, 0xB2),
+        text_dim: (0x7F, 0x85, 0xA3),
         accent: (0x89, 0xB4, 0xFA),
         border: (0x31, 0x32, 0x44),
+        border_subtle: (0x31, 0x32, 0x44),
         selection: (0x45, 0x47, 0x5A),
         syntax_keyword: (0xCB, 0xA6, 0xF7),
         syntax_control: (0xF5, 0xC2, 0xE7),
@@ -119,11 +137,17 @@ impl Theme {
     /// available and tests can pin either.
     pub const DARK_PLUS: Theme = Theme {
         bg: (0x1E, 0x1E, 0x1E),
+        surface_chrome: (0x18, 0x18, 0x18),
+        surface: (0x1F, 0x1F, 0x1F),
         bg_elevated: (0x25, 0x25, 0x26),
+        surface_hover: (0x2A, 0x2D, 0x2E),
         fg: (0xD4, 0xD4, 0xD4),
         fg_dim: (0x96, 0x96, 0x96),
+        text_muted: (0x9D, 0x9D, 0x9D),
+        text_dim: (0x8B, 0x94, 0x9E),
         accent: (0x00, 0x7A, 0xCC),
         border: (0x3C, 0x3C, 0x3C),
+        border_subtle: (0x2B, 0x2B, 0x2B),
         selection: (0x26, 0x4F, 0x78),
         syntax_keyword: (0x56, 0x9C, 0xD6),
         syntax_control: (0xC5, 0x86, 0xC0),
@@ -258,9 +282,8 @@ impl Canvas {
     }
 
     pub fn fill(&mut self, color: ColorRgb) {
-        self.pixmap.fill(tiny_skia::Color::from_rgba8(
-            color.0, color.1, color.2, 255,
-        ));
+        self.pixmap
+            .fill(tiny_skia::Color::from_rgba8(color.0, color.1, color.2, 255));
     }
 
     /// Fill a logical-space rect (scaled internally) with an opaque color.
@@ -275,12 +298,66 @@ impl Canvas {
         let mut paint = tiny_skia::Paint::default();
         paint.set_color_rgba8(color.0, color.1, color.2, 255);
         paint.anti_alias = false;
-        self.pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+        self.pixmap
+            .fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+    }
+
+    /// Fill an anti-aliased rounded rectangle in logical space. The path is
+    /// temporary; no geometry or cache is retained by the canvas.
+    #[allow(clippy::too_many_arguments)] // explicit rounded-rect geometry
+    pub fn fill_round_rect(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        radius: f64,
+        color: ColorRgb,
+        scale: f64,
+    ) {
+        if !(scale > 0.0 && w > 0.0 && h > 0.0) {
+            return;
+        }
+        let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+        let x0 = (x * scale) as f32;
+        let y0 = (y * scale) as f32;
+        let x1 = ((x + w) * scale) as f32;
+        let y1 = ((y + h) * scale) as f32;
+        let rr = (r * scale) as f32;
+        let mut path = tiny_skia::PathBuilder::new();
+        path.move_to(x0 + rr, y0);
+        path.line_to(x1 - rr, y0);
+        path.quad_to(x1, y0, x1, y0 + rr);
+        path.line_to(x1, y1 - rr);
+        path.quad_to(x1, y1, x1 - rr, y1);
+        path.line_to(x0 + rr, y1);
+        path.quad_to(x0, y1, x0, y1 - rr);
+        path.line_to(x0, y0 + rr);
+        path.quad_to(x0, y0, x0 + rr, y0);
+        path.close();
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(color.0, color.1, color.2, 255);
+        paint.anti_alias = true;
+        self.pixmap.fill_path(
+            &path.finish().expect("valid rounded rect"),
+            &paint,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
 
     /// 1-logical-px border outline of a logical-space rect via four un-AA'd
     /// fill strips — exact pixels with no AA seam against blitted interiors.
-    pub fn stroke_rect_strips(&mut self, x: f64, y: f64, w: f64, h: f64, color: ColorRgb, scale: f64) {
+    pub fn stroke_rect_strips(
+        &mut self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        color: ColorRgb,
+        scale: f64,
+    ) {
         if scale > 0.0 && w >= 2.0 && h >= 2.0 {
             self.fill_rect(x, y, w, 1.0, color, scale);
             self.fill_rect(x, y + h - 1.0, w, 1.0, color, scale);
@@ -376,8 +453,18 @@ mod tests {
     fn damage_marked_rects_are_returned() {
         let mut d = Damage::new(4);
         d.take(800, 600); // consume initial full damage
-        d.mark(DamageRect { x: 10, y: 20, width: 5, height: 6 });
-        d.mark(DamageRect { x: 0, y: 0, width: 1, height: 1 });
+        d.mark(DamageRect {
+            x: 10,
+            y: 20,
+            width: 5,
+            height: 6,
+        });
+        d.mark(DamageRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        });
         let rects = d.take(800, 600).expect("two marked rects");
         assert_eq!(rects.len(), 2);
         assert!(d.is_empty());
@@ -388,7 +475,12 @@ mod tests {
         let mut d = Damage::new(2);
         d.take(800, 600);
         for i in 0..3 {
-            d.mark(DamageRect { x: i, y: 0, width: 1, height: 1 });
+            d.mark(DamageRect {
+                x: i,
+                y: 0,
+                width: 1,
+                height: 1,
+            });
         }
         let rects = d.take(800, 600).expect("degraded to full");
         assert_eq!(rects.len(), 1, "cap exceeded → single full-canvas rect");
@@ -398,10 +490,18 @@ mod tests {
     #[test]
     fn mark_is_noop_while_full() {
         let mut d = Damage::new(4);
-        d.mark(DamageRect { x: 1, y: 1, width: 1, height: 1 }); // initial state: full
+        d.mark(DamageRect {
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        }); // initial state: full
         let rects = d.take(10, 10).expect("still full");
         assert_eq!(rects.len(), 1);
-        assert_eq!(rects[0].width, 10, "must be full-canvas, not the marked rect");
+        assert_eq!(
+            rects[0].width, 10,
+            "must be full-canvas, not the marked rect"
+        );
     }
 
     // ---- Canvas + blit ----
@@ -410,9 +510,9 @@ mod tests {
     fn canvas_fill_and_blit_pack_0xrrggbb() {
         let mut canvas = Canvas::new(2, 1);
         canvas.fill((255, 0, 0)); // pure red
-        // paint pixel (1,0) green via the raw premultiplied pixel buffer
-        let green = tiny_skia::PremultipliedColorU8::from_rgba(0, 255, 0, 255)
-            .expect("opaque green");
+                                  // paint pixel (1,0) green via the raw premultiplied pixel buffer
+        let green =
+            tiny_skia::PremultipliedColorU8::from_rgba(0, 255, 0, 255).expect("opaque green");
         canvas.pixmap_mut().pixels_mut()[1] = green;
 
         let mut buffer = vec![0u32; 2];
@@ -428,9 +528,26 @@ mod tests {
         // 2x2 logical rect at 2x scale → 4x4 physical pixels at (2,2)
         canvas.fill_rect(1.0, 1.0, 2.0, 2.0, (255, 255, 255), 2.0);
         let center = canvas.pixmap().pixel(4, 4).expect("inside rect");
-        assert_eq!((center.red(), center.green(), center.blue()), (255, 255, 255));
+        assert_eq!(
+            (center.red(), center.green(), center.blue()),
+            (255, 255, 255)
+        );
         let outside = canvas.pixmap().pixel(0, 0).expect("outside rect");
         assert_eq!((outside.red(), outside.green(), outside.blue()), (0, 0, 0));
+    }
+
+    #[test]
+    fn canvas_round_rect_keeps_corners_clear() {
+        let mut canvas = Canvas::new(20, 20);
+        canvas.fill((0, 0, 0));
+        canvas.fill_round_rect(2.0, 2.0, 16.0, 16.0, 4.0, (255, 255, 255), 1.0);
+        let center = canvas.pixmap().pixel(10, 10).expect("center");
+        assert_eq!(
+            (center.red(), center.green(), center.blue()),
+            (255, 255, 255)
+        );
+        let corner = canvas.pixmap().pixel(2, 2).expect("corner");
+        assert_eq!((corner.red(), corner.green(), corner.blue()), (0, 0, 0));
     }
 
     #[test]

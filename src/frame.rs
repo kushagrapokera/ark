@@ -1,70 +1,79 @@
-//! The app frame: real layout (header, info line, tree|viewer split, status
-//! line) and the scene composition. Layout is computed in LOGICAL px from
-//! the window size; `draw_frame` rasterizes one frame and reports what
-//! changed so the caller can decide damage (scroll → the scrolled panel's
-//! rect, everything else → full; see FrameEffects).
+//! The app frame: card-based workbench layout and scene composition. Layout
+//! is computed in LOGICAL px from the window size; `draw_frame` rasterizes one
+//! frame and reports what changed for damage tracking.
 
 use std::path::{Path, PathBuf};
 
 use cosmic_text::Weight;
 
-use crate::commit::CommitPanel;
 use crate::configed::ConfigEditor;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::render::{Canvas, Theme};
 use crate::term::{self, TerminalTabs};
-use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
+use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
 use crate::tree::{self, FileTree, ROW_H};
-use crate::ui::{draw_button, Pointer, Press, Rect, Scrollbar, Split, TabBar, TAB_HEIGHT};
+use crate::ui::{Pointer, Rect, Scrollbar, Split};
 use crate::viewer::{self, Viewer, LINE_H};
 
-/// Left margin shared by header, info line, tree panel and status line.
-const LEFT_MARGIN: f64 = 8.0;
-/// Baselines (logical px from the window top).
-const HEADER_BASELINE: f64 = 40.0;
-/// Top of the split area (below header + info line).
-const CONTENT_TOP: f64 = 88.0;
-/// Split clamps: a readable minimum tree width, and a placeholder that
-/// never fully disappears on the right.
-const SPLIT_MIN_PX: f64 = 160.0;
-const SPLIT_MAX_MARGIN: f64 = 220.0;
-/// Sidebar resize handle (M12 polish): VS Code-style three vertical dots.
-const SIDEBAR_DEFAULT_PX: f64 = 280.0;
+mod chrome;
+
+/// Card-layout metrics from the supplied workbench design.
+const PAD: f64 = 8.0;
+const GAP: f64 = 8.0;
+const TITLE_H: f64 = 36.0;
+const ACTIVITY_W: f64 = 48.0;
+const EXPLORER_HEADER_H: f64 = 36.0;
+const EXPLORER_ROOT_H: f64 = 28.0;
+const EXPLORER_FOOTER_H: f64 = 56.0;
+const EDITOR_TAB_H: f64 = 36.0;
+const BREADCRUMB_H: f64 = 24.0;
+const TERM_DOCK_H: f64 = 224.0;
+const STATUS_H: f64 = 24.0;
+const MINIMAP_W: f64 = 56.0;
+const CARD_RADIUS: f64 = 6.0;
+/// Split clamps: explorer card width and a usable editor minimum.
+const SPLIT_MIN_PX: f64 = 224.0;
+const SPLIT_MAX_MARGIN: f64 = 280.0;
+/// Explorer card right edge (activity card + gap + 240 px explorer).
+const SIDEBAR_DEFAULT_PX: f64 = 64.0 + 240.0;
 const SIDEBAR_HANDLE_W: f64 = 16.0;
 const SIDEBAR_HANDLE_H: f64 = 24.0;
-const SIDEBAR_HANDLE_Y: f64 = CONTENT_TOP - SIDEBAR_HANDLE_H - 4.0;
 /// Height of the "changed on disk" flash strip (viewer pane top edge).
 pub const FLASH_STRIP_H: f64 = 3.0;
-/// Workbench chrome (M12): activity bar, editor tabs, breadcrumb, dock.
-const ACTIVITY_W: f64 = 48.0;
-const EDITOR_TAB_H: f64 = 30.0;
-const BREADCRUMB_H: f64 = 22.0;
-const TERM_DOCK_H: f64 = 220.0;
-const STATUS_H: f64 = 24.0;
 /// Geometry of one frame in LOGICAL px, derived from the window size and
 /// the current split position. Pure — tests pin it.
 pub struct AppLayout {
-    /// Far-left activity strip (Explorer / Source Control / Terminal / Config).
+    /// Top title/menu/command-center bar.
+    pub title_bar: Rect,
+    /// Padded card area between title bar and status bar.
+    pub workbench: Rect,
+    /// Far-left activity card.
     pub activity_bar: Rect,
+    /// Explorer card and its static chrome regions.
+    pub explorer_card: Rect,
+    pub explorer_header: Rect,
+    pub explorer_root: Rect,
+    pub explorer_footer: Rect,
+    /// Functional tree viewport inside the explorer card.
     pub tree_panel: Rect,
     pub scroll_track: Rect,
-    /// Commit & push panel (M8) under the tree; zero-height when hidden.
+    /// Commit panel retained for compatibility; hidden in the card design.
     pub commit_panel: Rect,
+    /// Narrow drag hit-area between explorer and editor cards.
     pub split_area: Rect,
-    /// File/config tab strip above the editor body.
+    /// Editor card, tab strip, breadcrumbs, body and minimap.
+    pub editor_card: Rect,
     pub editor_tabs: Rect,
-    /// Path breadcrumb strip under the file tabs.
     pub breadcrumb: Rect,
-    /// The editor body: read-only viewer or config editor.
     pub viewer_pane: Rect,
-    /// Bottom terminal dock; zero-height when no terminal tabs are open.
+    pub minimap: Rect,
+    /// Bottom terminal card and its chrome/body regions.
     pub term_dock: Rect,
-    /// Terminal tab strip inside the dock.
-    pub term_tabbar: Rect,
-    /// The terminal grid rect inside the dock, below the tab strip.
+    pub terminal_toolbar: Rect,
     pub term_grid: Rect,
-    /// Damage envelope of the status line (its ink sits well inside).
+    pub terminal_sessions: Rect,
+    /// Damage envelope of the status line.
     pub status: Rect,
 }
 
@@ -79,74 +88,226 @@ pub fn app_layout_with_commit(
     w: f64,
     h: f64,
     split_x: f64,
-    show_commit: bool,
+    _show_commit: bool,
     show_term: bool,
 ) -> AppLayout {
-    let status_y = (h - STATUS_H).max(CONTENT_TOP);
-    let area_h = (status_y - CONTENT_TOP).max(0.0);
-    let area = Rect { x: 0.0, y: CONTENT_TOP, w: w.max(0.0), h: area_h };
-    let panel_w = (split_x - ACTIVITY_W - 16.0).max(0.0);
-    let commit_h = if show_commit {
-        crate::commit::PANEL_H.min(area.h * 0.6).max(0.0)
+    let w = w.max(0.0);
+    let h = h.max(0.0);
+    let narrow = w < 560.0;
+    let compact = w < 760.0;
+    let short = h < 620.0;
+    let pad = if narrow { 4.0 } else { PAD };
+    let gap = if narrow { 4.0 } else { GAP };
+    let activity_w = if narrow { 40.0 } else { ACTIVITY_W };
+    let status_y = (h - STATUS_H).max(TITLE_H);
+    let work_y = TITLE_H + pad;
+    let work_h = (status_y - work_y - pad).max(0.0);
+
+    let activity = Rect {
+        x: pad,
+        y: work_y,
+        w: activity_w,
+        h: work_h,
+    };
+    let explorer_x = pad + activity_w + gap;
+    let show_explorer = !compact;
+    let explorer_w = if show_explorer {
+        (split_x - explorer_x).clamp(160.0, (w - explorer_x - gap).max(160.0))
     } else {
         0.0
     };
-    let tree_h = (area.h - commit_h).max(0.0);
-    let dock_h = if show_term { TERM_DOCK_H.min(area.h * 0.4).max(0.0) } else { 0.0 };
-    let editor_x = split_x + 16.0;
-    let editor_w = (w - split_x - 24.0).max(0.0);
-    let tabs_bottom = CONTENT_TOP + EDITOR_TAB_H + BREADCRUMB_H;
-    let editor_h = (status_y - tabs_bottom - dock_h).max(0.0);
-    let dock_y = status_y - dock_h;
+    let explorer = Rect {
+        x: explorer_x,
+        y: work_y,
+        w: explorer_w,
+        h: work_h,
+    };
+    let explorer_header_h = if show_explorer {
+        EXPLORER_HEADER_H
+    } else {
+        0.0
+    };
+    let explorer_root_h = if show_explorer { EXPLORER_ROOT_H } else { 0.0 };
+    let explorer_footer_h = if show_explorer {
+        EXPLORER_FOOTER_H
+    } else {
+        0.0
+    };
+    let explorer_header = Rect {
+        x: explorer.x,
+        y: explorer.y,
+        w: explorer.w,
+        h: explorer_header_h,
+    };
+    let explorer_root = Rect {
+        x: explorer.x,
+        y: explorer.y + explorer_header_h,
+        w: explorer.w,
+        h: explorer_root_h,
+    };
+    let explorer_footer = Rect {
+        x: explorer.x,
+        y: explorer.y + explorer.h - explorer_footer_h,
+        w: explorer.w,
+        h: explorer_footer_h,
+    };
+    let tree_panel = Rect {
+        x: explorer.x + pad,
+        y: explorer_root.y + explorer_root.h,
+        w: (explorer.w - 2.0 * pad).max(0.0),
+        h: (explorer_footer.y - explorer_root.y - explorer_root.h - pad).max(0.0),
+    };
+    let scroll_track = Rect {
+        x: tree_panel.x + (tree_panel.w - tree::TRACK_W).max(0.0),
+        y: tree_panel.y,
+        w: if tree_panel.w > 0.0 {
+            tree::TRACK_W
+        } else {
+            0.0
+        },
+        h: tree_panel.h,
+    };
+
+    let editor_x = if show_explorer {
+        explorer.x + explorer.w + gap
+    } else {
+        activity.x + activity.w + gap
+    };
+    let editor_w = (w - pad - editor_x).max(0.0);
+    let dock_h = if show_term {
+        if short || compact {
+            140.0_f64.min(work_h * 0.35)
+        } else {
+            TERM_DOCK_H.min(work_h * 0.40)
+        }
+        .max(0.0)
+    } else {
+        0.0
+    };
+    let editor_card_h = (work_h - dock_h - if dock_h > 0.0 { gap } else { 0.0 }).max(0.0);
+    let editor_card = Rect {
+        x: editor_x,
+        y: work_y,
+        w: editor_w,
+        h: editor_card_h,
+    };
+    let editor_tab_h = if narrow { 32.0 } else { EDITOR_TAB_H };
+    let breadcrumb_h = if narrow { 20.0 } else { BREADCRUMB_H };
+    let editor_tabs = Rect {
+        x: editor_card.x,
+        y: editor_card.y,
+        w: editor_card.w,
+        h: editor_tab_h,
+    };
+    let breadcrumb = Rect {
+        x: editor_card.x,
+        y: editor_tabs.y + editor_tab_h,
+        w: editor_card.w,
+        h: breadcrumb_h,
+    };
+    let minimap_w = if editor_w >= 560.0 { MINIMAP_W } else { 0.0 };
+    let viewer_pane = Rect {
+        x: editor_card.x + pad,
+        y: breadcrumb.y + breadcrumb_h,
+        w: (editor_card.w - 2.0 * pad - minimap_w - if minimap_w > 0.0 { gap } else { 0.0 })
+            .max(0.0),
+        h: (editor_card.h - editor_tab_h - breadcrumb_h - pad).max(0.0),
+    };
+    let minimap = Rect {
+        x: editor_card.x + editor_card.w - pad - minimap_w,
+        y: viewer_pane.y,
+        w: minimap_w,
+        h: viewer_pane.h,
+    };
+
+    let terminal = Rect {
+        x: editor_card.x,
+        y: editor_card.y + editor_card.h + if dock_h > 0.0 { gap } else { 0.0 },
+        w: editor_card.w,
+        h: dock_h,
+    };
+    let terminal_toolbar_h = if short { 30.0 } else { EDITOR_TAB_H };
+    let terminal_toolbar = Rect {
+        x: terminal.x,
+        y: terminal.y,
+        w: terminal.w,
+        h: terminal_toolbar_h,
+    };
+    let sessions_w = if terminal.w >= 520.0 { 36.0 } else { 0.0 };
+    let terminal_sessions = Rect {
+        x: terminal.x + terminal.w - sessions_w,
+        y: terminal_toolbar.y + terminal_toolbar.h,
+        w: sessions_w,
+        h: (terminal.h - terminal_toolbar.h).max(0.0),
+    };
+    let term_grid = Rect {
+        x: terminal.x + pad,
+        y: terminal_toolbar.y + terminal_toolbar.h,
+        w: (terminal.w - sessions_w - 2.0 * pad).max(0.0),
+        h: (terminal.h - terminal_toolbar.h - pad).max(0.0),
+    };
+
     AppLayout {
-        activity_bar: Rect { x: 0.0, y: CONTENT_TOP, w: ACTIVITY_W, h: area.h },
-        tree_panel: Rect { x: ACTIVITY_W + LEFT_MARGIN, y: CONTENT_TOP, w: panel_w, h: tree_h },
-        scroll_track: Rect {
-            x: ACTIVITY_W + LEFT_MARGIN + (panel_w - tree::TRACK_W).max(0.0),
-            y: CONTENT_TOP,
-            w: tree::TRACK_W,
-            h: tree_h,
+        title_bar: Rect {
+            x: 0.0,
+            y: 0.0,
+            w,
+            h: TITLE_H,
         },
+        workbench: Rect {
+            x: pad,
+            y: work_y,
+            w: (w - 2.0 * pad).max(0.0),
+            h: work_h,
+        },
+        activity_bar: activity,
+        explorer_card: explorer,
+        explorer_header,
+        explorer_root,
+        explorer_footer,
+        tree_panel,
+        scroll_track,
         commit_panel: Rect {
-            x: ACTIVITY_W + LEFT_MARGIN,
-            y: CONTENT_TOP + tree_h,
-            w: panel_w,
-            h: commit_h,
+            x: explorer.x,
+            y: explorer.y + explorer.h,
+            w: explorer.w,
+            h: 0.0,
         },
-        editor_tabs: Rect { x: editor_x, y: CONTENT_TOP, w: editor_w, h: EDITOR_TAB_H },
-        breadcrumb: Rect {
-            x: editor_x,
-            y: CONTENT_TOP + EDITOR_TAB_H,
-            w: editor_w,
-            h: BREADCRUMB_H,
+        split_area: Rect {
+            x: explorer.x + explorer.w,
+            y: work_y,
+            w: if show_explorer { gap } else { 0.0 },
+            h: work_h,
         },
-        viewer_pane: Rect { x: editor_x, y: tabs_bottom, w: editor_w, h: editor_h },
-        term_dock: Rect { x: editor_x, y: dock_y, w: editor_w, h: dock_h },
-        term_tabbar: Rect {
-            x: editor_x,
-            y: dock_y,
-            w: (editor_w - 60.0).max(0.0),
-            h: TAB_HEIGHT,
+        editor_card,
+        editor_tabs,
+        breadcrumb,
+        viewer_pane,
+        minimap,
+        term_dock: terminal,
+        terminal_toolbar,
+        term_grid,
+        terminal_sessions,
+        status: Rect {
+            x: 0.0,
+            y: status_y,
+            w,
+            h: STATUS_H,
         },
-        term_grid: Rect {
-            x: editor_x,
-            y: dock_y + TAB_HEIGHT,
-            w: editor_w,
-            h: (dock_h - TAB_HEIGHT).max(0.0),
-        },
-        split_area: area,
-        status: Rect { x: 0.0, y: status_y, w: w.max(0.0), h: STATUS_H },
     }
 }
 
-/// Three-dot resize handle centered on the split divider in the header gap.
-fn sidebar_handle(split_x: f64) -> Rect {
-    Rect {
-        x: split_x - SIDEBAR_HANDLE_W / 2.0,
-        y: SIDEBAR_HANDLE_Y,
+/// Three-dot resize handle centered on the visible split divider.
+fn sidebar_handle(layout: &AppLayout, split_x: f64) -> Option<Rect> {
+    if layout.split_area.w <= 0.0 {
+        return None;
+    }
+    Some(Rect {
+        x: split_x + layout.split_area.w / 2.0 - SIDEBAR_HANDLE_W / 2.0,
+        y: layout.workbench.y + 6.0,
         w: SIDEBAR_HANDLE_W,
         h: SIDEBAR_HANDLE_H,
-    }
+    })
 }
 
 fn draw_sidebar_handle(f: &mut Frame, rect: Rect, dragging: bool) {
@@ -162,14 +323,8 @@ fn draw_sidebar_handle(f: &mut Frame, rect: Rect, dragging: bool) {
     let x = rect.x + (rect.w - dot) / 2.0;
     let y = rect.y + (rect.h - total) / 2.0;
     for index in 0..3 {
-        f.canvas.fill_rect(
-            x,
-            y + index as f64 * (dot + gap),
-            dot,
-            dot,
-            color,
-            f.scale,
-        );
+        f.canvas
+            .fill_rect(x, y + index as f64 * (dot + gap), dot, dot, color, f.scale);
     }
 }
 
@@ -182,97 +337,6 @@ pub enum ActivityPanel {
     Config,
 }
 
-impl ActivityPanel {
-    pub const ALL: [ActivityPanel; 4] = [
-        ActivityPanel::Explorer,
-        ActivityPanel::SourceControl,
-        ActivityPanel::Terminal,
-        ActivityPanel::Config,
-    ];
-
-    fn icon(self) -> crate::icons::Icon {
-        match self {
-            ActivityPanel::Explorer => crate::icons::Icon::File,
-            ActivityPanel::SourceControl => crate::icons::Icon::SourceControl,
-            ActivityPanel::Terminal => crate::icons::Icon::Terminal,
-            ActivityPanel::Config => crate::icons::Icon::Config,
-        }
-    }
-}
-
-/// Activity-bar icon rects (top-aligned, one per panel).
-fn activity_rects(bar: Rect) -> Vec<(ActivityPanel, Rect)> {
-    ActivityPanel::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            (
-                *p,
-                Rect {
-                    x: bar.x + 6.0,
-                    y: bar.y + 8.0 + i as f64 * 52.0,
-                    w: bar.w - 12.0,
-                    h: 40.0,
-                },
-            )
-        })
-        .collect()
-}
-
-/// Draw the far-left activity strip. Count badges ride the existing git and
-/// terminal state — no new panel state is introduced.
-fn draw_activity_bar(
-    f: &mut Frame,
-    bar: Rect,
-    term_count: usize,
-) -> Option<ActivityPanel> {
-    if bar.w <= 0.0 || bar.h <= 0.0 {
-        return None;
-    }
-    f.canvas.fill_rect(bar.x, bar.y, bar.w, bar.h, f.theme.bg_elevated, f.scale);
-    let mut clicked = None;
-    for (panel, rect) in activity_rects(bar) {
-        let active = f.activity == panel;
-        if active {
-            f.canvas.fill_rect(bar.x, rect.y, 3.0, rect.h, f.theme.accent, f.scale);
-        }
-        let color = if active { f.theme.accent } else { f.theme.fg_dim };
-        crate::icons::draw(
-            f.canvas.pixmap_mut(),
-            panel.icon(),
-            (rect.x + rect.w / 2.0) as f32,
-            (rect.y + rect.h / 2.0 - 4.0) as f32,
-            20.0,
-            color,
-            f.scale,
-        );
-        let count = match panel {
-            ActivityPanel::SourceControl => f.git.map(|g| g.changed_count()).unwrap_or(0),
-            ActivityPanel::Terminal => term_count,
-            _ => 0,
-        };
-        if count > 0 {
-            let badge = Rect { x: rect.x + rect.w - 18.0, y: rect.y + rect.h - 14.0, w: 16.0, h: 14.0 };
-            f.canvas.fill_rect(badge.x, badge.y, badge.w, badge.h, f.theme.accent, f.scale);
-            let font = (10.0 * f.scale) as f32;
-            let m = f.text.mono_metrics(font, font * 1.35);
-            let baseline = (badge.y + badge.h / 2.0) * f.scale
-                + f64::from(m.ascent - m.descent) / 2.0;
-            f.text.draw_line(
-                f.canvas,
-                &count.to_string(),
-                (badge.x * f.scale) as f32,
-                baseline as f32,
-                TextStyle { color: f.theme.on_accent, font_size: font, weight: Weight::BOLD },
-            );
-        }
-        if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
-            clicked = Some(panel);
-        }
-    }
-    clicked
-}
-
 /// File-tab rects across the editor tab strip. Tabs are bounded by the LRU
 /// cache (plus at most one config editor), so the strip never grows without
 /// bound.
@@ -280,8 +344,14 @@ fn file_tab_rects(pane: Rect, count: usize) -> Vec<Rect> {
     if count == 0 || pane.w <= 0.0 {
         return Vec::new();
     }
-    let tab_w = (pane.w / count as f64).floor().clamp(48.0, 160.0);
-    (0..count)
+    // Keep every drawn tab inside the strip. The cache is bounded, but a
+    // narrow window can still show fewer tabs than the cache holds.
+    let visible = count.min(((pane.w / 48.0).floor() as usize).max(1));
+    let tab_w = (pane.w / visible as f64)
+        .floor()
+        .clamp(36.0, 160.0)
+        .min(pane.w);
+    (0..visible)
         .map(|i| Rect {
             x: pane.x + i as f64 * tab_w,
             y: pane.y,
@@ -299,18 +369,45 @@ fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf
     if pane.w <= 0.0 || pane.h <= 0.0 {
         return (select, close);
     }
-    f.canvas.fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg_elevated, f.scale);
+    f.canvas
+        .fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg_elevated, f.scale);
     let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
-    let m = f.text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+    let m = f
+        .text
+        .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let advance = f64::from(m.advance) / f.scale;
-    let rects = file_tab_rects(pane, f.open_files.len());
+    let active_is_config = f
+        .config
+        .as_ref()
+        .is_some_and(|c| f.active_path == Some(c.path()));
+    // On compact strips the actions already consume the right edge; omit the
+    // optional READ-ONLY badge rather than letting it cover a file tab.
+    let badge_w = if !active_is_config && pane.w >= 480.0 {
+        92.0
+    } else {
+        0.0
+    };
+    let tab_area = Rect {
+        w: (pane.w - badge_w - if badge_w > 0.0 { 8.0 } else { 0.0 }).max(0.0),
+        ..pane
+    };
+    let rects = file_tab_rects(tab_area, f.open_files.len());
     for (rect, path) in rects.iter().zip(f.open_files.iter()) {
         let active = f.active_path == Some(path.as_path());
         if active {
-            f.canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.bg, f.scale);
-            f.canvas.fill_rect(rect.x, rect.y + rect.h - 2.0, rect.w, 2.0, f.theme.accent, f.scale);
+            f.canvas
+                .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.bg, f.scale);
+            f.canvas.fill_rect(
+                rect.x,
+                rect.y + rect.h - 2.0,
+                rect.w,
+                2.0,
+                f.theme.accent,
+                f.scale,
+            );
         } else if rect.contains(f.pointer.x, f.pointer.y) {
-            f.canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.selection, f.scale);
+            f.canvas
+                .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.selection, f.scale);
         }
         let name = path
             .file_name()
@@ -318,14 +415,17 @@ fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf
             .unwrap_or_else(|| "(unset)".into());
         let max_chars = (((rect.w - 44.0) / advance).floor()).max(1.0) as usize;
         let label: String = name.chars().take(max_chars).collect();
-        let baseline = (rect.y + rect.h / 2.0) * f.scale
-            + f64::from(m.ascent - m.descent) / 2.0;
+        let baseline = (rect.y + rect.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
         f.text.draw_line(
             f.canvas,
             &label,
             ((rect.x + 10.0) * f.scale) as f32,
             baseline as f32,
-            TextStyle { color: f.theme.fg, font_size, weight: Weight::NORMAL },
+            TextStyle {
+                color: f.theme.fg,
+                font_size,
+                weight: Weight::NORMAL,
+            },
         );
         if let Some(badge) = f.git.and_then(|g| g.badge_for(path)) {
             let (letter, color) = crate::tree::badge_glyph(badge, f.theme);
@@ -334,7 +434,11 @@ fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf
                 letter,
                 ((rect.x + rect.w - 30.0) * f.scale) as f32,
                 baseline as f32,
-                TextStyle { color, font_size, weight: Weight::BOLD },
+                TextStyle {
+                    color,
+                    font_size,
+                    weight: Weight::BOLD,
+                },
             );
         }
         let close_rect = Rect {
@@ -348,7 +452,11 @@ fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf
             "\u{d7}",
             ((close_rect.x + 4.0) * f.scale) as f32,
             baseline as f32,
-            TextStyle { color: f.theme.fg_dim, font_size, weight: Weight::NORMAL },
+            TextStyle {
+                color: f.theme.fg_dim,
+                font_size,
+                weight: Weight::NORMAL,
+            },
         );
         if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
             if close_rect.contains(f.pointer.x, f.pointer.y) {
@@ -360,17 +468,9 @@ fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf
     }
     // READ-ONLY badge at the strip's right edge (not for the writable config
     // editor tab).
-    if f.open_files.is_empty() {
+    if f.open_files.is_empty() || badge_w == 0.0 {
         return (select, close);
     }
-    let active_is_config = f
-        .config
-        .as_ref()
-        .is_some_and(|c| f.active_path == Some(c.path()));
-    if active_is_config {
-        return (select, close);
-    }
-    let badge_w = 92.0;
     let badge = Rect {
         x: pane.x + pane.w - badge_w - 8.0,
         y: pane.y + 5.0,
@@ -378,16 +478,21 @@ fn draw_file_tabs(f: &mut Frame, pane: Rect) -> (Option<PathBuf>, Option<PathBuf
         h: pane.h - 10.0,
     };
     if badge.x > pane.x {
-        f.canvas.fill_rect(badge.x, badge.y, badge.w, badge.h, f.theme.bg, f.scale);
-        f.canvas.stroke_rect_strips(badge.x, badge.y, badge.w, badge.h, f.theme.border, f.scale);
-        let baseline = (badge.y + badge.h / 2.0) * f.scale
-            + f64::from(m.ascent - m.descent) / 2.0;
+        f.canvas
+            .fill_rect(badge.x, badge.y, badge.w, badge.h, f.theme.bg, f.scale);
+        f.canvas
+            .stroke_rect_strips(badge.x, badge.y, badge.w, badge.h, f.theme.border, f.scale);
+        let baseline = (badge.y + badge.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
         f.text.draw_line(
             f.canvas,
             "READ-ONLY",
             ((badge.x + 12.0) * f.scale) as f32,
             baseline as f32,
-            TextStyle { color: f.theme.fg_dim, font_size: (11.0 * f.scale) as f32, weight: Weight::BOLD },
+            TextStyle {
+                color: f.theme.fg_dim,
+                font_size: (11.0 * f.scale) as f32,
+                weight: Weight::BOLD,
+            },
         );
     }
     (select, close)
@@ -398,34 +503,88 @@ fn draw_breadcrumb(f: &mut Frame, pane: Rect) {
     if pane.w <= 0.0 || pane.h <= 0.0 {
         return;
     }
-    f.canvas.fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg, f.scale);
+    f.canvas
+        .fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg, f.scale);
     let Some(path) = f.active_path else { return };
     let rel = path.strip_prefix(f.root).unwrap_or(path);
     let font_size = (11.0 * f.scale) as f32;
     let m = f.text.mono_metrics(font_size, font_size * 1.35);
+    let advance = f64::from(m.advance) / f.scale;
     let mut x = pane.x + 12.0;
     let baseline = (pane.y + pane.h / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
     let parts: Vec<_> = rel.components().collect();
+    let total: f64 = parts
+        .iter()
+        .map(|part| part.as_os_str().to_string_lossy().chars().count() as f64 * advance + 8.0)
+        .sum::<f64>()
+        + parts.len().saturating_sub(1) as f64 * (advance + 8.0);
+    let available = (pane.w - 24.0).max(0.0);
+    if total > available {
+        // Narrow windows keep the file name visible and drop parent crumbs.
+        if parts.len() > 1 && available > advance {
+            f.text.draw_line(
+                f.canvas,
+                "…",
+                (x * f.scale) as f32,
+                baseline as f32,
+                TextStyle {
+                    color: f.theme.fg_dim,
+                    font_size,
+                    weight: Weight::NORMAL,
+                },
+            );
+            x += advance + 8.0;
+        }
+        let Some(part) = parts.last() else { return };
+        let name = part.as_os_str().to_string_lossy();
+        let remaining = (pane.x + pane.w - 12.0 - x).max(0.0);
+        let max_chars = (remaining / advance).floor().max(0.0) as usize;
+        let label: String = name.chars().take(max_chars).collect();
+        f.text.draw_line(
+            f.canvas,
+            &label,
+            (x * f.scale) as f32,
+            baseline as f32,
+            TextStyle {
+                color: f.theme.fg,
+                font_size,
+                weight: Weight::NORMAL,
+            },
+        );
+        return;
+    }
     for (i, part) in parts.iter().enumerate() {
         let text = part.as_os_str().to_string_lossy();
-        let color = if i + 1 == parts.len() { f.theme.fg } else { f.theme.fg_dim };
+        let color = if i + 1 == parts.len() {
+            f.theme.fg
+        } else {
+            f.theme.fg_dim
+        };
         f.text.draw_line(
             f.canvas,
             &text,
             (x * f.scale) as f32,
             baseline as f32,
-            TextStyle { color, font_size, weight: Weight::NORMAL },
+            TextStyle {
+                color,
+                font_size,
+                weight: Weight::NORMAL,
+            },
         );
-        x += f64::from(m.advance) * text.chars().count() as f64 + 8.0;
+        x += advance * text.chars().count() as f64 + 8.0;
         if i + 1 < parts.len() {
             f.text.draw_line(
                 f.canvas,
                 ">",
                 (x * f.scale) as f32,
                 baseline as f32,
-                TextStyle { color: f.theme.fg_dim, font_size, weight: Weight::NORMAL },
+                TextStyle {
+                    color: f.theme.fg_dim,
+                    font_size,
+                    weight: Weight::NORMAL,
+                },
             );
-            x += f64::from(m.advance) + 8.0;
+            x += advance + 8.0;
         }
     }
 }
@@ -471,8 +630,6 @@ pub struct Frame<'a> {
     pub git: Option<&'a GitStatus>,
     /// The open file's diff marks (gutter strip).
     pub file_diff: Option<&'a FileDiff>,
-    /// Commit & push panel state (M8; drawn when `git` is Some).
-    pub commit: &'a mut CommitPanel,
     /// The open config editor (M9), shown in the right pane instead of the
     /// viewer while the App's pane mode is Config.
     pub config: Option<&'a mut ConfigEditor>,
@@ -483,8 +640,6 @@ pub struct Frame<'a> {
     pub terms: Option<&'a mut TerminalTabs>,
     /// Terminal pane focused (keys route to the shell; cursor visible).
     pub term_focused: bool,
-    /// The retained tab-strip widget (App-owned; synced with the tabs).
-    pub tabbar: &'a mut TabBar,
 }
 
 /// What `draw_frame` changed this frame — the caller marks damage AFTER the
@@ -506,12 +661,6 @@ pub struct FrameEffects {
     pub open_terminal: bool,
     /// The "×" button closed the active terminal tab.
     pub close_terminal: bool,
-    /// A commit-panel file row toggled (panel repaint).
-    pub commit_toggled: bool,
-    /// The Commit button was clicked (the App dispatches after the frame).
-    pub commit_clicked: bool,
-    /// The Push button was clicked.
-    pub push_clicked: bool,
     /// Config editor header Save/Reload clicked.
     pub config_save: bool,
     pub config_reload: bool,
@@ -541,33 +690,21 @@ pub fn draw_frame(
     if !f.scale.is_finite() || f.scale <= 0.0 {
         return effects;
     }
-    let (lw, _lh) = (
-        f.canvas.width() as f64 / f.scale,
-        f.canvas.height() as f64 / f.scale,
-    );
-    f.canvas.fill(f.theme.bg);
+    let lw = f.canvas.width() as f64 / f.scale;
 
-    // Header. The debug scale/canvas line and agent launchers were removed;
-    // the gap below the title is intentionally quiet.
-    let header_size = 16.0 * f.scale as f32;
-    let status_size = (12.0 * f.scale) as f32;
-    f.text.draw_line(
-        f.canvas,
-        &format!("ark — {}", f.title),
-        (LEFT_MARGIN * f.scale) as f32,
-        (HEADER_BASELINE * f.scale) as f32,
-        TextStyle { color: f.theme.accent, font_size: header_size, weight: Weight::BOLD },
-    );
+    f.canvas.fill(f.theme.surface_chrome);
+    chrome::draw_cards(f, layout);
+    chrome::draw_title_bar(f, layout);
 
-    // Split: grab within ±4px while the pointer is down, drag until release
-    // (sticky latch so the divider can be pulled beyond the grab band).
-    let handle = sidebar_handle(split.position);
-    let handle_hover = handle.contains(f.pointer.x, f.pointer.y);
-    if f.pointer.down
-        && (split_drag.dragging
-            || split.hit_divider(layout.split_area, f.pointer, f.scale)
-            || handle_hover)
-    {
+    // Sidebar drag: the narrow card gap and the three-dot handle share the
+    // same sticky latch as the old divider. Both disappear with Explorer.
+    let handle = sidebar_handle(layout, split.position);
+    let handle_hover = handle.is_some_and(|rect| rect.contains(f.pointer.x, f.pointer.y));
+    let gap_hover = layout.split_area.contains(f.pointer.x, f.pointer.y);
+    if handle.is_none() {
+        split_drag.dragging = false;
+    }
+    if f.pointer.down && (split_drag.dragging || gap_hover || handle_hover) {
         if !split_drag.dragging {
             split_drag.grab_dx = f.pointer.x - split.position;
         }
@@ -577,26 +714,25 @@ pub fn draw_frame(
     } else if !f.pointer.down {
         split_drag.dragging = false;
     }
-    split.draw(f.canvas, layout.split_area, f.theme, f.scale);
-    let split_hover =
-        split.hit_divider(layout.split_area, f.pointer, f.scale) || handle_hover;
-    if split_drag.dragging || split_hover {
-        // Accent overlay while dragging or hovering the grab band.
+    if split_drag.dragging || gap_hover || handle_hover {
         f.canvas.fill_rect(
-            split.position - 1.0,
-            layout.split_area.y,
+            layout.split_area.x + layout.split_area.w / 2.0 - 1.0,
+            layout.workbench.y,
             2.0,
-            layout.split_area.h,
+            layout.workbench.h,
             f.theme.accent,
             f.scale,
         );
     }
-    // Double-click the divider or the three-dot handle resets the sidebar.
-    if f.dbl_click && split_hover {
+    if f.dbl_click && (gap_hover || handle_hover) {
         let hi = (lw - SPLIT_MAX_MARGIN).max(SPLIT_MIN_PX);
         split.drag_to(SIDEBAR_DEFAULT_PX, SPLIT_MIN_PX, hi);
     }
-    draw_sidebar_handle(f, handle, split_drag.dragging);
+    if let Some(handle) = handle {
+        draw_sidebar_handle(f, handle, split_drag.dragging);
+    }
+
+    chrome::draw_explorer_chrome(f, layout);
 
     // Tree panel: process the frame's click, then draw the rows.
     match tree::handle_pointer(tree, layout.tree_panel, f.pointer, f.dbl_click) {
@@ -604,15 +740,19 @@ pub fn draw_frame(
         tree::TreeAction::Toggled | tree::TreeAction::Selected => effects.tree_changed = true,
         tree::TreeAction::Opened(path) => effects.opened = Some(path),
     }
-    // Collapse-while-scrolled self-heal: re-clamp the offset to the current
-    // content (no-op when already in range; a move is scroll damage too).
     if tree.set_offset(tree.offset, layout.tree_panel.h) && !effects.tree_changed {
         effects.scrolled = true;
     }
-    tree::draw_tree_panel(f.canvas, f.text, f.theme, f.scale, layout.tree_panel, tree, f.pointer, f.git);
-
-    // Scrollbar (tree panel's right edge): the tree offset is the single
-    // source of truth — sync in, interact, apply back.
+    tree::draw_tree_panel(
+        f.canvas,
+        f.text,
+        f.theme,
+        f.scale,
+        layout.tree_panel,
+        tree,
+        f.pointer,
+        f.git,
+    );
     if layout.tree_panel.w > tree::TRACK_W {
         let viewport = layout.tree_panel.h;
         let content = tree.visible_count() as f64 * ROW_H;
@@ -621,28 +761,22 @@ pub fn draw_frame(
             tree.set_offset(scrollbar.offset, viewport);
             effects.scrolled = true;
         }
-        scrollbar.draw(f.canvas, layout.scroll_track, content, viewport, f.theme, f.scale);
+        scrollbar.draw(
+            f.canvas,
+            layout.scroll_track,
+            content,
+            viewport,
+            f.theme,
+            f.scale,
+        );
     }
 
-    // Commit & push panel (M8) under the tree when a repo is open.
-    if let Some(git) = f.git {
-        let panel = f
-            .commit
-            .draw(f.canvas, f.text, f.theme, f.scale, layout.commit_panel, git, f.pointer);
-        effects.commit_toggled |= panel.toggled;
-        effects.commit_clicked |= panel.commit;
-        effects.push_clicked |= panel.push;
-    }
-
-    // Workbench activity bar (M12): four fixed panels, existing state only.
-    let term_count = f.terms.as_ref().map(|t| t.tabs.len()).unwrap_or(0);
-    if let Some(panel) = draw_activity_bar(f, layout.activity_bar, term_count) {
+    if let Some(panel) = chrome::draw_activity_bar(f, layout) {
         effects.set_activity = Some(panel);
     }
 
-    // File/config tab strip + breadcrumb (M12). Tabs come from the LRU order
-    // (plus the one config editor), never from a second open-files model.
-    let (select_tab, close_tab) = draw_file_tabs(f, layout.editor_tabs);
+    // Editor tabs, breadcrumbs, actions and placeholder minimap.
+    let (select_tab, close_tab) = draw_file_tabs(f, chrome::tab_strip(layout));
     if select_tab.is_some() {
         effects.select_tab = select_tab;
     }
@@ -650,46 +784,47 @@ pub fn draw_frame(
         effects.close_tab = close_tab;
     }
     draw_breadcrumb(f, layout.breadcrumb);
+    chrome::draw_editor_actions(f, layout);
+    chrome::draw_minimap(f, layout);
 
-    // Bottom terminal dock (M12): always visible while tabs exist; the
-    // editor body above never switches away for a terminal.
+    // Terminal card: static panel chrome plus the existing functional PTY,
+    // new/close actions and vertical session switcher.
+    let (open_terminal, close_terminal) = chrome::draw_terminal_chrome(f, layout);
+    effects.open_terminal = open_terminal;
+    if !f.terms.as_ref().is_some_and(|t| t.is_open()) {
+        chrome::draw_terminal_placeholder(f, layout);
+    }
     if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
-        let pane = layout.term_dock;
-        let tabbar_rect = layout.term_tabbar;
-        let plus = Rect { x: pane.x + pane.w - 56.0, y: pane.y + 3.0, w: 26.0, h: 24.0 };
-        let close = Rect { x: pane.x + pane.w - 28.0, y: pane.y + 3.0, w: 24.0, h: 24.0 };
-        f.canvas.fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg_elevated, f.scale);
-
-        // Sync the retained widget bar with the terminal tabs, process the
-        // frame's click, then draw. A tab-list change (open/close, including
-        // the M8 git command tabs) carries the model's active index into the
-        // widget, which is the per-frame source of truth for clicks.
-        sync_term_tabbar(f.tabbar, terms.tabs.iter().map(|t| t.label().to_string()).collect(), terms.active);
-        f.tabbar.on_pointer(tabbar_rect, f.pointer);
-        terms.active = f.tabbar.active.min(terms.tabs.len().saturating_sub(1));
-        f.tabbar.draw(f.canvas, tabbar_rect, f.theme, f.text, f.scale);
-        if draw_button(f.canvas, "+", plus, f.theme, f.text, f.pointer, f.scale) == Press::Clicked {
-            effects.open_terminal = true;
+        effects.close_terminal = close_terminal;
+        let sessions = layout.terminal_sessions;
+        let count = terms.tabs.len().min(3);
+        for index in 0..count {
+            let rect = Rect {
+                x: sessions.x + 6.0,
+                y: sessions.y + 8.0 + index as f64 * 32.0,
+                w: 24.0,
+                h: 24.0,
+            };
+            if sessions.w > 0.0
+                && rect.y + rect.h <= sessions.y + sessions.h
+                && f.pointer.click
+                && rect.contains(f.pointer.x, f.pointer.y)
+            {
+                terms.active = index;
+                f.term_focused = true;
+            }
         }
-        if draw_button(f.canvas, "\u{d7}", close, f.theme, f.text, f.pointer, f.scale)
-            == Press::Clicked
-        {
-            effects.close_terminal = true;
-        }
-
-        // Grid: resize the model+PTY to the fitted size, draw the active tab.
         let grid = layout.term_grid;
         if let Some(t) = terms.active_mut() {
             let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
-            let m = f.text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+            let m = f.text.mono_metrics(font_size, font_size * 1.35);
             let advance = f64::from(m.advance) / f.scale;
             t.resize(term::GridSize::fit(grid.w, grid.h, advance, LINE_H));
             t.draw(f.canvas, f.text, f.theme, f.scale, grid, f.term_focused);
         }
     }
 
-    // Editor body: config editor while its pane is active, else the viewer /
-    // placeholder. Terminal tabs no longer replace this surface.
+    // Editor body.
     if let Some(config) = f.config.as_deref_mut() {
         let fx = config.draw(
             f.canvas,
@@ -712,85 +847,61 @@ pub fn draw_frame(
         );
     } else if f.viewer.is_some() {
         let viewer = f.viewer.as_deref_mut().expect("checked");
-            let pane = layout.viewer_pane;
-            let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
-            let m = f.text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
-            let advance = f64::from(m.advance) / f.scale;
-            // Offset self-heal: a refresh (or any row-set shrink) may leave
-            // the raw offset past the content — re-clamp before hit-testing.
+        let pane = layout.viewer_pane;
+        let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
+        let m = f.text.mono_metrics(font_size, font_size * 1.35);
+        let advance = f64::from(m.advance) / f.scale;
+        let viewport_lines = (pane.h / LINE_H).floor() as usize;
+        if viewer.set_offset_lines(viewer.offset_lines(), viewport_lines) {
+            effects.viewer_scrolled = true;
+        }
+        if viewer::handle_pointer(viewer, pane, f.pointer, advance) {
+            effects.tree_changed = true;
+        }
+        viewer::draw_viewer_panel(
+            f.canvas,
+            f.text,
+            f.theme,
+            f.scale,
+            pane,
+            viewer,
+            f.highlighter,
+            f.file_diff,
+        );
+        if pane.w > tree::TRACK_W {
             let viewport_lines = (pane.h / LINE_H).floor() as usize;
-            if viewer.set_offset_lines(viewer.offset_lines(), viewport_lines) {
-                effects.viewer_scrolled = true;
+            let content = viewer.line_count() as f64 * LINE_H;
+            viewer_scrollbar.offset = viewer.offset_lines() as f64 * LINE_H;
+            if viewer_scrollbar.on_pointer(pane_scroll_track(pane), f.pointer, content, pane.h) {
+                let lines = (viewer_scrollbar.offset / LINE_H).ceil() as usize;
+                if viewer.set_offset_lines(lines, viewport_lines) {
+                    effects.viewer_scrolled = true;
+                }
             }
-            // Selection drag (press → move → release) inside the pane.
-            if viewer::handle_pointer(viewer, pane, f.pointer, advance) {
-                effects.tree_changed = true; // selection rides event-level full damage
-            }
-            viewer::draw_viewer_panel(
+            viewer_scrollbar.draw(
                 f.canvas,
-                f.text,
+                pane_scroll_track(pane),
+                content,
+                pane.h,
                 f.theme,
                 f.scale,
-                pane,
-                viewer,
-                f.highlighter,
-                f.file_diff,
             );
-            // Viewer scrollbar: lines ↔ px via LINE_H (single source of
-            // truth is the viewer's integer line offset).
-            if pane.w > tree::TRACK_W {
-                let viewport_lines = (pane.h / LINE_H).floor() as usize;
-                let content = viewer.line_count() as f64 * LINE_H;
-                viewer_scrollbar.offset = viewer.offset_lines() as f64 * LINE_H;
-                if viewer_scrollbar.on_pointer(pane_scroll_track(pane), f.pointer, content, pane.h) {
-                    let lines = (viewer_scrollbar.offset / LINE_H).round() as usize;
-                    if viewer.set_offset_lines(lines, viewport_lines) {
-                        effects.viewer_scrolled = true;
-                    }
-                }
-                viewer_scrollbar.draw(
-                    f.canvas,
-                    pane_scroll_track(pane),
-                    content,
-                    pane.h,
-                    f.theme,
-                    f.scale,
-                );
-            }
-            // "Changed on disk" flash: a 3px accent strip across the pane's
-            // top edge while active (bounded two-frame animation: the App
-            // schedules one redraw at the deadline to clear it).
-            if f.viewer_flash {
-                f.canvas.fill_rect(
-                    pane.x,
-                    pane.y,
-                    pane.w,
-                    FLASH_STRIP_H,
-                    f.theme.accent,
-                    f.scale,
-                );
-            }
+        }
+        if f.viewer_flash {
+            f.canvas.fill_rect(
+                pane.x,
+                pane.y,
+                pane.w,
+                FLASH_STRIP_H,
+                f.theme.accent,
+                f.scale,
+            );
+        }
     } else {
         draw_placeholder(f, layout.viewer_pane, f.viewer_error);
     }
 
-    // Status bar (M12): accent-filled band with on-accent text.
-    f.canvas.fill_rect(
-        layout.status.x,
-        layout.status.y,
-        layout.status.w,
-        layout.status.h,
-        f.theme.accent,
-        f.scale,
-    );
-    let status_baseline = (layout.status.y + layout.status.h - 8.0) * f.scale;
-    f.text.draw_line(
-        f.canvas,
-        &frame_status(tree, f.viewer.as_deref(), f.config.as_deref(), f.terms.as_deref(), f.git, layout.tree_panel.h),
-        (LEFT_MARGIN * f.scale) as f32,
-        status_baseline as f32,
-        TextStyle { color: f.theme.on_accent, font_size: status_size, weight: Weight::NORMAL },
-    );
+    chrome::draw_status_bar(f, layout);
     effects
 }
 
@@ -810,19 +921,9 @@ fn pane_scroll_track(pane: Rect) -> Rect {
 /// With one open: `visible N · expanded M · scroll <pct>% · <file> <L>
 /// lines[ · truncated] · sel <K chars|none>`. A tree listing failure
 /// replaces the whole line (the tree's error surface).
-/// Sync the retained tab bar when the terminal tab list changed (open/close,
-/// including M8's git command tabs). Carrying `active` in is essential: the
-/// bar's index is the per-frame source of truth for clicks, so a freshly
-/// opened tab must win over the bar's previous index.
-fn sync_term_tabbar(tabbar: &mut TabBar, labels: Vec<String>, active: usize) {
-    if tabbar.tabs != labels {
-        tabbar.tabs = labels;
-        tabbar.active = active;
-    }
-}
-
 /// Terminal status segment: `term <shell> <k>/<n>[ · exited]` while tabs
 /// are open; `None` otherwise.
+#[cfg_attr(not(test), allow(dead_code))] // retained status detail for tests/future inspector
 fn terms_status(terms: Option<&TerminalTabs>) -> Option<String> {
     let terms = terms?;
     if !terms.is_open() {
@@ -831,9 +932,14 @@ fn terms_status(terms: Option<&TerminalTabs>) -> Option<String> {
     let exited = terms.active().map(|t| t.exited()).unwrap_or(false);
     let exit = if exited { " · exited" } else { "" };
     let shell = terms.active().map(|t| t.label()).unwrap_or("?");
-    Some(format!("term {shell} {}/{n}{exit}", terms.active + 1, n = terms.tabs.len()))
+    Some(format!(
+        "term {shell} {}/{n}{exit}",
+        terms.active + 1,
+        n = terms.tabs.len()
+    ))
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // retained status detail for tests/future inspector
 fn frame_status(
     tree: &FileTree,
     viewer: Option<&Viewer>,
@@ -865,11 +971,17 @@ fn frame_status(
     };
     // With terminals open the viewer segment is replaced by the terminal one.
     if terms_status(terms).is_some() {
-        return format!("{head} · scroll {pct:.0}% · {}{git_tail}", terms_status(terms).expect("checked above"));
+        return format!(
+            "{head} · scroll {pct:.0}% · {}{git_tail}",
+            terms_status(terms).expect("checked above")
+        );
     }
     if let Some(c) = config {
         let state = if c.is_dirty() { " · modified" } else { "" };
-        return format!("{head} · scroll {pct:.0}% · config {}{state}{git_tail}", c.display_name());
+        return format!(
+            "{head} · scroll {pct:.0}% · config {}{state}{git_tail}",
+            c.display_name()
+        );
     }
     match viewer {
         None => {
@@ -881,13 +993,20 @@ fn frame_status(
             format!("{head} · selected {selected} · scroll {pct:.0}%{git_tail}")
         }
         Some(v) => {
-            let name = v.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = v
+                .path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let trunc = if v.truncated() { " · truncated" } else { "" };
             let sel = match v.selection_len() {
                 0 => "none".to_string(),
                 n => format!("{n} chars"),
             };
-            format!("{head} · scroll {pct:.0}% · {name} {} lines{trunc} · sel {sel}{git_tail}", v.line_count())
+            format!(
+                "{head} · scroll {pct:.0}% · {name} {} lines{trunc} · sel {sel}{git_tail}",
+                v.line_count()
+            )
         }
     }
 }
@@ -896,8 +1015,14 @@ fn frame_status(
 /// message when the last attempt errored).
 fn draw_placeholder(f: &mut Frame, rect: Rect, error: Option<&str>) {
     let lines: (String, &str) = match error {
-        Some(err) => (truncate_chars(err, 44), "double-click a text file in the tree"),
-        None => ("M4 viewer lands here —".to_string(), "double-click a file in the tree"),
+        Some(err) => (
+            truncate_chars(err, 44),
+            "double-click a text file in the tree",
+        ),
+        None => (
+            "M4 viewer lands here —".to_string(),
+            "double-click a file in the tree",
+        ),
     };
     draw_pane_message(f, rect, &lines.0, lines.1);
 }
@@ -907,17 +1032,25 @@ fn draw_pane_message(f: &mut Frame, rect: Rect, top: &str, bottom: &str) {
     if rect.w <= 2.0 || rect.h <= 2.0 {
         return;
     }
-    f.canvas.stroke_rect_strips(rect.x, rect.y, rect.w, rect.h, f.theme.border, f.scale);
+    f.canvas
+        .stroke_rect_strips(rect.x, rect.y, rect.w, rect.h, f.theme.border, f.scale);
     let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
-    let m = f.text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+    let m = f
+        .text
+        .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let cx = (rect.x + rect.w / 2.0) * f.scale;
     let cy = (rect.y + rect.h / 2.0) * f.scale;
-    let style = TextStyle { color: f.theme.fg_dim, font_size, weight: Weight::NORMAL };
+    let style = TextStyle {
+        color: f.theme.fg_dim,
+        font_size,
+        weight: Weight::NORMAL,
+    };
     for (dy, line) in [(-0.5, top), (0.5, bottom)] {
         // Monospace advance: width = chars × advance; center horizontally.
         let x = cx - f64::from(m.advance) * line.chars().count() as f64 / 2.0;
         let baseline = cy + dy * f64::from(m.line_height) + f64::from(m.ascent - m.descent) / 2.0;
-        f.text.draw_line(f.canvas, line, x as f32, baseline as f32, style);
+        f.text
+            .draw_line(f.canvas, line, x as f32, baseline as f32, style);
     }
 }
 

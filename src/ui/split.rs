@@ -22,6 +22,7 @@ impl Split {
     /// interior, matching `Rect::contains`). The `scale` parameter is part
     /// of the frozen signature but the band is defined in logical px, so it
     /// does not affect the test.
+    #[allow(dead_code)] // retained for the classic divider surface
     pub fn hit_divider(&self, area: Rect, pointer: Pointer, scale: f64) -> bool {
         let _ = scale;
         // Strict-interior vertical span, like Rect::contains; inclusive ±4
@@ -45,6 +46,7 @@ impl Split {
     /// Draw the resting divider strip: 2px of `border` centered on
     /// `position`, spanning `area` vertically. Degenerate areas, scales or
     /// positions rasterize nothing.
+    #[allow(dead_code)] // retained for the classic divider surface
     pub fn draw(&self, canvas: &mut Canvas, area: Rect, theme: &Theme, scale: f64) {
         if !renderable(area, scale) || !self.position.is_finite() {
             return;

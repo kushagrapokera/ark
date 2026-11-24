@@ -121,6 +121,52 @@ five open viewers, two shells + fake agent tab):
   5/5 CLI; clippy and release build clean; visual smoke confirms the quiet
   header and three-dot handle.
 
+## Card-workbench redesign
+
+- Reworked the frame into the supplied card layout: 36 px title bar, padded
+  activity/explorer/editor/terminal cards, rounded borders, elevated headers,
+  breadcrumb/minimap strips, terminal panel tabs, session strip, and a neutral
+  status bar.
+- Added static placeholders for menus, command center, layout controls,
+  activity panels, editor actions, minimap, terminal tabs/toolbar, and status
+  items. Existing tree/viewer/config/terminal interactions remain functional.
+- The terminal card is always visible; its `+` button opens the first PTY even
+  when no terminal tab exists.
+- Kept the Source Control/commit backend for a future card but hid the old
+  panel from the current design.
+- No new persistent heap state or caches: chrome is drawn from static labels,
+  fixed arrays, and stack-local geometry each frame. Removed the old retained
+  terminal `TabBar` from the production frame.
+- Card-layout stress with five verified large viewers and two shells:
+  **60,580 KiB = 59.2 MiB RSS**, **53,891 KiB = 52.6 MiB PSS** — no retained
+  memory regression.
+- Verification: `cargo test` **224 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy clean. Visual smoke matches the supplied card structure and Dark+
+  palette; exact glyphs/fonts remain bounded by ark's bundled JetBrains Mono
+  and hand-drawn icon set.
+
+## Responsive card layout
+
+- Window resize recomputes every card, pane, toolbar, and hit target from the
+  current logical size; no layout state or cache is retained.
+- Below 760 px the Explorer and its resize handle hide to protect the editor;
+  below 560 px padding/activity width shrink and the minimap disappears.
+- Short windows use a compact terminal card/toolbar. Narrow editor strips
+  show fewer actions, keep tabs inside the available width, and truncate long
+  breadcrumbs to the file name.
+- Activity spacing prioritizes functional icons; title/status toolbars drop
+  optional placeholders before they can overlap. Terminal `+`/close hit rects
+  share geometry with their visible glyphs, and the App now dispatches those
+  effects after rendering.
+- Verification: `cargo test` **234 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live resize smoke covered **400×300**,
+  **640×480**, **1024×768**, and **1440×900**, including opening a shell with
+  the compact `+` button and resizing its PTY grid.
+- Stress with five large viewers, two shells, and a 400×300 → 1440×900 resize:
+  **64,896 KiB = 63.4 MiB RSS**, **57,392 KiB = 56.0 MiB PSS** — below the
+  100 MiB budget; the larger framebuffer accounts for the increase over the
+  1024×768 card smoke.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

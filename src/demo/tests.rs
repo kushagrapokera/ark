@@ -126,11 +126,17 @@ fn content_box_text_baseline_scales_with_dpi() {
     let fg = (200, 100, 50);
     let theme = Theme {
         bg,
+        surface_chrome: bg,
+        surface: bg,
         bg_elevated: bg,
+        surface_hover: bg,
         fg,
         fg_dim: bg,
+        text_muted: bg,
+        text_dim: bg,
         accent: bg,
         border: bg,
+        border_subtle: bg,
         selection: bg,
         syntax_keyword: bg,
         syntax_string: bg,

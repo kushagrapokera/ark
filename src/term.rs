@@ -239,6 +239,7 @@ impl Terminal {
     /// Spawn `shell -c command` in a PTY rooted at `root` — the M8 git
     /// action tabs. Output streams through the same reader thread as an
     /// interactive shell; the tab carries an action `label`.
+    #[allow(dead_code)] // retained for future Source Control command tabs
     pub fn spawn_command(
         root: &Path,
         shell: &Path,
@@ -265,7 +266,7 @@ impl Terminal {
 
     /// Test-only direct-program spawn (no event-loop proxy).
     #[cfg(test)]
-    fn spawn_program_with(
+    pub(crate) fn spawn_program_with(
         root: &Path,
         program: &Path,
         label: &str,
@@ -388,6 +389,7 @@ impl Terminal {
         self.size
     }
 
+    #[allow(dead_code)] // retained for future terminal status chrome
     pub fn exited(&self) -> bool {
         self.exited
     }
@@ -910,6 +912,7 @@ impl TerminalTabs {
 
     /// Spawn a command tab (`shell -c command`) — the M8 git actions stream
     /// their output here. Becomes active.
+    #[allow(dead_code)] // retained for future Source Control command tabs
     pub fn open_command(
         &mut self,
         root: &Path,
@@ -951,6 +954,7 @@ impl TerminalTabs {
         }
     }
 
+    #[allow(dead_code)] // retained for future terminal toolbar labels
     pub fn active(&self) -> Option<&Terminal> {
         self.tabs.get(self.active)
     }
