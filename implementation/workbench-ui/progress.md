@@ -405,6 +405,10 @@ five open viewers, two shells + fake agent tab):
 - Added a terminal-only render wave for PTY output, cursor updates, and terminal
   scrolling. It clears and repaints only the active grid, skips viewer preparation
   and chrome composition, and presents only the grid damage rectangle.
+- Forwarded terminal-model `PtyWrite` events through a shared synchronized PTY
+  writer. Primary Device Attribute queries now receive `CSI ?6c`, so fish no
+  longer waits 10 seconds for a capability reply; cursor/query replies use the
+  same path.
 - Kept scene damage authoritative: layout/input/menu/window changes still repaint
   the workbench, and hidden terminals keep parsing output without scheduling paints.
 - Divider drags now resize the visual terminal model immediately but defer the PTY
@@ -414,22 +418,26 @@ five open viewers, two shells + fake agent tab):
   consumed, so movement after the first frame keeps repainting instead of freezing.
 - Release-before-final-paint is handled explicitly, so a stale intermediate row
   count is never sent to fish. Window/layout changes still resize the PTY immediately.
-- Verification: `cargo test` **328 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy and
+- Verification: `cargo test` **329 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy and
   release build clean. Live drag smoke observed **0 PTY resizes before release and
   1 after release** (`71×12`); trace logs confirmed terminal-only frames. A 20,000-line
   output storm completed without losing input or exceeding the memory budget.
+- A real-PTY regression captures the five-byte Primary Device Attribute reply.
+  Live fish first-command latency dropped from **12,449 ms** on the previous binary
+  to **2,376 ms** with the reply path, and the terminal-compatibility warning is
+  gone. The remaining time is fish greeting/fastfetch startup, not ark's query wait.
 - Drag profiling (`ARK_TERM_PROFILE=1`) found and fixed a first-frame-only damage
   latch: 40 pointer movements previously produced 7 scene frames and then froze
   until release; the final binary produces 46 frames, with ~11 ms median total
   frame time. A mid-drag screenshot confirmed the panel grows before mouse release.
 - The output-storm wall/CPU time was unchanged versus the previous binary (~10.1 s,
   ~7.6 s CPU), confirming terminal grid text rendering is now the dominant cost;
-  streamed drawing/glyph caching remains the next optimization stage. Fish startup
-  time was not changed by this scoped work.
-- Five-viewer/two-fish-terminal stress at 1440×900 with a divider drag measured
-  **66,424 KiB RSS / 57,425 KiB PSS**, below the 100 MiB budget. `smem` and
-  `/usr/bin/time` are unavailable, so `/proc` status and `smaps_rollup` supplied
-  the measurements.
+  streamed drawing/glyph caching remains the next optimization stage. Fish's
+  10-second capability wait is removed by the reply path above; its remaining
+  greeting/fastfetch startup is independent of terminal rendering.
+- Five-viewer/two-fish-terminal stress at 1440×900 measured **64,808 KiB RSS /
+  55,582 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
 ## Notes
 

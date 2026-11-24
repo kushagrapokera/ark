@@ -15,10 +15,13 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, SyncSender, TryRecvError};
+use std::sync::{
+    mpsc::{self, SyncSender, TryRecvError},
+    Arc, Mutex,
+};
 use std::thread;
 
-use alacritty_terminal::event::EventListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{self, cell::Flags, Config, Term, TermMode};
@@ -77,12 +80,41 @@ impl Dimensions for GridSize {
     }
 }
 
-/// Sink for the model's internal events (title changes, bells…): M6 renders
-/// the grid only, so every event is a no-op.
-#[derive(Clone, Copy, Debug)]
-pub struct NoopListener;
+/// Shared PTY input sink. Terminal-model replies (Primary Device Attributes,
+/// cursor reports, and similar queries) must be written back to the shell, not
+/// dropped. Other model events remain no-ops because ark renders only the grid.
+#[derive(Clone)]
+struct TerminalListener {
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+}
 
-impl EventListener for NoopListener {}
+impl TerminalListener {
+    fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
+        write_terminal_input(&self.writer, bytes)
+    }
+}
+
+impl EventListener for TerminalListener {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event {
+            if let Err(e) = self.write(text.as_bytes()) {
+                // Writes race shell exit; logged, never silently dropped.
+                log::debug!("terminal query response failed: {e}");
+            }
+        }
+    }
+}
+
+fn write_terminal_input(
+    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    let mut writer = writer.lock().map_err(|_| {
+        std::io::Error::other("terminal writer lock poisoned")
+    })?;
+    writer.write_all(bytes)?;
+    writer.flush()
+}
 
 #[derive(Debug)]
 pub enum TermError {
@@ -263,13 +295,13 @@ pub struct Terminal {
     label: String,
     /// Kept for `resize`; dropped FIRST on close (SIGHUP to the group).
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// `None` once the Drop teardown reaper owns it.
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     /// The shell's process group (== its pid: session leader), captured at
     /// spawn for the teardown group kill.
     pgid: Option<u32>,
-    term: Term<NoopListener>,
+    term: Term<TerminalListener>,
     processor: ansi::Processor,
     rx: mpsc::Receiver<Vec<u8>>,
     /// Visible/model grid size; may lead the PTY during a divider drag.
@@ -480,7 +512,9 @@ impl Terminal {
         // shell's exit produces EOF on the master.
         drop(pair.slave);
 
-        let writer = pair.master.take_writer().map_err(TermError::Pty)?;
+        let writer = Arc::new(Mutex::new(
+            pair.master.take_writer().map_err(TermError::Pty)?,
+        ));
         let mut reader = pair.master.try_clone_reader().map_err(TermError::Pty)?;
         let (tx, rx): (SyncSender<Vec<u8>>, _) = mpsc::sync_channel(128);
         thread::Builder::new()
@@ -505,7 +539,13 @@ impl Terminal {
             .map_err(TermError::Io)?;
 
         let config = Config { scrolling_history: SCROLLBACK_LINES, ..Config::default() };
-        let term = Term::new(config, &size, NoopListener);
+        let term = Term::new(
+            config,
+            &size,
+            TerminalListener {
+                writer: writer.clone(),
+            },
+        );
         let label = label.map(str::to_owned).unwrap_or_else(|| {
             shell
                 .file_name()
@@ -620,7 +660,7 @@ impl Terminal {
 
     /// Write raw input bytes to the shell (already encoded by the caller).
     pub fn key_input(&mut self, bytes: &[u8]) {
-        if let Err(e) = self.writer.write_all(bytes).and_then(|_| self.writer.flush()) {
+        if let Err(e) = write_terminal_input(&self.writer, bytes) {
             // Writes race the shell's exit — logged, never fatal.
             log::debug!("terminal write failed: {e}");
         }
@@ -1526,6 +1566,43 @@ mod tests {
             .map(|r| r.into_iter().collect::<String>().trim_end().to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn primary_device_attribute_query_writes_response_to_pty() {
+        let d = temp_dir("pty-primary-da");
+        let response = d.path().join("da-response");
+        let command = format!(
+            "stty raw -echo; printf '\\033[0c'; dd bs=1 count=5 of={} 2>/dev/null",
+            crate::git::shell_quote(&response.to_string_lossy())
+        );
+        let mut term = Terminal::spawn_command_with(
+            d.path(),
+            Path::new("/bin/sh"),
+            "device attributes",
+            &command,
+            GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn the query responder");
+
+        let start = Instant::now();
+        let mut reply = Vec::new();
+        while start.elapsed() < Duration::from_secs(2) {
+            term.drain_output(256);
+            if let Ok(bytes) = std::fs::read(&response) {
+                if bytes.len() == 5 {
+                    reply = bytes;
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            reply, b"\x1b[?6c",
+            "the terminal model's Primary Device Attribute reply reaches the shell; grid={:?}",
+            visible_text(&term)
+        );
     }
 
     #[test]
