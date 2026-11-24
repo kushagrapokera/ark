@@ -409,19 +409,25 @@ five open viewers, two shells + fake agent tab):
   the workbench, and hidden terminals keep parsing output without scheduling paints.
 - Divider drags now resize the visual terminal model immediately but defer the PTY
   resize. Pointer movement coalesces to one redraw request and one stable
-  editor/terminal damage region; release fits the final grid and sends one SIGWINCH.
+  editor/terminal damage region per presented frame; release fits the final grid
+  and sends one SIGWINCH. The per-frame damage guard resets when a render wave is
+  consumed, so movement after the first frame keeps repainting instead of freezing.
 - Release-before-final-paint is handled explicitly, so a stale intermediate row
   count is never sent to fish. Window/layout changes still resize the PTY immediately.
 - Verification: `cargo test` **328 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy and
   release build clean. Live drag smoke observed **0 PTY resizes before release and
   1 after release** (`71×12`); trace logs confirmed terminal-only frames. A 20,000-line
   output storm completed without losing input or exceeding the memory budget.
+- Drag profiling (`ARK_TERM_PROFILE=1`) found and fixed a first-frame-only damage
+  latch: 40 pointer movements previously produced 7 scene frames and then froze
+  until release; the final binary produces 46 frames, with ~11 ms median total
+  frame time. A mid-drag screenshot confirmed the panel grows before mouse release.
 - The output-storm wall/CPU time was unchanged versus the previous binary (~10.1 s,
   ~7.6 s CPU), confirming terminal grid text rendering is now the dominant cost;
   streamed drawing/glyph caching remains the next optimization stage. Fish startup
   time was not changed by this scoped work.
 - Five-viewer/two-fish-terminal stress at 1440×900 with a divider drag measured
-  **66,768 KiB RSS / 57,843 KiB PSS**, below the 100 MiB budget. `smem` and
+  **66,424 KiB RSS / 57,425 KiB PSS**, below the 100 MiB budget. `smem` and
   `/usr/bin/time` are unavailable, so `/proc` status and `smaps_rollup` supplied
   the measurements.
 

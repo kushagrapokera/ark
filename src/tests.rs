@@ -795,10 +795,21 @@ fn app_terminal_divider_drag_coalesces_damage_and_redraws() {
         w: layout.editor_card.w,
         h: layout.workbench.h,
     };
+    let expected = vec![damage_rect(region, 1.0, 1024, 768)];
     assert_eq!(
-        app.damage.take(1024, 768),
-        Some(vec![damage_rect(region, 1.0, 1024, 768)]),
-        "the whole drag shares one bounded damage region"
+        app.take_render_wave(&layout),
+        RenderWave::Scene(expected.clone()),
+        "the whole drag shares one bounded damage region per frame"
+    );
+
+    // Consuming one frame must re-arm the same region for later movement.
+    app.pointer.y = layout.term_dock.y - 140.0;
+    assert!(app.resize_terminal_to(app.pointer.y, &layout));
+    app.mark_terminal_resize_damage(&layout);
+    assert_eq!(
+        app.take_render_wave(&layout),
+        RenderWave::Scene(expected),
+        "the next drag frame repaints instead of freezing after the first"
     );
 }
 

@@ -290,6 +290,9 @@ struct App {
     last_render: Option<Instant>,
     /// A terminal-area repaint was deferred past the frame budget.
     term_paint_due: bool,
+    /// Optional frame-timing diagnostics (`ARK_TERM_PROFILE=1`), sampled once
+    /// at startup so the render hot path does not read the environment.
+    term_profile: bool,
     /// PTY output changed a visible terminal since the last present. Kept
     /// separate from scene damage so repeated chunks cannot degrade the fast
     /// path into full-frame damage.
@@ -395,6 +398,7 @@ impl App {
             term_drag: TerminalDrag::default(),
             last_render: None,
             term_paint_due: false,
+            term_profile: std::env::var_os("ARK_TERM_PROFILE").is_some(),
             terminal_dirty: false,
             flash_until: None,
             flash_path: None,
@@ -680,6 +684,9 @@ impl App {
     /// Select the smallest correct render wave. Terminal-only painting is safe
     /// only when no scene interaction is pending and the grid is visible.
     fn take_render_wave(&mut self, layout: &AppLayout) -> RenderWave {
+        // This frame consumes any damage marked by the drag. Re-arm the
+        // one-region guard so subsequent pointer movement paints again.
+        self.term_drag.damage_marked = false;
         let terminal_only = self.terminal_dirty
             && self.damage.is_empty()
             && self.layout_visibility.terminal
@@ -880,6 +887,8 @@ impl App {
     /// Present one frame: raster pending damage onto the persistent canvas,
     /// blit into the softbuffer buffer, present with damage rects.
     fn render(&mut self) {
+        let profile = self.term_profile;
+        let render_start = Instant::now();
         // The config editor is the only IME surface (M9).
         self.sync_ime();
         // app_layout borrows all of self; it must finish before the surface
@@ -926,9 +935,21 @@ impl App {
                 if !self.term_drag.dragging {
                     self.terms.flush_active_resize();
                 }
+                let raster_elapsed = render_start.elapsed();
                 let Some(surface) = self.surface.as_mut() else { return };
                 if render::present(surface, &self.canvas, &[rect]) && self.smoke {
                     self.pending_exit = true;
+                }
+                if profile {
+                    let interval = self
+                        .last_render
+                        .map(|last| render_start.duration_since(last))
+                        .unwrap_or_default();
+                    info!(
+                        "terminal frame: interval={interval:?} raster={raster_elapsed:?} present={:?} total={:?}",
+                        render_start.elapsed() - raster_elapsed,
+                        render_start.elapsed()
+                    );
                 }
                 self.last_render = Some(Instant::now());
                 return;
@@ -1033,6 +1054,7 @@ impl App {
         if !self.term_drag.dragging {
             self.terms.flush_active_resize();
         }
+        let raster_elapsed = render_start.elapsed();
         // Post-raster damage for state changes made during the frame (the
         // marks schedule the next present).
         if effects.tree_changed {
@@ -1064,6 +1086,17 @@ impl App {
         // Blit + present (failures are logged, never silent).
         if render::present(surface, &self.canvas, &rects) && self.smoke {
             self.pending_exit = true;
+        }
+        if profile {
+            let interval = self
+                .last_render
+                .map(|last| render_start.duration_since(last))
+                .unwrap_or_default();
+            info!(
+                "scene frame: interval={interval:?} raster={raster_elapsed:?} present={:?} total={:?}",
+                render_start.elapsed() - raster_elapsed,
+                render_start.elapsed()
+            );
         }
         self.last_render = Some(Instant::now());
         if effects.open_terminal {
