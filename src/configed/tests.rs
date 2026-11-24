@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::fs::testutil::temp_dir;
 use crate::highlight::Highlighter;
 use crate::render::Canvas;
-use crate::text::TextSystem;
+use crate::text::{TextSystem, UI_FONT_SIZE};
 use crate::ui::Pointer;
 
 fn patterns() -> Vec<String> {
@@ -130,7 +130,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
     let theme = panel_theme();
     let mut text = TextSystem::new();
     let mut canvas = crate::render::Canvas::new(720, 632);
-    let advance = f64::from(text.mono_metrics(14.0, 18.9).advance);
+    let advance = f64::from(text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35).advance);
     let y = 52.0 + 5.0;
     let x1 = 44.0 + advance + 1.0;
     let x4 = 44.0 + advance * 4.0 + 1.0;
@@ -139,6 +139,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
         &mut canvas,
         &mut text,
         &theme,
+        1.0,
         1.0,
         pane(),
         Pointer { x: x1, y, down: true, click: false },
@@ -149,6 +150,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
         &mut text,
         &theme,
         1.0,
+        1.0,
         pane(),
         Pointer { x: x4, y, down: true, click: false },
         &Highlighter::new(),
@@ -157,6 +159,7 @@ fn textarea_drag_keeps_its_selection_on_release() {
         &mut canvas,
         &mut text,
         &theme,
+        1.0,
         1.0,
         pane(),
         Pointer { x: x4, y, down: false, click: true },
@@ -225,7 +228,7 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
     let mut text = TextSystem::new();
     let mut canvas = crate::render::Canvas::new(720, 632);
 
-    e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), Pointer::default(), &Highlighter::new());
+    e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), Pointer::default(), &Highlighter::new());
     assert!(
         crate::ui::testutil::count_color_in(&canvas, theme.fg, 0, 0, 720, 34) > 0,
         "header/title ink"
@@ -237,7 +240,7 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
 
     // Row 0 (the first ENTRY, after the comment) selects at y≈62.
     let row_click = Pointer { x: 100.0, y: 62.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), row_click, &Highlighter::new());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), row_click, &Highlighter::new());
     assert!(!fx.changed, "selection is not a document edit");
     let Body::Env(ed) = &e.body else { panic!("env") };
     assert_eq!(ed.selected, Some(ed.doc.entries()[0].0));
@@ -247,7 +250,7 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
     // Add button (8..239 × 602..624) appends NEW_KEY and marks dirty.
     let before = ed.doc.entries().len();
     let add_click = Pointer { x: 100.0, y: 613.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), add_click, &Highlighter::new());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), add_click, &Highlighter::new());
     assert!(fx.changed);
     assert!(e.is_dirty());
     let Body::Env(ed) = &e.body else { panic!("env") };
@@ -256,15 +259,15 @@ fn env_form_draws_selects_adds_and_reports_header_clicks() {
 
     // Header Save/Reload report effects (the App does the fs boundary).
     let save_click = Pointer { x: 681.0, y: 19.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), save_click, &Highlighter::new());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), save_click, &Highlighter::new());
     assert!(fx.save && !fx.reload);
     let reload_click = Pointer { x: 613.0, y: 19.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), reload_click, &Highlighter::new());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), reload_click, &Highlighter::new());
     assert!(fx.reload && !fx.save);
 
     // Degenerate panes rasterize nothing and never panic.
-    e.draw(&mut canvas, &mut text, &theme, 1.0, Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Pointer::default(), &Highlighter::new());
-    e.draw(&mut canvas, &mut text, &theme, 0.0, pane(), Pointer::default(), &Highlighter::new());
+    e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Pointer::default(), &Highlighter::new());
+    e.draw(&mut canvas, &mut text, &theme, 0.0, 1.0, pane(), Pointer::default(), &Highlighter::new());
 }
 
 #[test]
@@ -279,7 +282,7 @@ fn env_form_field_focus_and_typing_target_the_clicked_field() {
 
     // Select the DB row inside the config pane (pane at 0,0 → row 1 y=82).
     let row_click = Pointer { x: 400.0, y: 82.0, down: false, click: true };
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), row_click, &Highlighter::new());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), row_click, &Highlighter::new());
     assert!(!fx.changed);
     let Body::Env(ed) = &e.body else { panic!("env") };
     assert_eq!(ed.selected, Some(1));
@@ -289,7 +292,7 @@ fn env_form_field_focus_and_typing_target_the_clicked_field() {
     // Click the value field (x 577..1008, y 570..594 for a 0,0 pane) and
     // type into it.
     let value_click = Pointer { x: 700.0, y: 580.0, down: false, click: true };
-    e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), value_click, &Highlighter::new());
+    e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), value_click, &Highlighter::new());
     let Body::Env(ed) = &e.body else { panic!("env") };
     assert!(ed.value.focused && !ed.key.focused, "value field keeps focus");
     assert!(e.handle_key(
@@ -322,6 +325,7 @@ fn textarea_uses_syntax_colors_for_config_files() {
         &mut text,
         &theme,
         1.0,
+        1.0,
         pane(),
         Pointer::default(),
         &Highlighter::new(),
@@ -350,7 +354,7 @@ fn textarea_draws_ink_and_maps_clicks_to_the_caret() {
     let mut text = TextSystem::new();
     let mut canvas = crate::render::Canvas::new(720, 632);
 
-    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), Pointer::default(), &Highlighter::new());
+    let fx = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), Pointer::default(), &Highlighter::new());
     assert!(!fx.changed);
     assert!(
         crate::ui::testutil::count_color_in(&canvas, theme.fg, 0, 52, 720, 200) > 0,
@@ -362,14 +366,14 @@ fn textarea_draws_ink_and_maps_clicks_to_the_caret() {
     );
 
     // Click line 1, column ~2 (body starts at y=52, text at x=44).
-    let advance = f64::from(text.mono_metrics(14.0, 18.9).advance);
+    let advance = f64::from(text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35).advance);
     let click = Pointer {
         x: 44.0 + advance * 2.0 + 1.0,
-        y: 52.0 + 18.9 + 5.0,
+        y: 52.0 + f64::from(UI_FONT_SIZE * 1.35) + 5.0,
         down: false,
         click: true,
     };
-    let _ = e.draw(&mut canvas, &mut text, &theme, 1.0, pane(), click, &Highlighter::new());
+    let _ = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), click, &Highlighter::new());
     let Body::Text(t) = &e.body else { panic!("text") };
     assert_eq!(t.cursor(), (1, 2));
     assert!(!e.is_dirty(), "caret movement is not an edit");

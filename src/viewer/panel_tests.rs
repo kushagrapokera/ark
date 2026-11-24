@@ -6,11 +6,14 @@ use crate::fs::testutil::{temp_dir, TempDir};
 use crate::highlight::Highlighter;
 use crate::render::{Canvas, Theme};
 use crate::text::{TextSystem, UI_FONT_SIZE};
-use crate::ui::testutil::{count_color_in, ink_bbox_in};
+use crate::ui::testutil::{count_color_in, count_not_color_in, ink_bbox_in};
 use std::fs;
 use std::io::Write;
 
-const PANEL: Rect = Rect { x: 10.0, y: 10.0, w: 400.0, h: 57.0 }; // ~3 lines
+const PANEL: Rect = Rect { x: 10.0, y: 10.0, w: 400.0, h: 3.0 * LINE_H };
+const ROW1_Y: u32 = (PANEL.y + LINE_H) as u32;
+const ROW2_Y: u32 = (PANEL.y + 2.0 * LINE_H) as u32;
+const PANEL_BOTTOM: u32 = (PANEL.y + PANEL.h) as u32;
 
 /// Theme with the tokens under pin distinct; the rest sit on bg.
 fn panel_theme() -> Theme {
@@ -64,7 +67,7 @@ fn lines_fixture(label: &str) -> (TempDir, PathBuf) {
     let p = d.path().join("lines.rs");
     let mut f = fs::File::create(&p).expect("create");
     for i in 0..39 {
-        writeln!(f, "{}", "a".repeat(i + 1)).expect("write");
+        writeln!(f, "{}", "a".repeat((i + 1).min(20))).expect("write");
     }
     writeln!(f, "let s = \"tok\";").expect("write"); // line 40 (index 39)
     (d, p)
@@ -75,8 +78,45 @@ fn draw(theme: &Theme, panel: Rect, viewer: &Viewer, canvas: &mut Canvas) -> cra
     let font_size = (UI_FONT_SIZE as f64 * 1.0) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     canvas.fill(theme.bg);
-    draw_viewer_panel(canvas, &mut text, theme, 1.0, panel, viewer, &Highlighter::new(), None);
+    draw_viewer_panel(canvas, &mut text, theme, 1.0, panel, viewer, &Highlighter::new(), None, 1.0);
     m
+}
+
+#[test]
+fn viewer_text_grows_with_the_window_ui_scale() {
+    let (_d, p) = lines_fixture("viewer-ui-scale");
+    let viewer = Viewer::open(&p).expect("opens");
+    let theme = panel_theme();
+    let mut text = TextSystem::new();
+    let mut normal = Canvas::new(400, 80);
+    normal.fill(theme.bg);
+    draw_viewer_panel(
+        &mut normal,
+        &mut text,
+        &theme,
+        1.0,
+        PANEL,
+        &viewer,
+        &Highlighter::new(),
+        None,
+        1.0,
+    );
+    let mut large = Canvas::new(400, 80);
+    large.fill(theme.bg);
+    draw_viewer_panel(
+        &mut large,
+        &mut text,
+        &theme,
+        1.0,
+        PANEL,
+        &viewer,
+        &Highlighter::new(),
+        None,
+        1.25,
+    );
+    let normal_ink = count_not_color_in(&normal, theme.bg, 40, 10, 390, 67);
+    let large_ink = count_not_color_in(&large, theme.bg, 40, 10, 390, 67);
+    assert!(large_ink > normal_ink, "larger UI scale paints more text ink");
 }
 
 // ---- viewport-only rendering ----
@@ -159,24 +199,24 @@ fn viewport_only_rendering() {
     let mut canvas = Canvas::new(420, 80);
 
     draw(&theme, PANEL, &v, &mut canvas);
-    // Ink confined to the 3 visible line bands [10, 10 + 3×18.9 ≈ 67).
+    // Ink confined to the 3 visible line bands.
     let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 420, 80).expect("viewer ink");
-    assert!(bbox.1 >= 10 && bbox.3 < 68, "ink confined to the visible bands, got {bbox:?}");
-    // Band 3 [10 + 2×18.9, 10 + 3×18.9) shows line 3 = "aaa" (3 chars + gutter).
-    let (_, short) = band_ink(&canvas, theme.bg, 47, 67);
+    assert!(bbox.1 >= 10 && bbox.3 < PANEL_BOTTOM + 1, "ink confined to the visible bands, got {bbox:?}");
+    // Band 3 shows line 3 = "aaa" (3 chars + gutter).
+    let (_, short) = band_ink(&canvas, theme.bg, ROW2_Y, PANEL_BOTTOM);
 
     // Scroll 10 lines: band 3 shows line 13 = 13 a's → far wider ink.
     assert!(v.scroll_by_lines(10, 3));
     draw(&theme, PANEL, &v, &mut canvas);
     let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 420, 80).expect("scrolled ink");
-    assert!(bbox.1 >= 10 && bbox.3 < 68, "scrolled ink still viewport-only");
-    let (_, long) = band_ink(&canvas, theme.bg, 47, 67);
+    assert!(bbox.1 >= 10 && bbox.3 < PANEL_BOTTOM + 1, "scrolled ink still viewport-only");
+    let (_, long) = band_ink(&canvas, theme.bg, ROW2_Y, PANEL_BOTTOM);
     assert!(long > short + 20, "band 3 shows the longer line after scrolling ({short} → {long})");
 }
 
 /// Ink extent (min_x, max_x) within a horizontal pixel band.
 fn band_ink(canvas: &Canvas, bg: crate::render::ColorRgb, y0: u32, y1: u32) -> (u32, u32) {
-    let bbox = ink_bbox_in(canvas, bg, 0, y0, canvas.width(), y1).expect("band must contain ink");
+    let bbox = ink_bbox_in(canvas, bg, 0, y0, 390, y1).expect("band must contain ink");
     (bbox.0, bbox.2)
 }
 
@@ -194,23 +234,23 @@ fn gutter_renders_numbers_and_reserved_mark_strip() {
     // Line-number ink (fg_dim) inside the gutter, right of the mark strip.
     let gutter_w = gutter_width(v.line_count(), advance);
     assert!(
-        count_color_in(&canvas, theme.fg_dim, 14, 10, 10 + gutter_w as u32, 29) > 0,
+        count_color_in(&canvas, theme.fg_dim, 14, 10, 10 + gutter_w as u32, ROW1_Y) > 0,
         "line-number ink in the gutter"
     );
     // The reserved mark strip [panel.x, +MARK_W) is painted bg_elevated and
     // carries no text ink (M7 paints git marks into it).
     assert!(
-        count_color_in(&canvas, theme.bg_elevated, 10, 10, 14, 67) >= 4 * 57 - 4,
+        count_color_in(&canvas, theme.bg_elevated, 10, 10, 14, PANEL_BOTTOM) >= PANEL.h as usize * 4 - 4,
         "mark strip painted across the panel height"
     );
     assert!(
-        count_color_in(&canvas, theme.fg_dim, 10, 10, 14, 67) == 0,
+        count_color_in(&canvas, theme.fg_dim, 10, 10, 14, PANEL_BOTTOM) == 0,
         "no line-number ink inside the reserved strip"
     );
     // Numbers are right-aligned: row-0 ink inside the gutter ends within
     // ~2px of text_edge − GUT_PAD_R (band limited to row 0 and the gutter
     // x-range so text ink never leaks into the pin).
-    let bbox = ink_bbox_in(&canvas, theme.bg, 14, 10, (10.0 + gutter_w) as u32, 28)
+    let bbox = ink_bbox_in(&canvas, theme.bg, 14, 10, (10.0 + gutter_w) as u32, ROW1_Y)
         .expect("row-0 gutter ink");
     let text_edge = 10.0 + gutter_w;
     assert!(
@@ -236,15 +276,15 @@ fn token_colors_and_selection_render() {
     // grow to two chars; scroll to its top band.
     v.set_offset_lines(37, 3);
     draw(&theme, PANEL, &v, &mut canvas);
-    // Line 39 (third visible row, band [47, 67)) has the string "tok":
+    // Line 39 (third visible row) has the string "tok":
     let gutter_w = gutter_width(v.line_count(), advance);
     let text_x = 10.0 + gutter_w;
     assert!(
-        count_color_in(&canvas, theme.syntax_string, text_x as u32, 47, 420, 67) > 0,
+        count_color_in(&canvas, theme.syntax_string, text_x as u32, ROW2_Y, 420, PANEL_BOTTOM) > 0,
         "string literal paints the syntax_string color"
     );
     assert!(
-        count_color_in(&canvas, theme.syntax_keyword, text_x as u32, 47, 420, 67) > 0,
+        count_color_in(&canvas, theme.syntax_keyword, text_x as u32, ROW2_Y, 420, PANEL_BOTTOM) > 0,
         "`let` paints the syntax_keyword color"
     );
 
@@ -256,11 +296,11 @@ fn token_colors_and_selection_render() {
     let sel_x0 = (text_x + 2.0 * advance) as u32;
     let sel_x1 = (text_x + 5.0 * advance) as u32;
     assert!(
-        count_color_in(&canvas, theme.selection, sel_x0, 10, sel_x1, 29) > 50,
+        count_color_in(&canvas, theme.selection, sel_x0, 10, sel_x1, ROW1_Y) > 50,
         "selection background paints over the selected span"
     );
     assert!(
-        count_color_in(&canvas, theme.selection, sel_x1, 10, 420, 29) == 0,
+        count_color_in(&canvas, theme.selection, sel_x1, 10, 420, ROW1_Y) == 0,
         "nothing beyond the span end"
     );
 }
@@ -295,19 +335,19 @@ fn current_line_indent_guides_and_bracket_colors_render() {
     let text_x = (PANEL.x + gutter_w) as u32;
 
     assert!(
-        count_color_in(&canvas, theme.editor_current_line, text_x, 10, 310, 29) > 100,
+        count_color_in(&canvas, theme.editor_current_line, text_x, 10, 310, ROW1_Y) > 100,
         "current line paints a full editor band"
     );
     assert!(
-        count_color_in(&canvas, theme.editor_indent_guide, text_x, 29, 310, 67) > 5,
+        count_color_in(&canvas, theme.editor_indent_guide, text_x, ROW1_Y, 310, PANEL_BOTTOM) > 5,
         "indented lines paint guide pixels"
     );
     assert!(
-        count_color_in(&canvas, theme.editor_bracket_1, text_x, 10, 310, 67) > 0,
+        count_color_in(&canvas, theme.editor_bracket_1, text_x, 10, 310, PANEL_BOTTOM) > 0,
         "outer brackets use the first pair color"
     );
     assert!(
-        count_color_in(&canvas, theme.editor_bracket_2, text_x, 10, 310, 67) > 0,
+        count_color_in(&canvas, theme.editor_bracket_2, text_x, 10, 310, PANEL_BOTTOM) > 0,
         "nested brackets use the second pair color"
     );
 }
@@ -328,11 +368,11 @@ fn bracket_colors_ignore_brackets_inside_strings() {
     let brace_in_string = (text_x + 21.0 * advance) as u32;
 
     assert!(
-        count_color_in(&canvas, theme.syntax_string, brace_in_string, 10, brace_in_string + 8, 29) > 0,
+        count_color_in(&canvas, theme.syntax_string, brace_in_string, 10, brace_in_string + 8, ROW1_Y) > 0,
         "the string brace keeps string coloring"
     );
     assert_eq!(
-        count_color_in(&canvas, theme.editor_bracket_1, brace_in_string, 10, brace_in_string + 8, 29),
+        count_color_in(&canvas, theme.editor_bracket_1, brace_in_string, 10, brace_in_string + 8, ROW1_Y),
         0,
         "the string brace is not bracket-colored"
     );
@@ -388,10 +428,10 @@ fn panel_draw_degenerates_safely() {
         Rect { x: 10.0, y: 10.0, w: 300.0, h: 0.0 },
         Rect { x: 10.0, y: 10.0, w: 300.0, h: -5.0 },
     ] {
-        draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, panel, &v, &Highlighter::new(), None);
+        draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, panel, &v, &Highlighter::new(), None, 1.0);
     }
-    draw_viewer_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &v, &Highlighter::new(), None);
-    draw_viewer_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &v, &Highlighter::new(), None);
+    draw_viewer_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &v, &Highlighter::new(), None, 1.0);
+    draw_viewer_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &v, &Highlighter::new(), None, 1.0);
     assert_eq!(
         count_color_in(&canvas, theme.bg, 0, 0, 420, 80),
         420 * 80,
@@ -429,21 +469,21 @@ fn git_marks_paint_the_reserved_strip() {
     };
     let mut text = TextSystem::new();
     canvas.fill(theme.bg);
-    draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &v, &Highlighter::new(), Some(&diff));
+    draw_viewer_panel(&mut canvas, &mut text, &theme, 1.0, PANEL, &v, &Highlighter::new(), Some(&diff), 1.0);
 
     // Strip bars: green at row 0 (line 3), yellow at row 2 (line 5).
     let strip_x0 = PANEL.x as u32 + 1;
     let strip_x1 = PANEL.x as u32 + crate::viewer::MARK_W as u32 - 1;
     assert!(
-        count_color_in(&canvas, theme.git_added, strip_x0, 11, strip_x1, 30) > 10,
+        count_color_in(&canvas, theme.git_added, strip_x0, 11, strip_x1, ROW1_Y) > 10,
         "added bar in the strip at the first visible row"
     );
     assert!(
-        count_color_in(&canvas, theme.git_modified, strip_x0, 48, strip_x1, 68) > 10,
+        count_color_in(&canvas, theme.git_modified, strip_x0, ROW2_Y + 1, strip_x1, PANEL_BOTTOM) > 10,
         "modified bar at the third visible row"
     );
     assert_eq!(
-        count_color_in(&canvas, theme.git_added, strip_x0, 48, strip_x1, 68),
+        count_color_in(&canvas, theme.git_added, strip_x0, ROW2_Y + 1, strip_x1, PANEL_BOTTOM),
         0,
         "no added ink at the modified row"
     );

@@ -25,9 +25,13 @@ const MONO_FAMILY: &str = "JetBrains Mono";
 
 const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
+/// Hard cap for measured-size metrics during continuous window resizing.
+const MAX_METRICS_CACHE: usize = 64;
 
-/// Default logical (scale-independent) UI font size in px.
-pub const UI_FONT_SIZE: f32 = 14.0;
+/// Default logical (scale-independent) UI/code font size in px.
+pub const UI_FONT_SIZE: f32 = 16.0;
+/// Tree text stays compact and monospace-independent of window zoom.
+pub const TREE_FONT_SIZE: f32 = 14.0;
 
 /// Substring between CHAR indices `[a, b)`, clamped to the string.
 pub fn char_range(s: &str, a: usize, b: usize) -> &str {
@@ -61,7 +65,7 @@ pub struct TextSystem {
     font_system: FontSystem,
     swash_cache: SwashCache,
     /// Measured metrics per physical font size. Key: font_size quantized to
-    /// quarter pixels — bounded by the handful of sizes/scales ark uses.
+    /// quarter pixels; hard-capped because window resizing can vary the size.
     metrics_cache: HashMap<u32, MonoMetrics>,
 }
 
@@ -111,6 +115,9 @@ impl TextSystem {
             metrics.ascent = run.line_y - run.line_top;
             metrics.descent = run.line_height - metrics.ascent;
             metrics.line_height = run.line_height;
+        }
+        if self.metrics_cache.len() >= MAX_METRICS_CACHE {
+            self.metrics_cache.clear();
         }
         self.metrics_cache.insert(key, metrics);
         metrics
@@ -297,6 +304,31 @@ mod tests {
     const EPS: f32 = 0.2;
 
     // ---- Monospace metrics (measured from the bundled font) ----
+
+    #[test]
+    fn typography_scales_up_but_keeps_the_tree_face_size() {
+        assert_eq!(UI_FONT_SIZE, 16.0);
+        assert_eq!(TREE_FONT_SIZE, 14.0);
+        assert_eq!(crate::viewer::LINE_H, 21.6);
+    }
+
+    #[test]
+    fn window_ui_scale_is_bounded_and_grows_with_the_window() {
+        assert_eq!(crate::frame::responsive_ui_scale(1024.0, 768.0), 1.0);
+        assert_eq!(crate::frame::responsive_ui_scale(400.0, 300.0), 0.9);
+        assert!(crate::frame::responsive_ui_scale(1440.0, 900.0) > 1.0);
+        assert_eq!(crate::frame::responsive_ui_scale(3840.0, 2160.0), 1.25);
+        assert_eq!(crate::frame::ui_size(10.0, 1.25), 14.375);
+    }
+
+    #[test]
+    fn metrics_cache_stays_bounded_dynamic_resizes() {
+        let mut text = TextSystem::new();
+        for size in 10..110 {
+            text.mono_metrics(size as f32, size as f32 * 1.35);
+        }
+        assert!(text.metrics_cache.len() <= 64);
+    }
 
     #[test]
     fn jetbrains_mono_advance_is_0_6x_font_size() {

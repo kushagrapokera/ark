@@ -19,7 +19,7 @@ use crate::fs::{read_dir_sorted, DirListing};
 use crate::git::{Badge, GitStatus};
 use crate::icons::{self, Icon};
 use crate::render::{Canvas, Theme};
-use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
+use crate::text::{TextSystem, TextStyle, TREE_FONT_SIZE};
 use crate::ui::{Pointer, Rect};
 
 /// Logical px per visible row.
@@ -29,7 +29,7 @@ pub const INDENT_PX: f64 = 16.0;
 /// Width of the clickable chevron zone at a row's indent (dirs only).
 pub const CHEVRON_ZONE: f64 = 16.0;
 /// Nominal icon box edge (chevron and file icons).
-pub const ICON_SIZE: f64 = 14.0;
+pub const ICON_SIZE: f64 = 16.0;
 /// Width of the scrollbar track occupying the panel's right edge; rows
 /// (backgrounds and hit testing) stay left of it.
 pub const TRACK_W: f64 = 8.0;
@@ -458,7 +458,7 @@ pub fn draw_tree_panel_with_insertion(
         None
     };
     let selected = tree.selected();
-    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+    let font_size = (TREE_FONT_SIZE as f64 * scale) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let row_w = (panel.w - TRACK_W).max(0.0);
     for (i, row) in rows.iter().enumerate().skip(first).take(band_rows) {

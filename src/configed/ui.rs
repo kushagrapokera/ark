@@ -65,16 +65,23 @@ pub(crate) fn draw(
     text: &mut TextSystem,
     theme: &Theme,
     scale: f64,
+    ui_scale: f64,
     panel: Rect,
     pointer: Pointer,
     highlighter: &Highlighter,
 ) -> ConfigEffects {
     let mut effects = ConfigEffects::default();
-    if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+    if panel.w <= 0.0
+        || panel.h <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+        || !ui_scale.is_finite()
+        || ui_scale <= 0.0
+    {
         return effects;
     }
     let l = layout(panel);
-    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+    let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let advance = f64::from(m.advance) / scale;
     let base_y = (panel.y + PAD + BTN_H / 2.0) * scale

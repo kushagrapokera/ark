@@ -16,6 +16,7 @@ use crate::ui::Rect;
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, LayoutAction, CARD_RADIUS};
 
 fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, bold: bool) {
+    let size = super::ui_size(size, f.ui_scale);
     let font_size = (size * f.scale) as f32;
     let m = f.text.mono_metrics(font_size, font_size * 1.35);
     let baseline = (y + size / 2.0) * f.scale + f64::from(m.ascent - m.descent) / 2.0;
@@ -38,7 +39,7 @@ fn icon(f: &mut Frame, icon: Icon, cx: f64, cy: f64, size: f64, color: ColorRgb)
         icon,
         (cx * f.scale) as f32,
         (cy * f.scale) as f32,
-        (size * f.scale) as f32,
+        (super::ui_size(size, f.ui_scale) * f.scale) as f32,
         color,
         f.scale,
     );
@@ -111,17 +112,18 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffec
     if bar.w >= 1024.0 {
         let menus = ["File", "Edit", "Selection", "View", "Go"];
         let mut x = 44.0;
+        let size_scale = super::ui_size(1.0, f.ui_scale);
         for label in menus {
             text(f, label, x, 9.0, 11.0, f.theme.text_muted, false);
             x += match label {
                 "Selection" => 66.0,
                 "File" | "Edit" | "View" => 42.0,
                 _ => 30.0,
-            };
+            } * size_scale;
         }
-        icon(f, Icon::More, x + 4.0, 18.0, 14.0, f.theme.text_muted);
-        icon(f, Icon::ChevronLeft, x + 42.0, 18.0, 14.0, f.theme.text_muted);
-        icon(f, Icon::ChevronRight, x + 64.0, 18.0, 14.0, f.theme.text_muted);
+        icon(f, Icon::More, x + 4.0 * size_scale, 18.0, 14.0, f.theme.text_muted);
+        icon(f, Icon::ChevronLeft, x + 42.0 * size_scale, 18.0, 14.0, f.theme.text_muted);
+        icon(f, Icon::ChevronRight, x + 64.0 * size_scale, 18.0, 14.0, f.theme.text_muted);
     }
 
     let actions = title_bar_actions(layout);
@@ -897,6 +899,7 @@ fn draw_terminal_tab(
     text: &mut TextSystem,
     theme: &Theme,
     scale: f64,
+    ui_scale: f64,
     rect: Rect,
     label: &str,
     active: bool,
@@ -924,7 +927,7 @@ fn draw_terminal_tab(
         Icon::Terminal,
         (icon_x * scale) as f32,
         ((rect.y + rect.h / 2.0) * scale) as f32,
-        (12.0 * scale) as f32,
+        (super::ui_size(12.0, ui_scale) * scale) as f32,
         if active { theme.fg } else { theme.text_muted },
         scale,
     );
@@ -932,7 +935,7 @@ fn draw_terminal_tab(
         let right = rect.x + rect.w - if closable { 22.0 } else { 8.0 };
         let max_chars = ((right - icon_x - 12.0) / 6.6).floor().max(0.0) as usize;
         let display = super::truncate_chars(label, max_chars);
-        let font_size = (9.0 * scale) as f32;
+        let font_size = (super::ui_size(9.0, ui_scale) * scale) as f32;
         let metrics = text.mono_metrics(font_size, font_size * 1.35);
         let baseline =
             (rect.y + rect.h / 2.0) * scale + f64::from(metrics.ascent - metrics.descent) / 2.0;
@@ -955,7 +958,7 @@ fn draw_terminal_tab(
             Icon::Close,
             ((close.x + close.w / 2.0) * scale) as f32,
             ((close.y + close.h / 2.0) * scale) as f32,
-            (10.0 * scale) as f32,
+            (super::ui_size(10.0, ui_scale) * scale) as f32,
             theme.text_muted,
             scale,
         );
@@ -990,6 +993,7 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> Termina
                     f.text,
                     f.theme,
                     f.scale,
+                    f.ui_scale,
                     rect,
                     term.label(),
                     index == active,
@@ -1004,6 +1008,7 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> Termina
                 f.text,
                 f.theme,
                 f.scale,
+                f.ui_scale,
                 rect,
                 "Terminal",
                 true,
@@ -1158,74 +1163,21 @@ pub(super) fn draw_terminal_placeholder(f: &mut Frame, layout: &AppLayout) {
     if grid.w <= 0.0 || grid.h <= 0.0 {
         return;
     }
+    let prompt = format!("ark@ark  in  repo:{}  on  main", f.title);
     text(
         f,
-        "ark@ark",
+        &prompt,
         grid.x,
-        grid.y + 8.0,
+        grid.y + super::ui_size(8.0, f.ui_scale),
         11.0,
-        f.theme.syntax_control,
+        f.theme.fg_dim,
         false,
     );
     text(
         f,
-        "in",
-        grid.x + 58.0,
-        grid.y + 8.0,
-        11.0,
-        f.theme.text_muted,
-        false,
-    );
-    text(
-        f,
-        "repo:",
-        grid.x + 76.0,
-        grid.y + 8.0,
-        11.0,
-        f.theme.syntax_type,
-        false,
-    );
-    text(
-        f,
-        f.title,
-        grid.x + 108.0,
-        grid.y + 8.0,
-        11.0,
-        f.theme.fg,
-        false,
-    );
-    text(
-        f,
-        "on",
-        grid.x + 150.0,
-        grid.y + 8.0,
-        11.0,
-        f.theme.text_muted,
-        false,
-    );
-    text(
-        f,
-        "main",
-        grid.x + 168.0,
-        grid.y + 8.0,
-        11.0,
-        f.theme.syntax_function,
-        false,
-    );
-    text(
-        f,
-        ">",
+        "> Type a command to begin",
         grid.x,
-        grid.y + 34.0,
-        11.0,
-        f.theme.git_untracked,
-        true,
-    );
-    text(
-        f,
-        "Type a command to begin",
-        grid.x + 18.0,
-        grid.y + 34.0,
+        grid.y + super::ui_size(34.0, f.ui_scale),
         11.0,
         f.theme.text_dim,
         false,

@@ -364,11 +364,12 @@ impl ConfigEditor {
         text: &mut crate::text::TextSystem,
         theme: &crate::render::Theme,
         scale: f64,
+        ui_scale: f64,
         rect: Rect,
         pointer: crate::ui::Pointer,
         highlighter: &Highlighter,
     ) -> ConfigEffects {
-        ui::draw(self, canvas, text, theme, scale, rect, pointer, highlighter)
+        ui::draw(self, canvas, text, theme, scale, ui_scale, rect, pointer, highlighter)
     }
 }
 

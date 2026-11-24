@@ -32,7 +32,7 @@ pub const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 /// Maximum first-line prefix inspected for shebang language detection.
 const SHEBANG_SNIFF_BYTES: usize = 4 * 1024;
 /// Logical px per viewer text line (UI_FONT_SIZE × 1.35).
-pub const LINE_H: f64 = 18.9;
+pub const LINE_H: f64 = 21.6;
 /// Width of the gutter strip reserved for git marks (M7 paints into it).
 pub const MARK_W: f64 = 4.0;
 /// Gutter padding around the line-number digits.

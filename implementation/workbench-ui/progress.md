@@ -354,6 +354,29 @@ five open viewers, two shells + fake agent tab):
   57,345 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
   unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
+## Larger responsive typography and icons
+
+- Increased UI/code/terminal/config text from 14 px to 16 px and viewer line
+  height from 18.9 px to 21.6 px. Tree text remains 14 px and monospace.
+- Times New Roman is not bundled, and ark forbids system-font scanning, so the
+  existing bundled JetBrains Mono family is retained rather than introducing an
+  unapproved proprietary font.
+- Added a window-area UI scale clamped to 0.9–1.25 (1.0 at 1024×768). UI chrome,
+  code viewer, terminal, config text, and chrome icons scale with it; the tree
+  stays fixed. Title-menu spacing and terminal placeholder text reflow to avoid
+  overlap at large sizes.
+- Increased tree icons to 16 px and bolded all icon strokes from 1.75 px to
+  2.25 px. Chrome icons also receive the window-size scale.
+- Bounded the measured-metrics cache at 64 entries so continuous window resizing
+  cannot grow it without limit.
+- Verification: `cargo test` **316 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live 1024×768 → 1440×900 smoke confirmed
+  larger code/UI text and icons, unchanged tree text, and no title/placeholder
+  overlap.
+- Five-viewer/two-terminal stress at 1440×900 measured **64,044 KiB RSS /
+  55,962 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

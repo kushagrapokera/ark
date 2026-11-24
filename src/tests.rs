@@ -75,18 +75,18 @@ fn viewer_wheel_marks_pane_damage_only() {
     let mut damage = Damage::new(64);
     damage.take(canvas.width(), canvas.height()); // consume the initial full wave
 
-    // One notch (40px) → round(40/18.9) = 2 lines; damage = the pane rect.
+    // One notch (40px) → round(40/21.6) = 2 lines; damage = the pane rect.
     assert!(route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
     assert_eq!(viewer.offset_lines(), 2);
     let rects = damage.take(canvas.width(), canvas.height()).expect("scroll damage");
     assert_eq!(rects, vec![damage_rect(layout.viewer_pane, 1.0, 1024, 768)]);
 
-    // Notch to the clamp (40 lines − 20 viewport = 20), then one more notch
+    // Notch to the clamp (40 lines − 18 viewport = 22), then one more notch
     // moves nothing → no damage at all.
     while route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage) {
         let _ = damage.take(canvas.width(), canvas.height());
     }
-    assert_eq!(viewer.offset_lines(), 20, "max offset = line_count − viewport_lines");
+    assert_eq!(viewer.offset_lines(), 22, "max offset = line_count − viewport_lines");
     assert!(!route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
     assert!(damage.take(canvas.width(), canvas.height()).is_none(), "clamped: nothing pending");
 }

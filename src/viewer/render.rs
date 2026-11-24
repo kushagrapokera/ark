@@ -26,11 +26,18 @@ pub fn draw_viewer_panel(
     viewer: &Viewer,
     highlighter: &Highlighter,
     file_diff: Option<&FileDiff>,
+    ui_scale: f64,
 ) {
-    if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+    if panel.w <= 0.0
+        || panel.h <= 0.0
+        || !scale.is_finite()
+        || scale <= 0.0
+        || !ui_scale.is_finite()
+        || ui_scale <= 0.0
+    {
         return;
     }
-    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+    let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let advance = f64::from(m.advance) / scale;
 

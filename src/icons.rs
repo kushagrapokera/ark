@@ -4,13 +4,16 @@
 //!
 //! Coordinate contract: callers pass LOGICAL `cx`/`cy` and a LOGICAL `size`;
 //! `draw` applies exactly one `Transform::from_scale(scale)` to place and
-//! size the glyph. The stroke width is a constant 1.75 in logical space —
+//! size the glyph. The stroke width is a constant bold 2.25 in logical space —
 //! the transform scales it exactly once. Callers must never pre-scale
 //! coordinates or widths by `scale` (doing so double-scales position and
 //! stroke thickness on HiDPI).
 
 use crate::render::ColorRgb;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+
+/// Bold logical stroke width used by every icon.
+pub const ICON_STROKE_WIDTH: f32 = 2.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
@@ -64,9 +67,9 @@ pub fn draw(
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.0, color.1, color.2, 255);
     paint.anti_alias = true;
-    // Constant 1.75 LOGICAL stroke width; the transform scales it once.
+    // Constant bold LOGICAL stroke width; the transform scales it once.
     let stroke = Stroke {
-        width: 1.75,
+        width: ICON_STROKE_WIDTH,
         line_cap: tiny_skia::LineCap::Round,
         line_join: tiny_skia::LineJoin::Round,
         ..Stroke::default()
@@ -521,6 +524,11 @@ mod tests {
     /// pre-fix bug multiplied the stroke width by `scale` by hand AND let
     /// the transform scale it, inflating the stroke band ~2× beyond the
     /// contract at 2×.
+    #[test]
+    fn icon_strokes_are_bold() {
+        assert_eq!(ICON_STROKE_WIDTH, 2.25);
+    }
+
     #[test]
     fn icons_hidpi_proportional() {
         // The same LOGICAL icon under both scales.

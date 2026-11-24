@@ -37,6 +37,18 @@ const TERM_HANDLE_W: f64 = 36.0;
 const TERM_HANDLE_H: f64 = 12.0;
 const STATUS_H: f64 = 24.0;
 const CARD_RADIUS: f64 = 6.0;
+/// Base bump for chrome text/icons before window-size scaling.
+const UI_SIZE_SCALE: f64 = 1.15;
+
+pub fn responsive_ui_scale(w: f64, h: f64) -> f64 {
+    let area = (w.max(1.0) * h.max(1.0)).sqrt();
+    let baseline = (1024.0_f64 * 768.0).sqrt();
+    (area / baseline).clamp(0.9, 1.25)
+}
+
+pub fn ui_size(base: f64, ui_scale: f64) -> f64 {
+    base * UI_SIZE_SCALE * ui_scale
+}
 /// Split clamps: explorer card width and a usable editor minimum.
 const SPLIT_MIN_PX: f64 = 224.0;
 const SPLIT_MAX_MARGIN: f64 = 280.0;
@@ -79,6 +91,8 @@ pub enum LayoutAction {
 pub struct AppLayout {
     /// Top title/menu/layout-control bar.
     pub title_bar: Rect,
+    /// Window-size text/icon scale, separate from device pixel ratio.
+    pub ui_scale: f64,
     /// Padded card area between title bar and status bar.
     pub workbench: Rect,
     /// Far-left activity card.
@@ -202,6 +216,7 @@ pub fn app_layout_with_visibility(
 ) -> AppLayout {
     let w = w.max(0.0);
     let h = h.max(0.0);
+    let ui_scale = responsive_ui_scale(w, h);
     let narrow = w < 560.0;
     let compact = w < 760.0;
     let short = h < 620.0;
@@ -413,6 +428,7 @@ pub fn app_layout_with_visibility(
             w,
             h: TITLE_H,
         },
+        ui_scale,
         workbench: Rect {
             x: pad,
             y: work_y,
@@ -635,7 +651,7 @@ fn draw_path_breadcrumb(f: &mut Frame, pane: Rect, path: &Path) {
     f.canvas
         .fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg, f.scale);
     let rel = path.strip_prefix(f.root).unwrap_or(path);
-    let font_size = (11.0 * f.scale) as f32;
+    let font_size = (ui_size(11.0, f.ui_scale) * f.scale) as f32;
     let m = f.text.mono_metrics(font_size, font_size * 1.35);
     let advance = f64::from(m.advance) / f.scale;
     let mut x = pane.x + 12.0;
@@ -731,6 +747,8 @@ pub struct Frame<'a> {
     pub text: &'a mut TextSystem,
     pub theme: &'a Theme,
     pub scale: f64,
+    /// Window-size text/icon scale.
+    pub ui_scale: f64,
     /// Recent input emphasis in `[0,1]` for the sidebar handle pulse.
     pub activity_pulse: f32,
     /// Current title-bar panel visibility.
@@ -1124,11 +1142,11 @@ pub fn draw_frame(
     if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
         let grid = layout.term_grid;
         if let Some(t) = terms.active_mut() {
-            let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
+            let font_size = (UI_FONT_SIZE as f64 * f.scale * f.ui_scale) as f32;
             let m = f.text.mono_metrics(font_size, font_size * 1.35);
             let advance = f64::from(m.advance) / f.scale;
             t.resize(term::GridSize::fit(grid.w, grid.h, advance, LINE_H));
-            t.draw(f.canvas, f.text, f.theme, f.scale, grid, f.term_focused);
+            t.draw(f.canvas, f.text, f.theme, f.scale, f.ui_scale, grid, f.term_focused);
         }
     }
     chrome::draw_terminal_menu(f, layout, &mut terminal_fx);
@@ -1174,6 +1192,7 @@ pub fn draw_frame(
                 f.text,
                 f.theme,
                 f.scale,
+                f.ui_scale,
                 pane,
                 f.pointer,
                 f.highlighter,
@@ -1193,7 +1212,7 @@ pub fn draw_frame(
                 draw_placeholder(f, pane, group.error.as_deref());
             }
         } else if let Some(viewer) = viewers[index].as_deref_mut() {
-            let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
+            let font_size = (UI_FONT_SIZE as f64 * f.scale * f.ui_scale) as f32;
             let m = f
                 .text
                 .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
@@ -1236,6 +1255,7 @@ pub fn draw_frame(
                 viewer,
                 f.highlighter,
                 diff,
+                f.ui_scale,
             );
             if pane.w > tree::TRACK_W {
                 let content = viewer.line_count() as f64 * LINE_H;
@@ -1402,7 +1422,7 @@ fn draw_pane_message(f: &mut Frame, rect: Rect, top: &str, bottom: &str) {
     if rect.w <= 2.0 || rect.h <= 2.0 {
         return;
     }
-    let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
+    let font_size = (UI_FONT_SIZE as f64 * f.scale * f.ui_scale) as f32;
     let m = f
         .text
         .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);

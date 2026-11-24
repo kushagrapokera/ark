@@ -604,12 +604,28 @@ impl Terminal {
     /// Render the visible grid into `rect` (LOGICAL px). Viewport-only:
     /// same-style runs share one shaped text call. The cursor paints when
     /// `show_cursor` (the pane is focused) and is on-screen.
-    pub fn draw(&self, canvas: &mut Canvas, text: &mut TextSystem, theme: &Theme, scale: f64, rect: Rect, show_cursor: bool) {
-        if rect.w <= 0.0 || rect.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+    #[allow(clippy::too_many_arguments)] // explicit raster context and window scale
+    pub fn draw(
+        &self,
+        canvas: &mut Canvas,
+        text: &mut TextSystem,
+        theme: &Theme,
+        scale: f64,
+        ui_scale: f64,
+        rect: Rect,
+        show_cursor: bool,
+    ) {
+        if rect.w <= 0.0
+            || rect.h <= 0.0
+            || !scale.is_finite()
+            || scale <= 0.0
+            || !ui_scale.is_finite()
+            || ui_scale <= 0.0
+        {
             return;
         }
         let content = self.term.renderable_content();
-        let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+        let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
         let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
         let advance = f64::from(m.advance) / scale;
         let rows = ((rect.h / TERM_LINE_H).floor() as usize).min(self.size.rows);

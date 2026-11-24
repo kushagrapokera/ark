@@ -705,8 +705,11 @@ impl App {
     }
 
     /// Terminal grid as if the dock were open (new tab spawn size).
-    fn terminal_grid_for_new_tab(&self) -> Option<Rect> {
-        self.app_layout().map(|layout| layout.term_grid)
+    fn terminal_grid_for_new_tab(&mut self) -> Option<(Rect, f64)> {
+        let layout = self.app_layout()?;
+        let font_size = UI_FONT_SIZE * layout.ui_scale as f32;
+        let m = self.text.mono_metrics(font_size, font_size * 1.35);
+        Some((layout.term_grid, f64::from(m.advance)))
     }
 
     /// Scroll the viewer in the group under the pointer, pinning both visible
@@ -852,6 +855,7 @@ impl App {
                 text: &mut self.text,
                 theme: &self.theme,
                 scale: self.scale,
+                ui_scale: layout.ui_scale,
                 activity_pulse,
                 layout_visibility: self.layout_visibility,
                 animation_time,
@@ -1116,11 +1120,9 @@ impl App {
             error!("terminal open failed: no wake proxy");
             return;
         };
-        let Some(grid) = self.terminal_grid_for_new_tab() else {
+        let Some((grid, advance)) = self.terminal_grid_for_new_tab() else {
             return;
         };
-        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
-        let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.open(&self.root, size, proxy) {
             Ok(()) => self.focus_terminal(),
@@ -1139,11 +1141,9 @@ impl App {
             error!("terminal duplicate failed: no wake proxy");
             return;
         };
-        let Some(grid) = self.terminal_grid_for_new_tab() else {
+        let Some((grid, advance)) = self.terminal_grid_for_new_tab() else {
             return;
         };
-        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
-        let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.duplicate_active(&self.root, size, proxy) {
             Ok(()) => self.focus_terminal(),
@@ -1161,11 +1161,9 @@ impl App {
             error!("terminal profile open failed: no wake proxy");
             return;
         };
-        let Some(grid) = self.terminal_grid_for_new_tab() else {
+        let Some((grid, advance)) = self.terminal_grid_for_new_tab() else {
             return;
         };
-        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
-        let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self
             .terms
@@ -1613,11 +1611,9 @@ impl App {
             self.request_redraw();
             return false;
         };
-        let Some(grid) = self.terminal_grid_for_new_tab() else {
+        let Some((grid, advance)) = self.terminal_grid_for_new_tab() else {
             return false;
         };
-        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
-        let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.open_command(&self.root, label, command, size, proxy) {
             Ok(()) => {
@@ -1684,7 +1680,7 @@ impl App {
     /// Encode + write a mouse report to the active terminal when the running
     /// app has enabled mouse reporting. Returns whether a report was sent.
     fn term_mouse_report(&mut self, state: ElementState) -> bool {
-        let Some(grid) = self.terminal_grid_for_new_tab() else {
+        let Some((grid, advance)) = self.terminal_grid_for_new_tab() else {
             return false;
         };
         if !grid.contains(self.pointer.x, self.pointer.y) {
@@ -1694,8 +1690,6 @@ impl App {
             return false;
         };
         let mode = term.mode();
-        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
-        let advance = f64::from(m.advance);
         let col = ((self.pointer.x - grid.x) / advance).floor().max(0.0) as usize;
         let row = ((self.pointer.y - grid.y) / viewer::LINE_H).floor().max(0.0) as usize;
         let press = matches!(state, ElementState::Pressed);
