@@ -188,6 +188,13 @@ five open viewers, two shells + fake agent tab):
   active and a 400×300 → 1440×900 resize: **62,140 KiB = 60.7 MiB RSS**,
   **54,425 KiB = 53.1 MiB PSS**.
 
+## Activity bar cleanup
+
+- Removed the unused Asterisk/agent/more placeholders beneath Config and the
+  nonfunctional account/settings footer.
+- Kept Explorer, Search, Source Control, Terminal, and Config; Terminal and
+  Config retain their existing behavior.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

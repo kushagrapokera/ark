@@ -245,16 +245,12 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
     if bar.w <= 0.0 || bar.h <= 0.0 {
         return None;
     }
-    let items: [(Icon, Option<&str>); 9] = [
-        (Icon::File, None),
-        (Icon::Search, None),
-        (Icon::SourceControl, None),
-        (Icon::Bug, None),
-        (Icon::Extension, None),
-        (Icon::Asterisk, None),
-        (Icon::Token, Some("co")),
-        (Icon::Token, Some("K")),
-        (Icon::More, None),
+    let items = [
+        Icon::File,
+        Icon::Search,
+        Icon::SourceControl,
+        Icon::Bug,
+        Icon::Extension,
     ];
     let mut clicked = None;
     let step = if bar.h >= 360.0 {
@@ -264,14 +260,8 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
     } else {
         28.0
     };
-    // Functional icons come first; the account/settings footer is optional.
-    let footer_reserve = if bar.h >= 5.0 * step + 88.0 {
-        72.0
-    } else {
-        0.0
-    };
-    let visible = ((bar.h - 8.0 - footer_reserve) / step).floor().max(0.0) as usize;
-    for (index, (glyph, label)) in items.into_iter().take(visible).enumerate() {
+    let visible = ((bar.h - 8.0) / step).floor().max(0.0) as usize;
+    for (index, glyph) in items.into_iter().take(visible).enumerate() {
         let rect = Rect {
             x: bar.x + 6.0,
             y: bar.y + 8.0 + index as f64 * step,
@@ -313,18 +303,14 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
         } else {
             f.theme.text_muted
         };
-        if let Some(label) = label {
-            text(f, label, rect.x + 13.0, rect.y + 9.0, 11.0, color, true);
-        } else {
-            icon(
-                f,
-                glyph,
-                rect.x + rect.w / 2.0,
-                rect.y + rect.h / 2.0,
-                18.0,
-                color,
-            );
-        }
+        icon(
+            f,
+            glyph,
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
+            18.0,
+            color,
+        );
         if index == 2 {
             let count = f.git.map(|git| git.changed_count()).unwrap_or(0);
             if count > 0 {
@@ -365,40 +351,6 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
         }
     }
 
-    if footer_reserve > 0.0 {
-        let account = Rect {
-            x: bar.x + 12.0,
-            y: bar.y + bar.h - 72.0,
-            w: 24.0,
-            h: 24.0,
-        };
-        f.canvas.fill_round_rect(
-            account.x,
-            account.y,
-            account.w,
-            account.h,
-            12.0,
-            f.theme.git_modified,
-            f.scale,
-        );
-        text(
-            f,
-            "K",
-            account.x + 8.0,
-            account.y + 5.0,
-            10.0,
-            f.theme.surface_chrome,
-            true,
-        );
-        icon(
-            f,
-            Icon::Config,
-            bar.x + bar.w / 2.0,
-            bar.y + bar.h - 24.0,
-            18.0,
-            f.theme.text_muted,
-        );
-    }
     clicked
 }
 

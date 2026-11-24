@@ -280,6 +280,38 @@ fn compact_terminal_plus_button_opens_the_first_shell() {
 }
 
 #[test]
+fn activity_bar_omits_unused_placeholders_below_config() {
+    let (_d, mut tree) = scene_fixture("activity-placeholders");
+    let mut theme = frame_theme();
+    theme.surface = (2, 2, 2);
+    theme.text_muted = (77, 77, 77);
+    theme.git_modified = (88, 99, 111);
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(&canvas, theme.surface, 14, 252, 50, 408),
+        0,
+        "unused icons below Config are gone"
+    );
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(&canvas, theme.surface, 14, 660, 50, 732),
+        0,
+        "unused account/settings placeholders are gone"
+    );
+}
+
+#[test]
 fn short_activity_bar_keeps_config_action_reachable() {
     let (_d, mut tree) = scene_fixture("compact-activity");
     let theme = frame_theme();

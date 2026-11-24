@@ -23,7 +23,6 @@ pub enum Icon {
     Dot,
     SourceControl,
     Terminal,
-    Config,
     Code,
     Search,
     Bug,
@@ -164,20 +163,6 @@ pub fn draw(
             pb.move_to(cx + 0.04 * s, cy + 0.10 * s);
             pb.line_to(cx + 0.20 * s, cy + 0.10 * s);
             pb.finish().expect("valid terminal path")
-        }
-        Icon::Config => {
-            // Gear: outer circle + four spokes.
-            let mut pb = PathBuilder::new();
-            pb.push_circle(cx, cy, 0.22 * s);
-            pb.move_to(cx, cy - 0.38 * s);
-            pb.line_to(cx, cy - 0.22 * s);
-            pb.move_to(cx, cy + 0.22 * s);
-            pb.line_to(cx, cy + 0.38 * s);
-            pb.move_to(cx - 0.38 * s, cy);
-            pb.line_to(cx - 0.22 * s, cy);
-            pb.move_to(cx + 0.22 * s, cy);
-            pb.line_to(cx + 0.38 * s, cy);
-            pb.finish().expect("valid config path")
         }
         Icon::Code => {
             let mut pb = PathBuilder::new();
@@ -503,7 +488,6 @@ pub fn draw(
         | Icon::ChevronLeft
         | Icon::SourceControl
         | Icon::Terminal
-        | Icon::Config
         | Icon::Code
         | Icon::Search
         | Icon::Bug
