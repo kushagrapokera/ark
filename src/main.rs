@@ -212,6 +212,12 @@ fn route_wheel_viewer(
     true
 }
 
+#[derive(Debug, Default)]
+struct TerminalDrag {
+    dragging: bool,
+    grab_dy: f64,
+}
+
 /// Per-window render state. `Arc<Window>` clones keep the `Surface` (which
 /// owns softbuffer's display/window handles) alive independently of `window`.
 struct App {
@@ -262,6 +268,10 @@ struct App {
     terms: term::TerminalTabs,
     /// Terminal pane focused (keys route to the shell).
     term_focused: bool,
+    /// User-selected terminal height; `None` keeps the responsive default.
+    term_height: Option<f64>,
+    /// Sticky editor/terminal divider drag latch.
+    term_drag: TerminalDrag,
     /// Last full-scene raster (30fps terminal budget reference).
     last_render: Option<Instant>,
     /// A terminal-area repaint was deferred past the frame budget.
@@ -361,6 +371,8 @@ impl App {
             watcher,
             terms: term::TerminalTabs::default(),
             term_focused: false,
+            term_height: None,
+            term_drag: TerminalDrag::default(),
             last_render: None,
             term_paint_due: false,
             flash_until: None,
@@ -651,7 +663,7 @@ impl App {
         if size.width == 0 || size.height == 0 {
             return None;
         }
-        Some(frame::app_layout_with_groups(
+        Some(frame::app_layout_with_groups_and_terminal(
             size.width as f64 / self.scale,
             size.height as f64 / self.scale,
             self.split.position,
@@ -659,26 +671,40 @@ impl App {
             true,
             self.editor_groups.divider,
             self.editor_groups.groups.len(),
+            self.term_height,
         ))
+    }
+
+    fn begin_terminal_resize(&mut self, layout: &AppLayout) -> bool {
+        if layout.terminal_resize.w <= 0.0 || layout.terminal_resize.h <= 0.0 {
+            return false;
+        }
+        self.term_drag.dragging = true;
+        self.term_drag.grab_dy = self.pointer.y - layout.term_dock.y;
+        log::debug!("terminal resize drag started");
+        true
+    }
+
+    fn resize_terminal_to(&mut self, pointer_y: f64, layout: &AppLayout) {
+        if !self.term_drag.dragging || !pointer_y.is_finite() {
+            return;
+        }
+        let bottom = layout.workbench.y + layout.workbench.h;
+        let requested = bottom - (pointer_y - self.term_drag.grab_dy);
+        let height = frame::clamp_terminal_height(
+            requested,
+            layout.workbench.h,
+            layout.terminal_resize.h,
+        );
+        if self.term_height != Some(height) {
+            self.term_height = Some(height);
+            log::debug!("terminal height set to {height:.1}px");
+        }
     }
 
     /// Terminal grid as if the dock were open (new tab spawn size).
     fn terminal_grid_for_new_tab(&self) -> Option<Rect> {
-        let window = self.window.as_ref()?;
-        let size = window.inner_size();
-        if size.width == 0 || size.height == 0 {
-            return None;
-        }
-        Some(
-            frame::app_layout_with_commit(
-                size.width as f64 / self.scale,
-                size.height as f64 / self.scale,
-                self.split.position,
-                self.git.is_some(),
-                true,
-            )
-            .term_grid,
-        )
+        self.app_layout().map(|layout| layout.term_grid)
     }
 
     /// Scroll the viewer in the group under the pointer, pinning both visible
@@ -1840,6 +1866,11 @@ impl ApplicationHandler<Wake> for App {
                 let logical = position.to_logical(self.scale);
                 self.pointer.x = logical.x;
                 self.pointer.y = logical.y;
+                if self.term_drag.dragging {
+                    if let Some(layout) = self.app_layout() {
+                        self.resize_terminal_to(logical.y, &layout);
+                    }
+                }
                 self.damage.mark_full();
                 self.request_redraw();
             }
@@ -1862,6 +1893,18 @@ impl ApplicationHandler<Wake> for App {
                     .as_ref()
                     .map(|l| l.term_grid.contains(self.pointer.x, self.pointer.y))
                     .unwrap_or(false);
+                if state == ElementState::Pressed
+                    && layout.as_ref().is_some_and(|l| {
+                        l.terminal_resize.contains(self.pointer.x, self.pointer.y)
+                    })
+                {
+                    if let Some(layout) = layout.as_ref() {
+                        self.begin_terminal_resize(layout);
+                    }
+                }
+                if state == ElementState::Released {
+                    self.term_drag.dragging = false;
+                }
                 if over_commit {
                     // A commit-panel click never leaves the shell keyboard-
                     // focused (the message field / buttons own this surface).

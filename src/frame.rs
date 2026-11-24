@@ -28,10 +28,13 @@ const TITLE_H: f64 = 36.0;
 const ACTIVITY_W: f64 = 48.0;
 const EXPLORER_HEADER_H: f64 = 36.0;
 const EXPLORER_ROOT_H: f64 = 28.0;
-const EXPLORER_FOOTER_H: f64 = 56.0;
 const EDITOR_TAB_H: f64 = 36.0;
 const BREADCRUMB_H: f64 = 24.0;
 const TERM_DOCK_H: f64 = 224.0;
+const TERM_MIN_H: f64 = 120.0;
+const TERM_EDITOR_MIN_H: f64 = 160.0;
+const TERM_HANDLE_W: f64 = 36.0;
+const TERM_HANDLE_H: f64 = 12.0;
 const STATUS_H: f64 = 24.0;
 const MINIMAP_W: f64 = 56.0;
 const CARD_RADIUS: f64 = 6.0;
@@ -65,7 +68,6 @@ pub struct AppLayout {
     pub explorer_card: Rect,
     pub explorer_header: Rect,
     pub explorer_root: Rect,
-    pub explorer_footer: Rect,
     /// Functional tree viewport inside the explorer card.
     pub tree_panel: Rect,
     pub scroll_track: Rect,
@@ -88,6 +90,8 @@ pub struct AppLayout {
     pub editor_group_split: Rect,
     /// Bottom terminal card and its chrome/body regions.
     pub term_dock: Rect,
+    /// Drag area between editor and terminal; zero when the dock is hidden.
+    pub terminal_resize: Rect,
     pub terminal_toolbar: Rect,
     pub term_grid: Rect,
     pub terminal_sessions: Rect,
@@ -116,10 +120,45 @@ pub fn app_layout_with_groups(
     w: f64,
     h: f64,
     split_x: f64,
+    show_commit: bool,
+    show_term: bool,
+    group_divider: f64,
+    group_count: usize,
+) -> AppLayout {
+    app_layout_with_groups_and_terminal(
+        w,
+        h,
+        split_x,
+        show_commit,
+        show_term,
+        group_divider,
+        group_count,
+        None,
+    )
+}
+
+/// Clamp a user-selected terminal height while preserving a usable editor.
+/// Tiny windows shrink the minimum proportionally instead of overflowing.
+pub fn clamp_terminal_height(requested: f64, work_h: f64, gap: f64) -> f64 {
+    if !requested.is_finite() {
+        return 0.0;
+    }
+    let min = TERM_MIN_H.min((work_h * 0.35).max(0.0));
+    let max = (work_h - TERM_EDITOR_MIN_H - gap).max(min);
+    requested.clamp(min, max)
+}
+
+/// Full workbench layout with an optional user-adjusted terminal height.
+#[allow(clippy::too_many_arguments)] // explicit responsive layout inputs
+pub fn app_layout_with_groups_and_terminal(
+    w: f64,
+    h: f64,
+    split_x: f64,
     _show_commit: bool,
     show_term: bool,
     group_divider: f64,
     group_count: usize,
+    term_height: Option<f64>,
 ) -> AppLayout {
     let w = w.max(0.0);
     let h = h.max(0.0);
@@ -158,11 +197,6 @@ pub fn app_layout_with_groups(
         0.0
     };
     let explorer_root_h = if show_explorer { EXPLORER_ROOT_H } else { 0.0 };
-    let explorer_footer_h = if show_explorer {
-        EXPLORER_FOOTER_H
-    } else {
-        0.0
-    };
     let explorer_header = Rect {
         x: explorer.x,
         y: explorer.y,
@@ -175,17 +209,11 @@ pub fn app_layout_with_groups(
         w: explorer.w,
         h: explorer_root_h,
     };
-    let explorer_footer = Rect {
-        x: explorer.x,
-        y: explorer.y + explorer.h - explorer_footer_h,
-        w: explorer.w,
-        h: explorer_footer_h,
-    };
     let tree_panel = Rect {
         x: explorer.x + pad,
         y: explorer_root.y + explorer_root.h,
         w: (explorer.w - 2.0 * pad).max(0.0),
-        h: (explorer_footer.y - explorer_root.y - explorer_root.h - pad).max(0.0),
+        h: (explorer.y + explorer.h - pad - explorer_root.y - explorer_root.h).max(0.0),
     };
     let scroll_track = Rect {
         x: tree_panel.x + (tree_panel.w - tree::TRACK_W).max(0.0),
@@ -205,12 +233,15 @@ pub fn app_layout_with_groups(
     };
     let editor_w = (w - pad - editor_x).max(0.0);
     let dock_h = if show_term {
-        if short || compact {
-            140.0_f64.min(work_h * 0.35)
-        } else {
-            TERM_DOCK_H.min(work_h * 0.40)
+        match term_height {
+            Some(height) => clamp_terminal_height(height, work_h, gap),
+            None => if short || compact {
+                140.0_f64.min(work_h * 0.35)
+            } else {
+                TERM_DOCK_H.min(work_h * 0.40)
+            }
+            .max(0.0),
         }
-        .max(0.0)
     } else {
         0.0
     };
@@ -322,6 +353,16 @@ pub fn app_layout_with_groups(
         w: editor_card.w,
         h: dock_h,
     };
+    let terminal_resize = if dock_h > 0.0 {
+        Rect {
+            x: terminal.x,
+            y: editor_card.y + editor_card.h,
+            w: terminal.w,
+            h: gap,
+        }
+    } else {
+        empty
+    };
     let terminal_toolbar_h = if short { 30.0 } else { EDITOR_TAB_H };
     let terminal_toolbar = Rect {
         x: terminal.x,
@@ -360,7 +401,6 @@ pub fn app_layout_with_groups(
         explorer_card: explorer,
         explorer_header,
         explorer_root,
-        explorer_footer,
         tree_panel,
         scroll_track,
         split_area: Rect {
@@ -378,6 +418,7 @@ pub fn app_layout_with_groups(
         editor_group_count,
         editor_group_split,
         term_dock: terminal,
+        terminal_resize,
         terminal_toolbar,
         term_grid,
         terminal_sessions,
@@ -453,6 +494,20 @@ pub fn source_control_panel_for_group(layout: &AppLayout, active_group: usize) -
             .map(|group| group.body)
             .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
     }
+}
+
+/// Floating drag handle centered on the editor/terminal divider.
+pub fn terminal_resize_handle(layout: &AppLayout) -> Option<Rect> {
+    let area = layout.terminal_resize;
+    if area.w <= 0.0 || area.h <= 0.0 {
+        return None;
+    }
+    Some(Rect {
+        x: area.x + (area.w - TERM_HANDLE_W) / 2.0,
+        y: area.y + (area.h - TERM_HANDLE_H) / 2.0,
+        w: TERM_HANDLE_W,
+        h: TERM_HANDLE_H,
+    })
 }
 
 /// Three-dot resize handle centered on the visible split divider.
@@ -1039,6 +1094,7 @@ pub fn draw_frame(
 
     // Terminal card: static panel chrome plus the existing functional PTY,
     // new/close actions and vertical session switcher.
+    chrome::draw_terminal_resize_handle(f, layout);
     let (open_terminal, close_terminal) = chrome::draw_terminal_chrome(f, layout);
     effects.open_terminal = open_terminal;
     if !f.terms.as_ref().is_some_and(|t| t.is_open()) {

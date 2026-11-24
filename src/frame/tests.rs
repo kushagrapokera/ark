@@ -55,7 +55,7 @@ fn app_layout_matches_card_design() {
             x: 72.0,
             y: 108.0,
             w: 224.0,
-            h: 564.0
+            h: 620.0
         }
     );
     assert_eq!(
@@ -64,7 +64,7 @@ fn app_layout_matches_card_design() {
             x: 288.0,
             y: 108.0,
             w: 8.0,
-            h: 564.0
+            h: 620.0
         }
     );
     assert_eq!(
@@ -1088,7 +1088,7 @@ fn source_control_panel_uses_the_sidebar_or_compact_editor_body() {
             x: 72.0,
             y: 108.0,
             w: 224.0,
-            h: 564.0
+            h: 620.0
         }
     );
     assert_eq!(
@@ -1158,6 +1158,55 @@ fn app_layout_terminal_card_reserves_the_bottom() {
     assert!((tiny.term_dock.h - 81.2).abs() < 1e-9, "35% of 232px");
     assert!((tiny.viewer_pane.h - 90.8).abs() < 1e-9);
     assert!((tiny.term_grid.h - 47.2).abs() < 1e-9);
+}
+
+#[test]
+fn terminal_height_is_adjustable_and_clamped() {
+    let resized = app_layout_with_groups_and_terminal(
+        1024.0,
+        768.0,
+        304.0,
+        true,
+        true,
+        0.5,
+        1,
+        Some(320.0),
+    );
+    assert_eq!(resized.term_dock.h, 320.0);
+    assert_eq!(resized.term_dock.y, 416.0);
+    assert_eq!(resized.viewer_pane.h, 296.0);
+    assert_eq!(
+        resized.terminal_resize,
+        Rect {
+            x: 312.0,
+            y: 408.0,
+            w: 704.0,
+            h: 8.0,
+        }
+    );
+    let handle = terminal_resize_handle(&resized).expect("terminal handle");
+    assert_eq!(handle.x + handle.w / 2.0, resized.term_dock.x + resized.term_dock.w / 2.0);
+    assert_eq!(handle.y + handle.h / 2.0, resized.terminal_resize.y + 4.0);
+
+    assert_eq!(clamp_terminal_height(10.0, 692.0, 8.0), 120.0);
+    assert_eq!(clamp_terminal_height(10_000.0, 692.0, 8.0), 524.0);
+    assert_eq!(app_layout_with_commit(1024.0, 768.0, 304.0, true, true).term_dock.h, 224.0);
+}
+
+#[test]
+fn explorer_footer_is_removed_and_tree_uses_the_space() {
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    assert_eq!(
+        layout.tree_panel.y + layout.tree_panel.h + 8.0,
+        layout.workbench.y + layout.workbench.h
+    );
+}
+
+#[test]
+fn terminal_toolbar_only_keeps_the_terminal_tab() {
+    for width in [300.0, 400.0, 800.0] {
+        assert_eq!(chrome::terminal_tab_labels(width), &["TERMINAL"]);
+    }
 }
 
 #[test]

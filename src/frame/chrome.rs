@@ -451,43 +451,6 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
         }
     }
 
-    let footer = layout.explorer_footer;
-    f.canvas.fill_rect(
-        footer.x + 1.0,
-        footer.y,
-        footer.w - 2.0,
-        footer.h - 1.0,
-        f.theme.bg_elevated,
-        f.scale,
-    );
-    f.canvas.fill_rect(
-        footer.x + 1.0,
-        footer.y,
-        footer.w - 2.0,
-        1.0,
-        f.theme.border_subtle,
-        f.scale,
-    );
-    for (index, label) in ["OUTLINE", "TIMELINE"].into_iter().enumerate() {
-        let y = footer.y + 6.0 + index as f64 * 28.0;
-        icon(
-            f,
-            Icon::ChevronRight,
-            footer.x + 14.0,
-            y + 8.0,
-            11.0,
-            f.theme.text_muted,
-        );
-        text(
-            f,
-            label,
-            footer.x + 28.0,
-            y + 2.0,
-            10.0,
-            f.theme.text_muted,
-            true,
-        );
-    }
     effects
 }
 
@@ -823,6 +786,47 @@ pub(super) fn draw_minimap_rect(f: &mut Frame, map: Rect) {
     }
 }
 
+pub(super) fn draw_terminal_resize_handle(f: &mut Frame, layout: &AppLayout) {
+    let Some(rect) = super::terminal_resize_handle(layout) else {
+        return;
+    };
+    let hovered = layout.terminal_resize.contains(f.pointer.x, f.pointer.y);
+    f.canvas.fill_round_rect(
+        rect.x,
+        rect.y,
+        rect.w,
+        rect.h,
+        rect.h / 2.0,
+        f.theme.border_subtle,
+        f.scale,
+    );
+    f.canvas.fill_round_rect(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        rect.w - 2.0,
+        rect.h - 2.0,
+        (rect.h - 2.0) / 2.0,
+        f.theme.surface_chrome,
+        f.scale,
+    );
+    icon(
+        f,
+        Icon::DragHandle,
+        rect.x + rect.w / 2.0,
+        rect.y + rect.h / 2.0,
+        10.0,
+        if hovered {
+            f.theme.accent
+        } else {
+            f.theme.text_muted
+        },
+    );
+}
+
+pub(super) fn terminal_tab_labels(_width: f64) -> &'static [&'static str] {
+    &["TERMINAL"]
+}
+
 pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> (bool, bool) {
     let pane = layout.term_dock;
     if pane.h <= 0.0 {
@@ -837,43 +841,26 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> (bool, 
         f.theme.bg_elevated,
         f.scale,
     );
-    let tabs: &[&str] = if pane.w >= 560.0 {
-        &["PROBLEMS", "OUTPUT", "TERMINAL", "PORTS", "DEBUG CONSOLE"]
-    } else if pane.w >= 360.0 {
-        &["PROBLEMS", "OUTPUT", "TERMINAL"]
-    } else {
-        &["TERMINAL"]
-    };
     let mut x = toolbar.x + 12.0;
-    for label in tabs {
-        let w = match *label {
-            "DEBUG CONSOLE" => 116.0,
-            "PROBLEMS" | "OUTPUT" => 70.0,
-            _ => 62.0,
-        };
+    for label in terminal_tab_labels(pane.w) {
+        let w = 62.0;
         text(
             f,
             label,
             x,
             toolbar.y + (toolbar.h - 9.0) / 2.0,
             9.0,
-            if *label == "TERMINAL" {
-                f.theme.fg
-            } else {
-                f.theme.text_muted
-            },
+            f.theme.fg,
             true,
         );
-        if *label == "TERMINAL" {
-            f.canvas.fill_rect(
-                x,
-                toolbar.y + toolbar.h - 2.0,
-                w - 12.0,
-                2.0,
-                f.theme.accent,
-                f.scale,
-            );
-        }
+        f.canvas.fill_rect(
+            x,
+            toolbar.y + toolbar.h - 2.0,
+            w - 12.0,
+            2.0,
+            f.theme.accent,
+            f.scale,
+        );
         x += w;
     }
 

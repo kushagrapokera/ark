@@ -116,7 +116,7 @@ fn wheel_scroll_marks_panel_damage_only() {
         fs::File::create(d.path().join(format!("f{i:02}.txt"))).expect("create file");
     }
     let mut tree = FileTree::new(d.path());
-    let layout = frame::app_layout(1024.0, 768.0, 304.0); // tree viewport 564px
+    let layout = frame::app_layout(1024.0, 768.0, 304.0); // tree viewport 620px
     let canvas = Canvas::new(1024, 768);
     let mut damage = Damage::new(64);
     damage.take(canvas.width(), canvas.height()); // consume the initial full wave
@@ -138,7 +138,11 @@ fn wheel_scroll_marks_panel_damage_only() {
     while route_wheel_scroll(&mut tree, WHEEL_PX, &layout, 1.0, &canvas, &mut damage) {
         let _ = damage.take(canvas.width(), canvas.height());
     }
-    assert_eq!(tree.offset, 316.0, "max offset = content (40×22) − viewport (564)");
+    assert_eq!(
+        tree.offset,
+        40.0 * 22.0 - layout.tree_panel.h,
+        "max offset = content − viewport"
+    );
 
     // One notch past the clamp moves nothing → no damage at all.
     assert!(!route_wheel_scroll(&mut tree, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
@@ -147,7 +151,7 @@ fn wheel_scroll_marks_panel_damage_only() {
         "clamped: nothing pending"
     );
 
-    // Scale 2 doubles the rect and clamps to the canvas (564×2 extends past
+    // Scale 2 doubles the rect and clamps to the canvas (620×2 extends past
     // 768), never yielding out-of-bounds damage.
     assert_eq!(
         damage_rect(layout.tree_panel, 2.0, 1024, 768),
@@ -665,6 +669,23 @@ fn app_explorer_refresh_and_collapse_actions_update_the_tree() {
     fs::write(d.path().join("fresh.txt"), "fresh\n").expect("write fresh");
     app.refresh_explorer();
     assert!(app.tree.visible_rows().iter().any(|row| row.name == "fresh.txt"));
+}
+
+#[test]
+fn app_terminal_divider_drag_resizes_and_clamps_the_dock() {
+    let d = temp_dir("app-terminal-resize");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, true, true);
+    app.pointer.x = layout.term_dock.x + 40.0;
+    app.pointer.y = layout.term_dock.y;
+
+    assert!(app.begin_terminal_resize(&layout));
+    app.resize_terminal_to(layout.term_dock.y - 50.0, &layout);
+    assert_eq!(app.term_height, Some(274.0));
+    app.resize_terminal_to(10_000.0, &layout);
+    assert_eq!(app.term_height, Some(120.0));
+    app.resize_terminal_to(-1_000.0, &layout);
+    assert_eq!(app.term_height, Some(524.0));
 }
 
 #[test]

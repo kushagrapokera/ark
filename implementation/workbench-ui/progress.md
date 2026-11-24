@@ -275,6 +275,28 @@ five open viewers, two shells + fake agent tab):
   and `tests/nested/child` from inline fields while preserving visible sibling
   rows, collapsed expanded directories, and refreshed an external file.
 
+## Terminal dock cleanup and resizing
+
+- Added a centered drag divider between editor and terminal. The default
+  responsive height is unchanged until the user drags; selected heights are
+  clamped to keep at least 160 px of editor card space (120 px minimum, smaller
+  proportionally in tiny windows).
+- Terminal PTY grids resize with the dock, including shells created after a
+  height change. The divider highlights on hover and retains only one height
+  plus one drag latch—no layout cache.
+- Removed Problems, Output, Ports, and Debug Console; the toolbar now contains
+  only the functional Terminal tab and existing terminal actions.
+- Removed Outline and Timeline and reclaimed their 56 px footer for the file
+  tree (1024×768 tree viewport: 564 → 620 px).
+- Verification: `cargo test` **304 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live smoke grew the terminal 224 → 302 px,
+  shrank it 302 → 162 px, and confirmed shell-grid resizing.
+- Five-viewer/two-shell stress at 1440×900 measured **65,232 KiB RSS /
+  57,183 KiB PSS** at the default height and **68,568 KiB RSS / 60,519 KiB PSS**
+  with the terminal dragged to its 656 px maximum—below the 100 MiB budget.
+  `smem` and `/usr/bin/time` are unavailable, so `/proc` status and
+  `smaps_rollup` supplied the measurements.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal
