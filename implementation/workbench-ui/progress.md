@@ -257,16 +257,26 @@ five open viewers, two shells + fake agent tab):
   160-char error cap), support Enter/Create and Escape/Cancel, and create
   root-contained, no-overwrite entries through a dedicated Rust filesystem
   boundary.
+- The prompt targets the selected folder (or a selected file's parent; project
+  root when nothing is selected), opens directly below that row with matching
+  nesting indentation, and expands the target after creation so the new entry is
+  visible. Symlink rows are treated as files; the filesystem boundary also
+  rejects symlinked or non-directory parents.
 - New code files open read-only; newly created whitelisted config files open in
   the enforced config editor. Existing symlinks are never followed or replaced.
 - Refresh re-lists the tree. Collapse All uses in-place `retain` to free every
   expanded listing without allocating.
 - The prompt is the only new retained state and exists only while open. Stress
-  with five viewers, two shells, and a 128-char prompt measured **0 KiB RSS
-  change** (65,612 KiB before/during/after; PSS 57,634/57,633/57,634 KiB).
-- Verification: `cargo test` **285 passed, 0 failed, 3 ignored**, 5/5 CLI;
-  clippy and release build clean. Live smoke created `notes.txt` and
-  `new-folder`, collapsed expanded directories, and refreshed an external file.
+  with five viewers, two shells, and a contextual 128-char prompt measured
+  **65,476 → 65,600 KiB RSS** and **57,525 → 57,571 KiB PSS** while opening the
+  prompt (+124/+46 KiB); after cancel RSS stayed at 65,600 KiB and PSS at
+  57,571 KiB, still far below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  unavailable in this environment, so measurements use `/proc` status and
+  `smaps_rollup`.
+- Verification: `cargo test` **295 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live smoke created `src/inside.txt` and
+  `src/nested/child` from their selected folder rows, collapsed expanded
+  directories, and refreshed an external file.
 
 ## Notes
 

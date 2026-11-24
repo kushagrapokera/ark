@@ -1203,7 +1203,7 @@ pub fn draw_frame(
     f.group_split = group_split;
     f.group_split_drag = group_split_drag;
 
-    let (new_item_submit, new_item_cancel) = chrome::draw_new_item_prompt(f, layout);
+    let (new_item_submit, new_item_cancel) = chrome::draw_new_item_prompt(f, layout, tree);
     effects.new_item_submit = new_item_submit;
     effects.new_item_cancel = new_item_cancel;
 

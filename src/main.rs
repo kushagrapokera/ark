@@ -21,6 +21,7 @@ use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    keyboard::{Key, NamedKey},
     window::{Window, WindowId},
 };
 
@@ -404,13 +405,54 @@ impl App {
             .or_else(|| self.config_error_path.clone())
     }
 
+    fn new_item_parent(&self) -> PathBuf {
+        let Some(selected) = self.tree.selected() else {
+            return self.root.clone();
+        };
+        // Match the tree's no-symlink-follow rule: a symlink is a file row,
+        // even when its target happens to be a directory.
+        let is_dir = match std::fs::symlink_metadata(selected) {
+            Ok(meta) => meta.is_dir(),
+            Err(e) => {
+                log::debug!("selected entry unavailable at {}: {e}", selected.display());
+                false
+            }
+        };
+        if is_dir {
+            selected.to_path_buf()
+        } else {
+            selected.parent().unwrap_or(&self.root).to_path_buf()
+        }
+    }
+
     fn request_new_item(&mut self, kind: NewItemKind) {
-        self.new_item = Some(NewItemPrompt::new(kind));
+        self.new_item = Some(NewItemPrompt::new(kind, self.new_item_parent()));
         self.activity = frame::ActivityPanel::Explorer;
         self.term_focused = false;
         self.commit.message.focused = false;
         self.damage.mark_full();
         self.request_redraw();
+    }
+
+    fn handle_new_item_key(&mut self, key: &Key, text: Option<&str>) -> bool {
+        if self.new_item.is_none() {
+            return false;
+        }
+        match key {
+            Key::Named(NamedKey::Enter) => {
+                self.submit_new_item();
+                true
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.cancel_new_item();
+                true
+            }
+            _ => self
+                .new_item
+                .as_mut()
+                .expect("prompt checked above")
+                .handle_key(key, text),
+        }
     }
 
     fn cancel_new_item(&mut self) {
@@ -425,16 +467,20 @@ impl App {
             return;
         };
         let kind = prompt.kind;
+        let parent = prompt.parent.clone();
         let name = prompt.input.text.trim().to_owned();
         let result = match kind {
-            NewItemKind::File => fs_create::create_file(&self.root, &name),
-            NewItemKind::Folder => fs_create::create_dir(&self.root, &name),
+            NewItemKind::File => fs_create::create_file_in(&self.root, &parent, &name),
+            NewItemKind::Folder => fs_create::create_dir_in(&self.root, &parent, &name),
         };
         match result {
             Ok(path) => {
-                info!("created {} {}", kind.title(), path.display());
+                info!("created {} {} in {}", kind.title(), path.display(), parent.display());
                 self.new_item = None;
                 self.tree.refresh();
+                if parent != self.root && !self.tree.is_expanded(&parent) {
+                    self.tree.toggle(&parent, true);
+                }
                 self.tree.select(&path);
                 if kind == NewItemKind::File
                     && config::is_editable(&self.root, &path, &self.settings.editable)
@@ -1954,18 +2000,11 @@ impl ApplicationHandler<Wake> for App {
                 if event.state != ElementState::Pressed {
                     return;
                 }
-                if let Some(prompt) = &mut self.new_item {
-                    let handled = match &event.logical_key {
-                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
-                            self.submit_new_item();
-                            true
-                        }
-                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
-                            self.cancel_new_item();
-                            true
-                        }
-                        key => prompt.handle_key(key, event.text.as_deref()),
-                    };
+                if self.new_item.is_some() {
+                    let handled = self.handle_new_item_key(
+                        &event.logical_key,
+                        event.text.as_deref(),
+                    );
                     if handled {
                         self.damage.mark_full();
                         self.request_redraw();

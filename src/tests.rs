@@ -484,6 +484,107 @@ fn sidebar_handle_activity_pulse_decays_to_idle() {
 }
 
 #[test]
+fn app_new_item_uses_the_selected_folder_as_its_target() {
+    let d = temp_dir("app-explorer-selected-parent");
+    let parent = d.path().join("src");
+    fs::create_dir(&parent).expect("create src");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.tree.select(&parent);
+
+    app.request_new_item(NewItemKind::File);
+    assert_eq!(
+        app.new_item.as_ref().expect("prompt").parent,
+        parent
+    );
+    let prompt = app.new_item.as_mut().expect("prompt");
+    prompt.input.text = "notes.txt".into();
+    prompt.input.cursor = prompt.input.text.len();
+    app.submit_new_item();
+
+    assert!(parent.join("notes.txt").is_file());
+    assert!(!d.path().join("notes.txt").exists());
+    assert!(app.tree.is_expanded(&parent), "target folder expands to reveal the new file");
+}
+
+#[test]
+fn app_new_item_uses_the_selected_files_parent() {
+    let d = temp_dir("app-explorer-selected-file-parent");
+    let parent = d.path().join("src");
+    fs::create_dir(&parent).expect("create src");
+    let file = parent.join("main.rs");
+    fs::write(&file, "fn main() {}\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.tree.select(&file);
+
+    app.request_new_item(NewItemKind::Folder);
+    assert_eq!(
+        app.new_item.as_ref().expect("prompt").parent,
+        parent
+    );
+}
+
+#[test]
+fn app_new_item_does_not_treat_a_selected_symlink_as_a_folder() {
+    use std::os::unix::fs::symlink;
+
+    let d = temp_dir("app-explorer-selected-symlink");
+    let target = d.path().join("src");
+    fs::create_dir(&target).expect("create src");
+    let link = d.path().join("link");
+    symlink(&target, &link).expect("symlink");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.tree.select(&link);
+
+    app.request_new_item(NewItemKind::File);
+    assert_eq!(
+        app.new_item.as_ref().expect("prompt").parent,
+        d.path()
+    );
+    let prompt = app.new_item.as_mut().expect("prompt");
+    prompt.input.text = "notes.txt".into();
+    prompt.input.cursor = prompt.input.text.len();
+    app.submit_new_item();
+
+    assert!(d.path().join("notes.txt").is_file());
+    assert!(!target.join("notes.txt").exists());
+}
+
+#[test]
+fn app_prompt_keyboard_edits_and_submits_in_the_selected_folder() {
+    use winit::keyboard::{Key, NamedKey};
+
+    let d = temp_dir("app-explorer-prompt-keys");
+    let parent = d.path().join("src");
+    fs::create_dir(&parent).expect("create src");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.tree.select(&parent);
+    app.request_new_item(NewItemKind::File);
+
+    assert!(app.handle_new_item_key(
+        &Key::Character("notes.txt".into()),
+        Some("notes.txt")
+    ));
+    assert!(app.handle_new_item_key(&Key::Named(NamedKey::Home), None));
+    assert_eq!(app.new_item.as_ref().expect("prompt").input.cursor, 0);
+    assert!(!app.handle_new_item_key(&Key::Named(NamedKey::Backspace), None));
+    assert_eq!(
+        app.new_item.as_ref().expect("prompt").input.text,
+        "notes.txt"
+    );
+    assert!(app.handle_new_item_key(&Key::Named(NamedKey::End), None));
+    assert!(app.handle_new_item_key(&Key::Named(NamedKey::Backspace), None));
+    assert!(app.handle_new_item_key(
+        &Key::Character("t".into()),
+        Some("t")
+    ));
+    assert!(app.handle_new_item_key(&Key::Named(NamedKey::Enter), None));
+
+    assert!(parent.join("notes.txt").is_file());
+    assert!(!d.path().join("notes.txt").exists());
+    assert!(app.new_item.is_none());
+}
+
+#[test]
 fn app_explorer_create_actions_create_root_contained_entries() {
     let d = temp_dir("app-explorer-create");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);

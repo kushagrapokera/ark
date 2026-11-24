@@ -2,13 +2,14 @@
 //! are drawn from static labels/fixed arrays; no chrome state or cache is
 //! retained between frames.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cosmic_text::Weight;
 
 use crate::icons::{self, Icon};
 use crate::render::ColorRgb;
 use crate::text::TextStyle;
+use crate::tree::{FileTree, INDENT_PX, ROW_H};
 use crate::ui::{draw_button, Press, Rect};
 
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, CARD_RADIUS};
@@ -490,27 +491,47 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
     effects
 }
 
-struct NewItemLayout {
-    panel: Rect,
-    input: Rect,
-    create: Rect,
-    cancel: Rect,
+pub(super) struct NewItemLayout {
+    pub(super) panel: Rect,
+    pub(super) input: Rect,
+    pub(super) create: Rect,
+    pub(super) cancel: Rect,
 }
 
-fn new_item_layout(layout: &AppLayout) -> Option<NewItemLayout> {
+pub(super) fn new_item_layout(
+    layout: &AppLayout,
+    tree: &FileTree,
+    parent: &Path,
+) -> Option<NewItemLayout> {
     let explorer = layout.explorer_card;
-    if explorer.w <= 0.0 || explorer.h <= 0.0 {
+    if explorer.w <= 0.0 || explorer.h < 132.0 {
         return None;
     }
-    let panel = Rect {
-        x: explorer.x + 8.0,
-        y: layout.explorer_root.y + layout.explorer_root.h + 8.0,
-        w: (explorer.w - 16.0).max(0.0),
-        h: 116.0,
+    let (anchor_y, depth) = if parent == tree.root {
+        (layout.explorer_root.y + layout.explorer_root.h + 8.0, 0)
+    } else if let Some((index, row)) = tree
+        .visible_rows()
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.path == parent)
+    {
+        (
+            layout.tree_panel.y + index as f64 * ROW_H - tree.offset + ROW_H,
+            row.depth,
+        )
+    } else {
+        (layout.explorer_root.y + layout.explorer_root.h + 8.0, 0)
     };
-    if panel.y + panel.h > explorer.y + explorer.h - 8.0 {
-        return None;
-    }
+    let panel_h = 116.0;
+    let min_y = explorer.y + 8.0;
+    let max_y = explorer.y + explorer.h - 8.0 - panel_h;
+    let panel_x = explorer.x + 8.0 + (depth as f64 * INDENT_PX).min(48.0);
+    let panel = Rect {
+        x: panel_x,
+        y: anchor_y.clamp(min_y, max_y),
+        w: (explorer.x + explorer.w - 8.0 - panel_x).max(0.0),
+        h: panel_h,
+    };
     let inner_w = (panel.w - 16.0).max(0.0);
     let button_w = ((inner_w - 8.0) / 2.0).max(0.0);
     Some(NewItemLayout {
@@ -536,11 +557,15 @@ fn new_item_layout(layout: &AppLayout) -> Option<NewItemLayout> {
     })
 }
 
-pub(super) fn draw_new_item_prompt(f: &mut Frame, layout: &AppLayout) -> (bool, bool) {
+pub(super) fn draw_new_item_prompt(
+    f: &mut Frame,
+    layout: &AppLayout,
+    tree: &FileTree,
+) -> (bool, bool) {
     let Some(prompt) = f.new_item.take() else {
         return (false, false);
     };
-    let Some(l) = new_item_layout(layout) else {
+    let Some(l) = new_item_layout(layout, tree, &prompt.parent) else {
         f.new_item = Some(prompt);
         return (false, false);
     };

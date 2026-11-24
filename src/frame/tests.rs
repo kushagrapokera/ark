@@ -305,11 +305,28 @@ fn compact_terminal_plus_button_opens_the_first_shell() {
 }
 
 #[test]
+fn new_item_prompt_anchors_to_the_selected_folder_row() {
+    let (_d, mut tree) = scene_fixture("new-item-anchor");
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let parent = tree.root.join("A");
+    tree.select(&parent);
+    let anchored = chrome::new_item_layout(&layout, &tree, &parent).expect("prompt layout");
+    assert_eq!(anchored.panel.y, 130.0, "prompt opens directly below the folder row");
+
+    let nested = parent.join("C");
+    assert!(tree.toggle(&parent, true));
+    tree.select(&nested);
+    let nested_layout = chrome::new_item_layout(&layout, &tree, &nested).expect("nested layout");
+    assert_eq!(nested_layout.panel.y, 152.0);
+    assert!(nested_layout.panel.x > anchored.panel.x, "nested prompt follows the row indent");
+}
+
+#[test]
 fn new_item_prompt_reports_create_and_cancel() {
     let (_d, mut tree) = scene_fixture("new-item-prompt");
     let theme = frame_theme();
     let layout = app_layout(1024.0, 768.0, 304.0);
-    let mut prompt = NewItemPrompt::new(NewItemKind::File);
+    let mut prompt = NewItemPrompt::new(NewItemKind::File, tree.root.clone());
     prompt.input.text = "notes.txt".into();
     prompt.input.cursor = prompt.input.text.len();
     let mut canvas = Canvas::new(1024, 768);

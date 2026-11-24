@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::ui::{TextInput, TextInputKey};
 use winit::keyboard::{Key, NamedKey};
 
@@ -28,14 +30,17 @@ impl NewItemKind {
 #[derive(Debug)]
 pub struct NewItemPrompt {
     pub kind: NewItemKind,
+    /// Directory that will receive the new entry.
+    pub parent: PathBuf,
     pub input: TextInput,
     pub error: Option<String>,
 }
 
 impl NewItemPrompt {
-    pub fn new(kind: NewItemKind) -> Self {
+    pub fn new(kind: NewItemKind, parent: PathBuf) -> Self {
         Self {
             kind,
+            parent,
             input: TextInput {
                 focused: true,
                 ..TextInput::default()
@@ -78,19 +83,26 @@ mod tests {
 
     #[test]
     fn prompts_start_empty_with_a_placeholder() {
-        let file = NewItemPrompt::new(NewItemKind::File);
+        let file = NewItemPrompt::new(NewItemKind::File, PathBuf::from("/repo"));
         assert!(file.input.text.is_empty());
         assert_eq!(file.input.cursor, 0);
         assert!(file.input.focused);
         assert_eq!(file.kind.placeholder(), "untitled.txt");
-        let folder = NewItemPrompt::new(NewItemKind::Folder);
+        let folder = NewItemPrompt::new(NewItemKind::Folder, PathBuf::from("/repo"));
         assert_eq!(folder.kind.placeholder(), "New Folder");
+    }
+
+    #[test]
+    fn prompt_remembers_its_target_folder() {
+        let parent = std::path::PathBuf::from("/repo/src");
+        let prompt = NewItemPrompt::new(NewItemKind::File, parent.clone());
+        assert_eq!(prompt.parent, parent);
     }
 
     #[test]
     fn prompt_key_editing_is_bounded_and_clears_errors() {
         use winit::keyboard::{Key, NamedKey};
-        let mut prompt = NewItemPrompt::new(NewItemKind::File);
+        let mut prompt = NewItemPrompt::new(NewItemKind::File, PathBuf::from("/repo"));
         prompt.input.text.clear();
         prompt.input.cursor = 0;
         prompt.set_error("old error");
@@ -104,7 +116,7 @@ mod tests {
 
     #[test]
     fn prompt_errors_are_bounded() {
-        let mut prompt = NewItemPrompt::new(NewItemKind::File);
+        let mut prompt = NewItemPrompt::new(NewItemKind::File, PathBuf::from("/repo"));
         prompt.set_error(&"x".repeat(1000));
         assert_eq!(prompt.error.as_deref(), Some("x".repeat(160).as_str()));
     }
