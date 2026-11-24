@@ -9,6 +9,7 @@
 //! - `visible_rows` BORROWS the cached listings — the per-frame
 //!   `Vec<RowRef>` is bounded by the visible node count, never by content.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -434,16 +435,25 @@ pub fn draw_tree_panel(
         // Baseline centers the line in the row; the metrics term is already
         // physical and must NOT be scaled again (the M2 fix-round-2 lesson).
         let baseline = (row_y + ROW_H / 2.0) * scale + f64::from(m.ascent - m.descent) / 2.0;
-        text.draw_line(
-            canvas,
-            row.name,
-            ((panel.x + indent + 20.0) * scale) as f32,
-            baseline as f32,
-            TextStyle { color: theme.fg, font_size, weight: Weight::NORMAL },
-        );
+        let badge = git.and_then(|g| g.badge_for(row.path));
+        let text_x = panel.x + indent + 20.0;
+        let text_right = panel.x + panel.w - TRACK_W - 4.0
+            - if badge.is_some() { BADGE_W + 4.0 } else { 0.0 };
+        let advance = f64::from(m.advance) / scale;
+        let max_chars = ((text_right - text_x).max(0.0) / advance).floor() as usize;
+        let display = elide_name(row.name, max_chars);
+        if !display.is_empty() {
+            text.draw_line(
+                canvas,
+                &display,
+                (text_x * scale) as f32,
+                baseline as f32,
+                TextStyle { color: theme.fg, font_size, weight: Weight::NORMAL },
+            );
+        }
 
         // Git badge (M/A/D/U letter) at the row's right edge.
-        if let Some(b) = git.and_then(|g| g.badge_for(row.path)) {
+        if let Some(b) = badge {
             let (letter, color) = badge_glyph(b, theme);
             let badge_x = panel.x + panel.w - TRACK_W - BADGE_W;
             text.draw_line(
@@ -455,6 +465,22 @@ pub fn draw_tree_panel(
             );
         }
     }
+}
+
+/// Char-boundary-safe row-label truncation. Short names borrow the cached
+/// listing directly; only clipped labels allocate for the current frame.
+fn elide_name(name: &str, max_chars: usize) -> Cow<'_, str> {
+    let count = name.chars().count();
+    if count <= max_chars {
+        return Cow::Borrowed(name);
+    }
+    if max_chars == 0 {
+        return Cow::Borrowed("");
+    }
+    let mut out = String::with_capacity(max_chars);
+    out.extend(name.chars().take(max_chars - 1));
+    out.push('…');
+    Cow::Owned(out)
 }
 
 /// Badge letter + color per kind (shared with the M8 commit panel).

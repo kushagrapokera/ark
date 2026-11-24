@@ -487,7 +487,7 @@ pub(super) fn draw_editor_actions(f: &mut Frame, layout: &AppLayout) {
         f.theme.bg_elevated,
         f.scale,
     );
-    let actions = [Icon::Asterisk, Icon::Token, Icon::Split, Icon::More];
+    let actions = [Icon::Split, Icon::More];
     let count = editor_action_count(tabs.w);
     let first = tabs.x + tabs.w - 18.0 - (count - 1) as f64 * 18.0;
     for (index, glyph) in actions.into_iter().take(count).enumerate() {
@@ -497,11 +497,7 @@ pub(super) fn draw_editor_actions(f: &mut Frame, layout: &AppLayout) {
             first + index as f64 * 18.0,
             tabs.y + tabs.h / 2.0,
             14.0,
-            if index == 0 {
-                f.theme.syntax_string
-            } else {
-                f.theme.text_muted
-            },
+            f.theme.text_muted,
         );
     }
 }
@@ -959,7 +955,6 @@ pub(super) fn draw_status_bar(f: &mut Frame, layout: &AppLayout) {
 /// Width reserved for the editor actions that are visible at this width.
 pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
     let reserve = match editor_action_count(layout.editor_tabs.w) {
-        4 => 116.0,
         2 => 58.0,
         _ => 38.0,
     };
@@ -972,9 +967,7 @@ pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
 }
 
 fn editor_action_count(width: f64) -> usize {
-    if width >= 560.0 {
-        4
-    } else if width >= 320.0 {
+    if width >= 320.0 {
         2
     } else {
         1

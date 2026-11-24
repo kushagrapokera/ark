@@ -203,6 +203,30 @@ fn responsive_layout_prioritizes_editor_on_small_windows() {
 }
 
 #[test]
+fn editor_actions_omit_agent_launcher_icons() {
+    let (_d, mut tree) = scene_fixture("editor-agent-icons");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(&canvas, theme.bg_elevated, 932, 48, 970, 76),
+        0,
+        "Claude/Codex editor-action placeholders are gone"
+    );
+}
+
+#[test]
 fn compact_editor_tabs_stay_clear_of_actions() {
     let layout = app_layout_with_commit(480.0, 640.0, 304.0, false, true);
     let strip = chrome::tab_strip(&layout);
@@ -220,8 +244,8 @@ fn compact_editor_tabs_stay_clear_of_actions() {
     let full = app_layout(1024.0, 768.0, 304.0);
     assert_eq!(
         chrome::tab_strip(&full).w,
-        588.0,
-        "full layout keeps all actions"
+        646.0,
+        "full layout reserves only the two remaining actions"
     );
 }
 

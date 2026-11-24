@@ -41,7 +41,6 @@ pub enum Icon {
     Warning,
     Remote,
     Zoom,
-    Token,
     Asterisk,
     PanelLeft,
     PanelBottom,
@@ -373,17 +372,6 @@ pub fn draw(
             pb.line_to(cx, cy + 0.36 * s);
             pb.finish().expect("valid remote path")
         }
-        Icon::Token => {
-            let mut pb = PathBuilder::new();
-            pb.push_circle(cx, cy, 0.34 * s);
-            pb.move_to(cx - 0.16 * s, cy - 0.10 * s);
-            pb.line_to(cx - 0.04 * s, cy);
-            pb.line_to(cx - 0.16 * s, cy + 0.10 * s);
-            pb.move_to(cx + 0.04 * s, cy - 0.10 * s);
-            pb.line_to(cx + 0.16 * s, cy);
-            pb.line_to(cx + 0.04 * s, cy + 0.10 * s);
-            pb.finish().expect("valid token path")
-        }
         Icon::Asterisk => {
             let mut pb = PathBuilder::new();
             for index in 0..6 {
@@ -467,7 +455,6 @@ pub fn draw(
         | Icon::Warning
         | Icon::Remote
         | Icon::Zoom
-        | Icon::Token
         | Icon::Asterisk
         | Icon::PanelLeft
         | Icon::PanelBottom

@@ -228,6 +228,34 @@ fn wide_fixture(label: &str) -> (TempDir, FileTree) {
 }
 
 #[test]
+fn long_tree_names_stay_inside_the_panel() {
+    let d = temp_dir("long-tree-name");
+    let name = "a".repeat(120);
+    fs::File::create(d.path().join(&name)).expect("create long name");
+    let tree = FileTree::new(d.path());
+    let theme = panel_theme();
+    let panel = Rect { x: 10.0, y: 10.0, w: 200.0, h: 30.0 };
+    let mut canvas = Canvas::new(400, 40);
+    canvas.fill(theme.bg);
+    let mut text = TextSystem::new();
+    draw_tree_panel(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        panel,
+        &tree,
+        Pointer::default(),
+        None,
+    );
+    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 400, 40).expect("tree ink");
+    assert!(
+        bbox.2 < (panel.x + panel.w - TRACK_W) as u32,
+        "name ink must stop before the scrollbar track, got {bbox:?}"
+    );
+}
+
+#[test]
 fn viewport_only_rendering() {
     let (_d, mut tree) = wide_fixture("viewport");
     assert_eq!(tree.visible_count(), 100);

@@ -196,6 +196,10 @@ five open viewers, two shells + fake agent tab):
   Config retain their existing behavior.
 - Removed the Claude/Codex launcher placeholders beside the title-bar command
   center and their unused glyph definitions.
+- Removed the Claude/Codex editor-action placeholders at the right of the tab
+  strip; only Split and More remain.
+- Tree row names now use char-boundary-safe ellipsis clipping before the git
+  badge and scrollbar track, so long names cannot cross the sidebar boundary.
 
 ## Notes
 
