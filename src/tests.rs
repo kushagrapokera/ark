@@ -689,26 +689,16 @@ fn app_terminal_divider_drag_resizes_and_clamps_the_dock() {
 }
 
 #[test]
-fn app_layout_actions_toggle_visibility_and_reset() {
+fn app_layout_actions_toggle_explorer_and_terminal() {
     let d = temp_dir("app-layout-actions");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
     assert!(app.layout_visibility.explorer);
     assert!(app.layout_visibility.terminal);
-    assert!(app.layout_visibility.minimap);
 
     app.apply_layout_action(frame::LayoutAction::ToggleExplorer);
     app.apply_layout_action(frame::LayoutAction::ToggleTerminal);
-    app.apply_layout_action(frame::LayoutAction::ToggleMinimap);
     assert!(!app.layout_visibility.explorer);
     assert!(!app.layout_visibility.terminal);
-    assert!(!app.layout_visibility.minimap);
-
-    app.apply_layout_action(frame::LayoutAction::ResetLayout);
-    assert!(app.layout_visibility.explorer);
-    assert!(app.layout_visibility.terminal);
-    assert!(app.layout_visibility.minimap);
-    assert_eq!(app.split.position, 304.0);
-    assert!(app.term_height.is_none());
 }
 
 #[test]

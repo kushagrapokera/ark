@@ -355,7 +355,6 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
         scale: 1.0,
         activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
@@ -571,10 +570,8 @@ fn title_bar_has_no_update_or_search_field() {
         "the Update button is gone"
     );
     let actions = chrome::title_bar_actions(&layout);
-    assert!(actions.explorer.contains(916.0, 18.0));
-    assert!(actions.terminal.contains(940.0, 18.0));
-    assert!(actions.minimap.contains(964.0, 18.0));
-    assert!(actions.more.contains(992.0, 18.0));
+    assert!(actions.explorer.contains(968.0, 18.0));
+    assert!(actions.terminal.contains(992.0, 18.0));
 }
 
 #[test]
@@ -588,7 +585,6 @@ fn title_bar_layout_buttons_report_their_actions() {
     for (rect, expected) in [
         (actions.explorer, LayoutAction::ToggleExplorer),
         (actions.terminal, LayoutAction::ToggleTerminal),
-        (actions.minimap, LayoutAction::ToggleMinimap),
     ] {
         let effects = draw_static_frame(
             &mut canvas,
@@ -607,30 +603,13 @@ fn title_bar_layout_buttons_report_their_actions() {
         );
         assert_eq!(effects.layout_action, Some(expected));
     }
-    let effects = draw_static_frame(
-        &mut canvas,
-        &mut text,
-        &theme,
-        &mut tree,
-        &layout,
-        Pointer {
-            x: actions.more.x + actions.more.w / 2.0,
-            y: actions.more.y + actions.more.h / 2.0,
-            down: false,
-            click: true,
-        },
-        &[],
-        None,
-    );
-    assert!(effects.layout_menu_toggle);
 }
 
 #[test]
-fn layout_visibility_options_hide_cards_and_minimap() {
+fn layout_visibility_options_hide_cards() {
     let hidden = LayoutVisibility {
         explorer: false,
         terminal: false,
-        minimap: false,
     };
     let layout = app_layout_with_visibility(
         1024.0,
@@ -643,7 +622,7 @@ fn layout_visibility_options_hide_cards_and_minimap() {
     );
     assert_eq!(layout.explorer_card.w, 0.0);
     assert_eq!(layout.term_dock.h, 0.0);
-    assert_eq!(layout.minimap.w, 0.0);
+    assert_eq!(layout.minimap.w, 56.0, "minimap keeps responsive behavior");
     assert_eq!(layout.editor_card.x, layout.activity_bar.x + layout.activity_bar.w + 8.0);
     assert_eq!(layout.editor_card.h, layout.workbench.h);
 }
@@ -766,7 +745,6 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 scale: 1.0,
                 activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: Path::new("/repo"),
@@ -814,7 +792,6 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/repo"),
@@ -1009,7 +986,6 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         scale: 1.0,
         activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
@@ -1324,7 +1300,6 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
@@ -1388,7 +1363,6 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/"),
@@ -1470,7 +1444,6 @@ fn terminal_tabs_select_and_close_by_index() {
                 scale: 1.0,
                 activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: Path::new("/"),
@@ -1705,7 +1678,6 @@ fn draw_static_frame(
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: Path::new("/repo"),
@@ -1813,7 +1785,6 @@ fn frame_scene_renders_spec_surfaces() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -1925,7 +1896,6 @@ fn frame_viewer_pane_renders_over_placeholder() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2004,7 +1974,6 @@ fn frame_interactions_report_effects() {
         scale: 1.0,
         activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: std::path::Path::new("/"),
@@ -2176,7 +2145,6 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         scale: 1.0,
         activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: std::path::Path::new("/"),
@@ -2327,7 +2295,6 @@ fn viewer_flash_paints_accent_strip() {
                 scale: 1.0,
                 activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: std::path::Path::new("/"),
@@ -2423,7 +2390,6 @@ fn frame_config_pane_renders_and_reports_save_click() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2488,7 +2454,6 @@ fn frame_config_pane_renders_and_reports_save_click() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2552,7 +2517,6 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         scale: 1.0,
         activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
         animation_time: 0.0,
         title: "ark",
         root: Path::new("/repo"),
@@ -2694,7 +2658,6 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),
@@ -2758,7 +2721,6 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 scale: 1.0,
                 activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
                 animation_time: 0.0,
                 title: "ark",
                 root: std::path::Path::new("/"),
@@ -2934,7 +2896,6 @@ fn viewer_offset_self_heals_before_hit_testing() {
             scale: 1.0,
             activity_pulse: 0.0,
             layout_visibility: LayoutVisibility::default(),
-            layout_menu_open: false,
             animation_time: 0.0,
             title: "ark",
             root: std::path::Path::new("/"),

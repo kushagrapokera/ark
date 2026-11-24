@@ -324,20 +324,19 @@ five open viewers, two shells + fake agent tab):
 ## Title-bar cleanup and layout controls
 
 - Removed the Update button and the top-center search/command field.
-- Made the right-side layout controls functional: Explorer, Terminal, and
-  Minimap toggle independently, with accent state and responsive auto-hide.
-- The More menu exposes Explorer/Terminal/Minimap toggles, Split/Join Editor,
-  and Reset Layout. Reset restores panel visibility, sidebar width, editor
-  divider, and default terminal height.
+- Made the remaining right-side layout controls functional: Explorer and
+  Terminal toggle independently, with accent state and responsive auto-hide.
+- Removed the Minimap toggle and More/Layout Options menu, including their
+  retained state. The minimap itself keeps its existing responsive behavior;
+  Split remains available in the editor tab strip.
 - Opening a terminal while its dock is hidden reveals the dock; hiding Explorer
   cancels an active inline creation prompt. No layout cache is retained—only
-  three visibility booleans and one menu boolean.
+  two visibility booleans.
 - Verification: `cargo test` **311 passed, 0 failed, 3 ignored**, 5/5 CLI;
-  clippy and release build clean. Live smoke toggled every panel, opened the
-  More menu, split/joined the editor, reset layout, and confirmed Ctrl+T
-  reveals a hidden terminal.
-- Five-viewer/two-terminal stress at 1440×900 measured **65,392 KiB RSS /
-  56,484 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  clippy and release build clean. Live smoke confirmed only the Explorer and
+  Terminal controls remain at the top right and both toggle their panels.
+- Five-viewer/two-terminal stress at 1440×900 measured **65,608 KiB RSS /
+  57,503 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
   unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
 ## Notes

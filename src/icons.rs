@@ -46,7 +46,6 @@ pub enum Icon {
     Asterisk,
     PanelLeft,
     PanelBottom,
-    PanelRight,
     ChevronLeft,
 }
 
@@ -383,7 +382,7 @@ pub fn draw(
             }
             pb.finish().expect("valid asterisk path")
         }
-        Icon::PanelLeft | Icon::PanelBottom | Icon::PanelRight => {
+        Icon::PanelLeft | Icon::PanelBottom => {
             let mut pb = PathBuilder::new();
             pb.move_to(cx - 0.36 * s, cy - 0.28 * s);
             pb.line_to(cx + 0.36 * s, cy - 0.28 * s);
@@ -396,12 +395,6 @@ pub fn draw(
                     pb.line_to(cx - 0.12 * s, cy - 0.28 * s);
                     pb.line_to(cx - 0.12 * s, cy + 0.28 * s);
                     pb.line_to(cx - 0.36 * s, cy + 0.28 * s);
-                }
-                Icon::PanelRight => {
-                    pb.move_to(cx + 0.36 * s, cy - 0.28 * s);
-                    pb.line_to(cx + 0.12 * s, cy - 0.28 * s);
-                    pb.line_to(cx + 0.12 * s, cy + 0.28 * s);
-                    pb.line_to(cx + 0.36 * s, cy + 0.28 * s);
                 }
                 Icon::PanelBottom => {
                     pb.move_to(cx - 0.36 * s, cy + 0.28 * s);
@@ -476,8 +469,7 @@ pub fn draw(
         | Icon::Zoom
         | Icon::Asterisk
         | Icon::PanelLeft
-        | Icon::PanelBottom
-        | Icon::PanelRight => {
+        | Icon::PanelBottom => {
             pixmap.stroke_path(&path, &paint, &stroke, transform, None);
         }
         Icon::Folder | Icon::Dot => {

@@ -296,8 +296,6 @@ struct App {
     activity: frame::ActivityPanel,
     /// Title-bar panel visibility (responsive auto-hide still applies).
     layout_visibility: frame::LayoutVisibility,
-    /// Title-bar More menu visibility.
-    layout_menu_open: bool,
     /// Human-writable whitelist from `ark.toml` (defaults on absence).
     settings: config::Config,
     /// The open config editor (one at a time; M9).
@@ -389,7 +387,6 @@ impl App {
             pane: PaneMode::Viewer,
             activity: frame::ActivityPanel::Explorer,
             layout_visibility: frame::LayoutVisibility::default(),
-            layout_menu_open: false,
             settings,
             config_edits: None,
             config_error: None,
@@ -857,7 +854,6 @@ impl App {
                 scale: self.scale,
                 activity_pulse,
                 layout_visibility: self.layout_visibility,
-                layout_menu_open: self.layout_menu_open,
                 animation_time,
                 title: &self.title,
                 root: &self.root,
@@ -967,16 +963,6 @@ impl App {
         }
         if let Some(action) = effects.layout_action {
             self.apply_layout_action(action);
-        }
-        if effects.layout_menu_toggle {
-            self.layout_menu_open = !self.layout_menu_open;
-            self.damage.mark_full();
-            self.request_redraw();
-        }
-        if effects.layout_menu_dismiss && self.layout_menu_open {
-            self.layout_menu_open = false;
-            self.damage.mark_full();
-            self.request_redraw();
         }
         if effects.new_file {
             self.request_new_item(NewItemKind::File);
@@ -1286,7 +1272,6 @@ impl App {
     }
 
     fn apply_layout_action(&mut self, action: frame::LayoutAction) {
-        self.layout_menu_open = false;
         match action {
             frame::LayoutAction::ToggleExplorer => {
                 self.layout_visibility.explorer = !self.layout_visibility.explorer;
@@ -1299,24 +1284,6 @@ impl App {
                 if !self.layout_visibility.terminal {
                     self.terms.menu_open = false;
                     self.term_focused = false;
-                }
-            }
-            frame::LayoutAction::ToggleMinimap => {
-                self.layout_visibility.minimap = !self.layout_visibility.minimap;
-            }
-            frame::LayoutAction::ToggleSplit => {
-                self.toggle_editor_split();
-                return;
-            }
-            frame::LayoutAction::ResetLayout => {
-                self.layout_visibility = frame::LayoutVisibility::default();
-                self.split.position = 304.0;
-                self.editor_groups.divider = 0.5;
-                self.term_height = None;
-                self.term_drag = TerminalDrag::default();
-                if self.editor_groups.is_split() {
-                    self.toggle_editor_split();
-                    return;
                 }
             }
         }
@@ -2253,12 +2220,6 @@ impl ApplicationHandler<Wake> for App {
                         self.damage.mark_full();
                         self.request_redraw();
                     }
-                    return;
-                }
-                if self.layout_menu_open {
-                    self.layout_menu_open = false;
-                    self.damage.mark_full();
-                    self.request_redraw();
                     return;
                 }
                 if self.terms.menu_open {

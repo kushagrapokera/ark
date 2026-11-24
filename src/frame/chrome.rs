@@ -72,8 +72,6 @@ fn card(f: &mut Frame, rect: Rect) {
 pub(super) struct TitleBarActions {
     pub explorer: Rect,
     pub terminal: Rect,
-    pub minimap: Rect,
-    pub more: Rect,
 }
 
 impl Default for TitleBarActions {
@@ -82,8 +80,6 @@ impl Default for TitleBarActions {
         Self {
             explorer: empty,
             terminal: empty,
-            minimap: empty,
-            more: empty,
         }
     }
 }
@@ -91,52 +87,18 @@ impl Default for TitleBarActions {
 #[derive(Debug, Default)]
 pub(super) struct TitleBarEffects {
     pub action: Option<LayoutAction>,
-    pub menu_toggle: bool,
-    pub menu_dismiss: bool,
 }
 
 pub(super) fn title_bar_actions(layout: &AppLayout) -> TitleBarActions {
     let bar = layout.title_bar;
-    let y = 8.0;
-    let more = Rect {
-        x: bar.w - 42.0,
-        y,
-        w: 20.0,
-        h: 20.0,
-    };
     if bar.w < 720.0 {
-        return TitleBarActions { more, ..TitleBarActions::default() };
+        return TitleBarActions::default();
     }
+    let y = 8.0;
     TitleBarActions {
-        explorer: Rect { x: bar.w - 118.0, y, w: 20.0, h: 20.0 },
-        terminal: Rect { x: bar.w - 94.0, y, w: 20.0, h: 20.0 },
-        minimap: Rect { x: bar.w - 70.0, y, w: 20.0, h: 20.0 },
-        more,
+        explorer: Rect { x: bar.w - 66.0, y, w: 20.0, h: 20.0 },
+        terminal: Rect { x: bar.w - 42.0, y, w: 20.0, h: 20.0 },
     }
-}
-
-pub(super) fn layout_menu_layout(layout: &AppLayout) -> Option<(Rect, Vec<Rect>)> {
-    let actions = title_bar_actions(layout);
-    if actions.more.w <= 0.0 {
-        return None;
-    }
-    let width = 220.0_f64.min(layout.title_bar.w - 16.0).max(120.0);
-    let row_h = 28.0;
-    let panel = Rect {
-        x: (actions.more.x + actions.more.w - width).max(8.0),
-        y: layout.title_bar.y + layout.title_bar.h + 4.0,
-        w: width,
-        h: row_h * 5.0 + 8.0,
-    };
-    let rows = (0..5)
-        .map(|index| Rect {
-            x: panel.x + 4.0,
-            y: panel.y + 4.0 + index as f64 * row_h,
-            w: width - 8.0,
-            h: row_h,
-        })
-        .collect();
-    Some((panel, rows))
 }
 
 pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffects {
@@ -166,8 +128,6 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffec
     for (glyph, rect, active) in [
         (Icon::PanelLeft, actions.explorer, f.layout_visibility.explorer),
         (Icon::PanelBottom, actions.terminal, f.layout_visibility.terminal),
-        (Icon::PanelRight, actions.minimap, f.layout_visibility.minimap),
-        (Icon::More, actions.more, f.layout_menu_open),
     ] {
         if rect.w <= 0.0 {
             continue;
@@ -198,79 +158,9 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffec
             effects.action = Some(LayoutAction::ToggleExplorer);
         } else if actions.terminal.w > 0.0 && actions.terminal.contains(f.pointer.x, f.pointer.y) {
             effects.action = Some(LayoutAction::ToggleTerminal);
-        } else if actions.minimap.w > 0.0 && actions.minimap.contains(f.pointer.x, f.pointer.y) {
-            effects.action = Some(LayoutAction::ToggleMinimap);
-        } else if actions.more.contains(f.pointer.x, f.pointer.y) {
-            effects.menu_toggle = true;
         }
     }
     effects
-}
-
-pub(super) fn draw_layout_menu(
-    f: &mut Frame,
-    layout: &AppLayout,
-    effects: &mut TitleBarEffects,
-) {
-    if !f.layout_menu_open {
-        return;
-    }
-    let Some((panel, rows)) = layout_menu_layout(layout) else {
-        return;
-    };
-    let split_label = if f.groups.is_some_and(|groups| groups.len() > 1) {
-        "Join Editor"
-    } else {
-        "Split Editor"
-    };
-    let options = [
-        ("Explorer", LayoutAction::ToggleExplorer, f.layout_visibility.explorer),
-        ("Terminal", LayoutAction::ToggleTerminal, f.layout_visibility.terminal),
-        ("Minimap", LayoutAction::ToggleMinimap, f.layout_visibility.minimap),
-        (split_label, LayoutAction::ToggleSplit, f.groups.is_some_and(|groups| groups.len() > 1)),
-        ("Reset Layout", LayoutAction::ResetLayout, false),
-    ];
-    card(f, panel);
-    for ((label, action, checked), row) in options.into_iter().zip(rows.iter().copied()) {
-        let hovered = row.contains(f.pointer.x, f.pointer.y);
-        if hovered {
-            f.canvas
-                .fill_rect(row.x, row.y, row.w, row.h, f.theme.surface_hover, f.scale);
-        }
-        if checked {
-            icon(
-                f,
-                Icon::Check,
-                row.x + 14.0,
-                row.y + row.h / 2.0,
-                11.0,
-                f.theme.accent,
-            );
-        }
-        text(
-            f,
-            label,
-            row.x + 30.0,
-            row.y + (row.h - 10.0) / 2.0,
-            10.0,
-            f.theme.fg,
-            false,
-        );
-        if f.pointer.click && hovered {
-            effects.action = Some(action);
-        }
-    }
-    let actions = title_bar_actions(layout);
-    let inside_actions = [actions.explorer, actions.terminal, actions.minimap, actions.more]
-        .iter()
-        .any(|rect| rect.w > 0.0 && rect.contains(f.pointer.x, f.pointer.y));
-    if f.pointer.click
-        && !inside_actions
-        && !rows.iter().any(|row| row.contains(f.pointer.x, f.pointer.y))
-        && effects.action.is_none()
-    {
-        effects.menu_dismiss = true;
-    }
 }
 
 pub(super) fn draw_cards(f: &mut Frame, layout: &AppLayout) {

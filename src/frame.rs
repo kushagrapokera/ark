@@ -59,7 +59,6 @@ pub struct EditorGroupLayout {
 pub struct LayoutVisibility {
     pub explorer: bool,
     pub terminal: bool,
-    pub minimap: bool,
 }
 
 impl Default for LayoutVisibility {
@@ -67,7 +66,6 @@ impl Default for LayoutVisibility {
         Self {
             explorer: true,
             terminal: true,
-            minimap: true,
         }
     }
 }
@@ -76,9 +74,6 @@ impl Default for LayoutVisibility {
 pub enum LayoutAction {
     ToggleExplorer,
     ToggleTerminal,
-    ToggleMinimap,
-    ToggleSplit,
-    ResetLayout,
 }
 
 /// Geometry of one frame in LOGICAL px, derived from the window size and
@@ -174,7 +169,6 @@ pub fn clamp_terminal_height(requested: f64, work_h: f64, gap: f64) -> f64 {
 }
 
 /// Full workbench layout with an optional user-adjusted terminal height.
-/// Full workbench layout with an optional user-adjusted terminal height.
 #[allow(clippy::too_many_arguments)] // compatibility layout inputs
 pub fn app_layout_with_groups_and_terminal(
     w: f64,
@@ -195,7 +189,6 @@ pub fn app_layout_with_groups_and_terminal(
         LayoutVisibility {
             explorer: true,
             terminal: show_term,
-            minimap: true,
         },
         term_height,
     )
@@ -317,7 +310,7 @@ pub fn app_layout_with_visibility(
         w: editor_card.w,
         h: breadcrumb_h,
     };
-    let minimap_w = if visibility.minimap && editor_w >= 560.0 {
+    let minimap_w = if editor_w >= 560.0 {
         MINIMAP_W
     } else {
         0.0
@@ -386,8 +379,8 @@ pub fn app_layout_with_visibility(
             h: editor_card.h,
         };
         editor_groups = [
-            editor_group_layout(left, editor_tab_h, breadcrumb_h, pad, gap, visibility.minimap),
-            editor_group_layout(right, editor_tab_h, breadcrumb_h, pad, gap, visibility.minimap),
+            editor_group_layout(left, editor_tab_h, breadcrumb_h, pad, gap),
+            editor_group_layout(right, editor_tab_h, breadcrumb_h, pad, gap),
         ];
         editor_group_split = Rect {
             x: editor_card.x + left_w,
@@ -484,7 +477,6 @@ fn editor_group_layout(
     breadcrumb_h: f64,
     pad: f64,
     gap: f64,
-    show_minimap: bool,
 ) -> EditorGroupLayout {
     let tabs = Rect {
         x: card.x,
@@ -498,7 +490,7 @@ fn editor_group_layout(
         w: card.w,
         h: breadcrumb_h,
     };
-    let minimap_w = if show_minimap && card.w >= 480.0 {
+    let minimap_w = if card.w >= 480.0 {
         MINIMAP_W
     } else {
         0.0
@@ -776,8 +768,6 @@ pub struct Frame<'a> {
     pub activity_pulse: f32,
     /// Current title-bar panel visibility.
     pub layout_visibility: LayoutVisibility,
-    /// Whether the title-bar More menu is open.
-    pub layout_menu_open: bool,
     /// Monotonic animation phase in seconds.
     pub animation_time: f64,
     /// Project dir name for the header (App owns it, precomputed).
@@ -894,10 +884,6 @@ pub struct FrameEffects {
     pub group_split_moved: bool,
     /// A title-bar layout action was selected.
     pub layout_action: Option<LayoutAction>,
-    /// The title-bar More menu arrow was clicked.
-    pub layout_menu_toggle: bool,
-    /// A click outside the title-bar menu dismissed it.
-    pub layout_menu_dismiss: bool,
 }
 
 /// Draw the existing per-file Commit & Push panel in the active Source
@@ -986,7 +972,7 @@ pub fn draw_frame(
 
     f.canvas.fill(f.theme.surface_chrome);
     chrome::draw_cards(f, layout);
-    let mut title_fx = chrome::draw_title_bar(f, layout);
+    let title_fx = chrome::draw_title_bar(f, layout);
 
     // Sidebar drag: the narrow card gap and the three-dot handle share the
     // same sticky latch as the old divider. Both disappear with Explorer.
@@ -1328,10 +1314,7 @@ pub fn draw_frame(
     f.group_split_drag = group_split_drag;
 
     chrome::draw_new_item_prompt(f, layout, tree);
-    chrome::draw_layout_menu(f, layout, &mut title_fx);
     effects.layout_action = title_fx.action;
-    effects.layout_menu_toggle = title_fx.menu_toggle;
-    effects.layout_menu_dismiss = title_fx.menu_dismiss;
 
     chrome::draw_status_bar(f, layout);
     effects
