@@ -422,6 +422,32 @@ fn compact_title_bar_keeps_controls_inside_the_window() {
 }
 
 #[test]
+fn title_bar_omits_agent_launcher_icons() {
+    let (_d, mut tree) = scene_fixture("title-agent-icons");
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.text_muted = (77, 77, 77);
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(&canvas, theme.surface_chrome, 748, 8, 806, 28),
+        0,
+        "Claude/Codex launcher placeholders are gone"
+    );
+}
+
+#[test]
 fn compact_status_bar_drops_optional_items_before_the_left_cluster() {
     let (_d, mut tree) = scene_fixture("compact-status");
     let mut theme = frame_theme();

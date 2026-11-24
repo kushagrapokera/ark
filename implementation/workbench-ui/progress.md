@@ -194,6 +194,8 @@ five open viewers, two shells + fake agent tab):
   nonfunctional account/settings footer.
 - Kept Explorer, Search, Source Control, Terminal, and Config; Terminal and
   Config retain their existing behavior.
+- Removed the Claude/Codex launcher placeholders beside the title-bar command
+  center and their unused glyph definitions.
 
 ## Notes
 

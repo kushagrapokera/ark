@@ -41,8 +41,6 @@ pub enum Icon {
     Warning,
     Remote,
     Zoom,
-    Forum,
-    Deploy,
     Token,
     Asterisk,
     PanelLeft,
@@ -375,43 +373,6 @@ pub fn draw(
             pb.line_to(cx, cy + 0.36 * s);
             pb.finish().expect("valid remote path")
         }
-        Icon::Forum => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.34 * s, cy - 0.28 * s);
-            pb.line_to(cx + 0.34 * s, cy - 0.28 * s);
-            pb.line_to(cx + 0.34 * s, cy + 0.16 * s);
-            pb.line_to(cx - 0.06 * s, cy + 0.16 * s);
-            pb.line_to(cx - 0.28 * s, cy + 0.34 * s);
-            pb.line_to(cx - 0.28 * s, cy + 0.12 * s);
-            pb.line_to(cx - 0.34 * s, cy + 0.12 * s);
-            pb.close();
-            pb.finish().expect("valid forum path")
-        }
-        Icon::Deploy => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.34 * s, cy - 0.18 * s);
-            pb.cubic_to(
-                cx - 0.40 * s,
-                cy + 0.18 * s,
-                cx - 0.10 * s,
-                cy + 0.34 * s,
-                cx,
-                cy + 0.34 * s,
-            );
-            pb.cubic_to(
-                cx + 0.10 * s,
-                cy + 0.34 * s,
-                cx + 0.40 * s,
-                cy + 0.18 * s,
-                cx + 0.34 * s,
-                cy - 0.18 * s,
-            );
-            pb.move_to(cx - 0.34 * s, cy - 0.18 * s);
-            pb.line_to(cx - 0.12 * s, cy - 0.34 * s);
-            pb.line_to(cx + 0.12 * s, cy - 0.34 * s);
-            pb.line_to(cx + 0.34 * s, cy - 0.18 * s);
-            pb.finish().expect("valid deploy path")
-        }
         Icon::Token => {
             let mut pb = PathBuilder::new();
             pb.push_circle(cx, cy, 0.34 * s);
@@ -506,8 +467,6 @@ pub fn draw(
         | Icon::Warning
         | Icon::Remote
         | Icon::Zoom
-        | Icon::Forum
-        | Icon::Deploy
         | Icon::Token
         | Icon::Asterisk
         | Icon::PanelLeft

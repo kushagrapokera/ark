@@ -152,26 +152,6 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) {
         text(f, &title, command.x + 28.0, 9.0, 11.0, f.theme.fg, false);
     }
 
-    if full {
-        let command_right = left + (bar.w - left - reserve) / 2.0 + 160.0;
-        icon(
-            f,
-            Icon::Forum,
-            command_right + 18.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
-        icon(
-            f,
-            Icon::Deploy,
-            command_right + 42.0,
-            18.0,
-            14.0,
-            f.theme.text_muted,
-        );
-    }
-
     if show_update {
         let update = Rect {
             x: bar.w - reserve + 8.0,
