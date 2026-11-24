@@ -12,9 +12,8 @@
 //! quoted `git add … && git commit …` line that the app streams through a
 //! PTY terminal tab (M6); `git::PUSH_COMMAND` does the same for push.
 
-// Retained for the future Source Control card; the current supplied design
-// shows a static activity-bar placeholder instead of this panel.
-#![allow(dead_code)]
+//! The panel is hosted by the workbench's Source Control card in wide windows
+//! and by the editor body in compact windows.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -25,11 +24,12 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::git::{self, GitStatus};
 use crate::render::{Canvas, Theme};
-use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
+use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
 use crate::ui::{draw_button, draw_checkbox, Pointer, Press, Rect, TextInput, TextInputKey};
 
-/// Preferred panel height (LOGICAL px). The frame caps it at 60% of the
-/// content area so a tiny window still keeps tree rows visible.
+/// Preferred panel height used by the original layout pins. The Source
+/// Control card now uses all available card/body height.
+#[allow(dead_code)]
 pub const PANEL_H: f64 = 236.0;
 /// Logical px per changed-file row.
 pub const ROW_H: f64 = 20.0;
@@ -71,24 +71,50 @@ pub struct PanelLayout {
 }
 
 pub fn layout(panel: Rect) -> PanelLayout {
-    let inner_w = (panel.w - 2.0 * PAD).max(0.0);
-    let title = Rect { x: panel.x + PAD, y: panel.y + PAD, w: inner_w, h: TITLE_H };
-    let buttons_y = panel.y + panel.h - PAD - BUTTON_H;
-    let field_y = buttons_y - PAD - FIELD_H;
+    let compact = panel.h < 150.0;
+    let pad = if compact { 4.0 } else { PAD };
+    let title_h = if compact { 14.0 } else { TITLE_H };
+    let field_h = if compact { 20.0 } else { FIELD_H };
+    let button_h = if compact { 20.0 } else { BUTTON_H };
+    let gap = if compact { 4.0 } else { BUTTON_GAP };
+    let inner_w = (panel.w - 2.0 * pad).max(0.0);
+    let title = Rect {
+        x: panel.x + pad,
+        y: panel.y + pad,
+        w: inner_w,
+        h: title_h,
+    };
+    let buttons_y = panel.y + panel.h - pad - button_h;
+    let field_y = buttons_y - gap - field_h;
     let list_y = title.y + title.h;
-    let list_h = (field_y - PAD - list_y).max(0.0);
-    let button_w = ((inner_w - BUTTON_GAP) / 2.0).max(0.0);
+    let list_h = (field_y - gap - list_y).max(0.0);
+    let button_w = ((inner_w - gap) / 2.0).max(0.0);
     PanelLayout {
         title,
-        list: Rect { x: panel.x, y: list_y, w: panel.w, h: list_h },
+        list: Rect {
+            x: panel.x,
+            y: list_y,
+            w: panel.w,
+            h: list_h,
+        },
         rows: (list_h / ROW_H).floor() as usize,
-        field: Rect { x: panel.x + PAD, y: field_y, w: inner_w, h: FIELD_H },
-        commit_button: Rect { x: panel.x + PAD, y: buttons_y, w: button_w, h: BUTTON_H },
-        push_button: Rect {
-            x: panel.x + PAD + button_w + BUTTON_GAP,
+        field: Rect {
+            x: panel.x + pad,
+            y: field_y,
+            w: inner_w,
+            h: field_h,
+        },
+        commit_button: Rect {
+            x: panel.x + pad,
             y: buttons_y,
             w: button_w,
-            h: BUTTON_H,
+            h: button_h,
+        },
+        push_button: Rect {
+            x: panel.x + pad + button_w + gap,
+            y: buttons_y,
+            w: button_w,
+            h: button_h,
         },
     }
 }
@@ -242,8 +268,11 @@ impl CommitPanel {
             return effects;
         }
         let l = layout(panel);
-        // A full-width top rule separates the panel from the tree above.
-        canvas.fill_rect(panel.x, panel.y, panel.w, 1.0, theme.border, scale);
+        let pad = if panel.h < 150.0 { 4.0 } else { PAD };
+        // The card supplies the rounded outer surface; the panel fills only
+        // its body and uses the same elevated/subtle tokens as the workbench.
+        canvas.fill_rect(panel.x, panel.y, panel.w, panel.h, theme.surface, scale);
+        canvas.fill_rect(panel.x, panel.y, panel.w, 1.0, theme.border_subtle, scale);
         let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
         let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
         let advance = f64::from(m.advance) / scale;
@@ -261,20 +290,29 @@ impl CommitPanel {
         if self.scroll > max_scroll {
             self.scroll = max_scroll;
         }
-        let selected = status.entries.iter().filter(|e| self.is_checked(&e.path)).count();
+        let selected = status
+            .entries
+            .iter()
+            .filter(|e| self.is_checked(&e.path))
+            .count();
         let (title, color) = match &self.error {
             Some(err) => (err.clone(), theme.git_deleted),
             None if total == 0 => ("No changes".to_string(), theme.fg_dim),
             None if selected == total => (format!("Changes {total}"), theme.fg_dim),
             None => (format!("Changes {total} · {selected} sel"), theme.fg_dim),
         };
-        let baseline = (l.title.y + l.title.h / 2.0) * scale + f64::from(m.ascent - m.descent) / 2.0;
+        let baseline =
+            (l.title.y + l.title.h / 2.0) * scale + f64::from(m.ascent - m.descent) / 2.0;
         text.draw_line(
             canvas,
             &title,
             (l.title.x * scale) as f32,
             baseline as f32,
-            TextStyle { color, font_size, weight: Weight::NORMAL },
+            TextStyle {
+                color,
+                font_size,
+                weight: Weight::BOLD,
+            },
         );
 
         // Changed-file rows: viewport only, checkbox + badge + path. Slice
@@ -282,10 +320,15 @@ impl CommitPanel {
         let visible_rows = status.entries.get(self.scroll..).unwrap_or(&[]);
         for (slot, entry) in visible_rows.iter().take(l.rows).enumerate() {
             let row_y = l.list.y + slot as f64 * ROW_H;
-            let row = Rect { x: panel.x, y: row_y, w: panel.w, h: ROW_H };
+            let row = Rect {
+                x: panel.x,
+                y: row_y,
+                w: panel.w,
+                h: ROW_H,
+            };
             let hovered = row.contains(pointer.x, pointer.y);
             if hovered {
-                canvas.fill_rect(panel.x, row_y, panel.w, ROW_H, theme.bg_elevated, scale);
+                canvas.fill_rect(panel.x, row_y, panel.w, ROW_H, theme.surface_hover, scale);
             }
             if pointer.click && hovered {
                 self.toggle(&entry.path);
@@ -295,7 +338,7 @@ impl CommitPanel {
             draw_checkbox(
                 canvas,
                 Rect {
-                    x: panel.x + PAD,
+                    x: panel.x + pad,
                     y: row_y + (ROW_H - CHECKBOX) / 2.0,
                     w: CHECKBOX,
                     h: CHECKBOX,
@@ -306,7 +349,7 @@ impl CommitPanel {
                 scale,
             );
             let (letter, badge_color) = crate::tree::badge_glyph(entry.badge(), theme);
-            let badge_x = panel.x + PAD + CHECKBOX + 8.0;
+            let badge_x = panel.x + pad + CHECKBOX + 8.0;
             let row_baseline =
                 (row_y + ROW_H / 2.0) * scale + f64::from(m.ascent - m.descent) / 2.0;
             text.draw_line(
@@ -314,17 +357,26 @@ impl CommitPanel {
                 letter,
                 (badge_x * scale) as f32,
                 row_baseline as f32,
-                TextStyle { color: badge_color, font_size, weight: Weight::BOLD },
+                TextStyle {
+                    color: badge_color,
+                    font_size,
+                    weight: Weight::BOLD,
+                },
             );
             let path_x = badge_x + advance + 8.0;
-            let max_chars = (((panel.x + panel.w - PAD - path_x) / advance).floor()).max(0.0) as usize;
+            let max_chars =
+                (((panel.x + panel.w - PAD - path_x) / advance).floor()).max(0.0) as usize;
             let display = elide_path(&entry.path.to_string_lossy(), max_chars);
             text.draw_line(
                 canvas,
                 &display,
                 (path_x * scale) as f32,
                 row_baseline as f32,
-                TextStyle { color: theme.fg, font_size, weight: Weight::NORMAL },
+                TextStyle {
+                    color: theme.fg,
+                    font_size,
+                    weight: Weight::NORMAL,
+                },
             );
         }
 
@@ -336,19 +388,65 @@ impl CommitPanel {
             text.draw_line(
                 canvas,
                 "commit message",
-                ((l.field.x + 8.0) * scale) as f32,
+                ((l.field.x + pad) * scale) as f32,
                 field_baseline as f32,
-                TextStyle { color: theme.fg_dim, font_size, weight: Weight::NORMAL },
+                TextStyle {
+                    color: theme.fg_dim,
+                    font_size,
+                    weight: Weight::NORMAL,
+                },
             );
         }
-        if draw_button(canvas, "Commit", l.commit_button, theme, text, pointer, scale) == Press::Clicked {
+        if draw_primary_button(
+            canvas,
+            text,
+            theme,
+            scale,
+            l.commit_button,
+            "Commit",
+            pointer,
+        ) {
             effects.commit = true;
         }
-        if draw_button(canvas, "Push", l.push_button, theme, text, pointer, scale) == Press::Clicked {
+        if draw_button(canvas, "Push", l.push_button, theme, text, pointer, scale) == Press::Clicked
+        {
             effects.push = true;
         }
         effects
     }
+}
+
+fn draw_primary_button(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    scale: f64,
+    rect: Rect,
+    label: &str,
+    pointer: Pointer,
+) -> bool {
+    if rect.w <= 0.0 || rect.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let clicked = pointer.click && rect.contains(pointer.x, pointer.y);
+    canvas.fill_round_rect(rect.x, rect.y, rect.w, rect.h, 3.0, theme.accent, scale);
+    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+    let m = text.mono_metrics(font_size, (font_size as f64 * 1.35).round() as f32);
+    let label_w = m.advance * label.chars().count() as f32;
+    let x = rect.x * scale + (rect.w * scale - f64::from(label_w)) / 2.0;
+    let baseline = (rect.y + rect.h / 2.0) * scale + f64::from(m.ascent - m.descent) / 2.0;
+    text.draw_line(
+        canvas,
+        label,
+        x as f32,
+        baseline as f32,
+        TextStyle {
+            color: theme.on_accent,
+            font_size,
+            weight: Weight::BOLD,
+        },
+    );
+    clicked
 }
 
 /// Truncate a repo-relative path from the LEFT so the file name stays

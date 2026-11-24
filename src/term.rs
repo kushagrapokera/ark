@@ -239,7 +239,6 @@ impl Terminal {
     /// Spawn `shell -c command` in a PTY rooted at `root` — the M8 git
     /// action tabs. Output streams through the same reader thread as an
     /// interactive shell; the tab carries an action `label`.
-    #[allow(dead_code)] // retained for future Source Control command tabs
     pub fn spawn_command(
         root: &Path,
         shell: &Path,
@@ -912,7 +911,6 @@ impl TerminalTabs {
 
     /// Spawn a command tab (`shell -c command`) — the M8 git actions stream
     /// their output here. Becomes active.
-    #[allow(dead_code)] // retained for future Source Control command tabs
     pub fn open_command(
         &mut self,
         root: &Path,

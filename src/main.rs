@@ -528,6 +528,7 @@ impl App {
                 highlighter: &self.highlighter,
                 git,
                 file_diff,
+                commit: Some(&mut self.commit),
                 config,
                 config_error,
                 terms,
@@ -596,6 +597,12 @@ impl App {
         }
         if effects.close_terminal {
             self.close_terminal_tab();
+        }
+        if effects.commit_clicked {
+            self.commit_now();
+        }
+        if effects.push_clicked {
+            self.push_now();
         }
         if effects.config_save {
             self.save_config();
@@ -768,10 +775,14 @@ impl App {
                 self.term_focused = false;
                 self.commit.message.focused = false;
             }
-            frame::ActivityPanel::Explorer | frame::ActivityPanel::SourceControl => {
+            frame::ActivityPanel::Explorer => {
                 if self.config_edits.is_some() || self.pane == PaneMode::Config {
                     self.pane = PaneMode::Viewer;
                 }
+                self.term_focused = false;
+                self.commit.message.focused = false;
+            }
+            frame::ActivityPanel::SourceControl => {
                 self.term_focused = false;
             }
         }
@@ -931,7 +942,6 @@ impl App {
     /// M8: run an exact git action in a terminal tab so its output streams
     /// (the M6 PTY reader does the streaming — ark keeps no capture buffer).
     /// Returns whether the tab opened.
-    #[allow(dead_code)] // retained for the future Source Control card
     fn run_git_command(&mut self, label: &str, command: &str) -> bool {
         let Some(proxy) = self.proxy.clone() else {
             error!("{label}: cannot run without an event-loop proxy");
@@ -968,7 +978,6 @@ impl App {
 
     /// M8 Commit: validate the panel, then stage the checked paths and commit
     /// with the typed message in a streaming terminal tab.
-    #[allow(dead_code)] // retained for the future Source Control card
     fn commit_now(&mut self) {
         let Some(status) = self.git.clone() else {
             self.commit.error = Some("not a git repository".into());
@@ -999,7 +1008,6 @@ impl App {
     }
 
     /// M8 Push: `git push` in a streaming terminal tab.
-    #[allow(dead_code)] // retained for the future Source Control card
     fn push_now(&mut self) {
         if self.git.is_none() {
             self.commit.error = Some("not a git repository".into());
@@ -1315,10 +1323,11 @@ impl ApplicationHandler<Wake> for App {
                 // app enables mouse reporting, press/release are encoded to
                 // the shell instead of local interaction.
                 let layout = self.app_layout();
-                let over_commit = layout
-                    .as_ref()
-                    .map(|l| l.commit_panel.contains(self.pointer.x, self.pointer.y))
-                    .unwrap_or(false);
+                let over_commit = self.activity == frame::ActivityPanel::SourceControl
+                    && layout
+                        .as_ref()
+                        .and_then(frame::source_control_panel)
+                        .is_some_and(|rect| rect.contains(self.pointer.x, self.pointer.y));
                 let over_grid = layout
                     .as_ref()
                     .map(|l| l.term_grid.contains(self.pointer.x, self.pointer.y))
@@ -1376,17 +1385,23 @@ impl ApplicationHandler<Wake> for App {
                 // Wheel scrolling applies over the whole panel under the
                 // pointer (its scrollbar track scrolls too, matching editors).
                 let (x, y) = (self.pointer.x, self.pointer.y);
-                // M8: wheel over the commit panel scrolls its changed-file
-                // list (rows, viewport-only); no other surface is damaged.
-                if layout.commit_panel.contains(x, y) && self.git.is_some() {
-                    let total = self.git.as_ref().map_or(0, |g| g.entries.len());
-                    if route_wheel_commit(&mut self.commit, dy, layout.commit_panel, total) {
-                        let (cw, ch) = (self.canvas.width(), self.canvas.height());
-                        let rect = damage_rect(layout.commit_panel, self.scale, cw, ch);
-                        self.damage.mark(rect);
-                        self.request_redraw();
+                // Source Control owns the wheel while its card is active,
+                // whether it is hosted in the sidebar or compact editor body.
+                if self.activity == frame::ActivityPanel::SourceControl {
+                    if let Some(rect) = frame::source_control_panel(&layout)
+                        .filter(|rect| rect.contains(x, y))
+                    {
+                        if self.git.is_some() {
+                            let total = self.git.as_ref().map_or(0, |g| g.entries.len());
+                            if route_wheel_commit(&mut self.commit, dy, rect, total) {
+                                let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                                let damage = damage_rect(rect, self.scale, cw, ch);
+                                self.damage.mark(damage);
+                                self.request_redraw();
+                            }
+                        }
+                        return;
                     }
-                    return;
                 }
                 // M9: wheel over the config pane scrolls its list/textarea.
                 if self.pane == PaneMode::Config && layout.viewer_pane.contains(x, y) {

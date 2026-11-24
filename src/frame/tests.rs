@@ -148,10 +148,6 @@ fn app_layout_matches_card_design() {
         160.0,
         "minimum explorer width"
     );
-    assert_eq!(
-        l.commit_panel.h, 0.0,
-        "commit panel hidden in the card design"
-    );
 }
 
 #[test]
@@ -438,10 +434,162 @@ fn compact_status_bar_drops_optional_items_before_the_left_cluster() {
 }
 
 #[test]
-fn app_layout_keeps_commit_panel_hidden() {
-    let l = app_layout_with_commit(1024.0, 768.0, 304.0, true, false);
+fn source_control_icon_opens_the_per_file_commit_card() {
+    let status = crate::git::parse_status(
+        "? two words.txt\n\
+         1 .M N... 000000 100644 100644 111 222 src/main.rs\n",
+    )
+    .rooted(Path::new("/repo"));
+    let mut theme = frame_theme();
+    theme.surface = (2, 2, 2);
+    let (_d, mut tree) = scene_fixture("source-control-card");
+    let mut commit = CommitPanel::default();
+
+    for (w, h) in [(1024.0, 768.0), (480.0, 640.0)] {
+        let layout = app_layout_with_commit(w, h, 304.0, false, true);
+        let body = if w >= 760.0 {
+            Rect {
+                x: 65.0,
+                y: 81.0,
+                w: 238.0,
+                h: 654.0,
+            }
+        } else {
+            layout.viewer_pane
+        };
+        let mut text = TextSystem::new();
+        let mut canvas = Canvas::new(w as u32, h as u32);
+        let mut split = Split { position: 304.0 };
+        let mut split_drag = SplitDrag::default();
+        let mut scrollbar = Scrollbar::default();
+        let mut viewer_scrollbar = Scrollbar::default();
+        let pointer = if w >= 760.0 {
+            Pointer {
+                x: 32.0,
+                y: 150.0,
+                down: false,
+                click: true,
+            }
+        } else {
+            Pointer::default()
+        };
+        let effects = draw_frame(
+            &mut Frame {
+                canvas: &mut canvas,
+                text: &mut text,
+                theme: &theme,
+                scale: 1.0,
+                title: "ark",
+                root: Path::new("/repo"),
+                open_files: &[],
+                active_path: None,
+                activity: ActivityPanel::Explorer,
+                pointer,
+                dbl_click: false,
+                viewer: None,
+                viewer_error: None,
+                viewer_flash: false,
+                highlighter: &Highlighter::new(),
+                git: Some(&status),
+                file_diff: None,
+                commit: Some(&mut commit),
+                config: None,
+                config_error: None,
+                terms: None,
+                term_focused: false,
+            },
+            &layout,
+            &mut tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            &mut viewer_scrollbar,
+        );
+        if w >= 760.0 {
+            assert_eq!(effects.set_activity, Some(ActivityPanel::SourceControl));
+        }
+
+        let mut frame = Frame {
+            canvas: &mut canvas,
+            text: &mut text,
+            theme: &theme,
+            scale: 1.0,
+            title: "ark",
+            root: Path::new("/repo"),
+            open_files: &[],
+            active_path: None,
+            activity: ActivityPanel::SourceControl,
+            pointer: Pointer::default(),
+            dbl_click: false,
+            viewer: None,
+            viewer_error: None,
+            viewer_flash: false,
+            highlighter: &Highlighter::new(),
+            git: Some(&status),
+            file_diff: None,
+            commit: Some(&mut commit),
+            config: None,
+            config_error: None,
+            terms: None,
+            term_focused: false,
+        };
+        let _ = draw_frame(
+            &mut frame,
+            &layout,
+            &mut tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            &mut viewer_scrollbar,
+        );
+        assert!(
+            count_color_in(
+                frame.canvas,
+                theme.accent,
+                body.x as u32,
+                body.y as u32,
+                (body.x + body.w) as u32,
+                (body.y + body.h) as u32,
+            ) > 0,
+            "per-file checkboxes render in the active Source Control card at {w}x{h}"
+        );
+        let buttons = commit::layout(body);
+        frame.pointer = Pointer {
+            x: buttons.commit_button.x + buttons.commit_button.w / 2.0,
+            y: buttons.commit_button.y + buttons.commit_button.h / 2.0,
+            down: false,
+            click: true,
+        };
+        let effects = draw_frame(
+            &mut frame,
+            &layout,
+            &mut tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            &mut viewer_scrollbar,
+        );
+        assert!(
+            effects.commit_clicked,
+            "Source Control Commit button is wired"
+        );
+    }
+}
+
+#[test]
+fn source_control_panel_uses_the_sidebar_or_compact_editor_body() {
+    let wide = app_layout_with_commit(1024.0, 768.0, 304.0, true, false);
     assert_eq!(
-        l.tree_panel,
+        source_control_panel(&wide),
+        Some(Rect {
+            x: 65.0,
+            y: 80.0,
+            w: 238.0,
+            h: 655.0
+        })
+    );
+    assert_eq!(
+        wide.tree_panel,
         Rect {
             x: 72.0,
             y: 108.0,
@@ -449,9 +597,8 @@ fn app_layout_keeps_commit_panel_hidden() {
             h: 564.0
         }
     );
-    assert_eq!(l.commit_panel.h, 0.0);
     assert_eq!(
-        l.viewer_pane,
+        wide.viewer_pane,
         Rect {
             x: 320.0,
             y: 104.0,
@@ -459,6 +606,9 @@ fn app_layout_keeps_commit_panel_hidden() {
             h: 624.0
         }
     );
+
+    let compact = app_layout_with_commit(480.0, 640.0, 304.0, false, false);
+    assert_eq!(source_control_panel(&compact), Some(compact.viewer_pane));
 }
 
 #[test]
@@ -547,6 +697,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,
@@ -603,6 +754,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,
@@ -679,6 +831,7 @@ fn vertical_terminal_sessions_switch_the_active_pty() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: Some(&mut terms),
@@ -836,6 +989,7 @@ fn draw_static_frame(
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,
@@ -930,6 +1084,7 @@ fn frame_scene_renders_spec_surfaces() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,
@@ -1028,6 +1183,7 @@ fn frame_viewer_pane_renders_over_placeholder() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,
@@ -1093,6 +1249,7 @@ fn frame_interactions_report_effects() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
+        commit: None,
         config: None,
         config_error: None,
         terms: None,
@@ -1251,6 +1408,7 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
+        commit: None,
         config: None,
         config_error: None,
         terms: None,
@@ -1388,6 +1546,7 @@ fn viewer_flash_paints_accent_strip() {
                 highlighter: &Highlighter::new(),
                 git: None,
                 file_diff: None,
+                commit: None,
                 config: None,
                 config_error: None,
                 terms: None,
@@ -1470,6 +1629,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: Some(&mut editor),
             config_error: None,
             terms: None,
@@ -1521,6 +1681,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: Some(&mut editor),
             config_error: None,
             terms: None,
@@ -1571,6 +1732,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         highlighter: &Highlighter::new(),
         git: None,
         file_diff: None,
+        commit: None,
         config: None,
         config_error: None,
         terms: None,
@@ -1700,6 +1862,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,
@@ -1737,6 +1900,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 highlighter: &Highlighter::new(),
                 git: None,
                 file_diff: None,
+                commit: None,
                 config: None,
                 config_error: None,
                 terms: None,
@@ -1899,6 +2063,7 @@ fn viewer_offset_self_heals_before_hit_testing() {
             highlighter: &Highlighter::new(),
             git: None,
             file_diff: None,
+            commit: None,
             config: None,
             config_error: None,
             terms: None,

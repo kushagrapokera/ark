@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use cosmic_text::Weight;
 
+use crate::commit::{self, CommitPanel};
 use crate::configed::ConfigEditor;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
@@ -58,8 +59,6 @@ pub struct AppLayout {
     /// Functional tree viewport inside the explorer card.
     pub tree_panel: Rect,
     pub scroll_track: Rect,
-    /// Commit panel retained for compatibility; hidden in the card design.
-    pub commit_panel: Rect,
     /// Narrow drag hit-area between explorer and editor cards.
     pub split_area: Rect,
     /// Editor card, tab strip, breadcrumbs, body and minimap.
@@ -267,12 +266,6 @@ pub fn app_layout_with_commit(
         explorer_footer,
         tree_panel,
         scroll_track,
-        commit_panel: Rect {
-            x: explorer.x,
-            y: explorer.y + explorer.h,
-            w: explorer.w,
-            h: 0.0,
-        },
         split_area: Rect {
             x: explorer.x + explorer.w,
             y: work_y,
@@ -294,6 +287,23 @@ pub fn app_layout_with_commit(
             w,
             h: STATUS_H,
         },
+    }
+}
+
+/// Body rect for the Source Control card. Wide windows use the left card;
+/// compact windows use the editor body so the feature remains reachable.
+pub fn source_control_panel(layout: &AppLayout) -> Option<Rect> {
+    if layout.explorer_card.w > 0.0 && layout.explorer_header.h > 0.0 {
+        Some(Rect {
+            x: layout.explorer_card.x + 1.0,
+            y: layout.explorer_header.y + layout.explorer_header.h,
+            w: (layout.explorer_card.w - 2.0).max(0.0),
+            h: (layout.explorer_card.h - layout.explorer_header.h - 1.0).max(0.0),
+        })
+    } else if layout.viewer_pane.w > 0.0 && layout.viewer_pane.h > 0.0 {
+        Some(layout.viewer_pane)
+    } else {
+        None
     }
 }
 
@@ -630,6 +640,8 @@ pub struct Frame<'a> {
     pub git: Option<&'a GitStatus>,
     /// The open file's diff marks (gutter strip).
     pub file_diff: Option<&'a FileDiff>,
+    /// Per-file commit/push state, shown in the Source Control card.
+    pub commit: Option<&'a mut CommitPanel>,
     /// The open config editor (M9), shown in the right pane instead of the
     /// viewer while the App's pane mode is Config.
     pub config: Option<&'a mut ConfigEditor>,
@@ -661,6 +673,12 @@ pub struct FrameEffects {
     pub open_terminal: bool,
     /// The "×" button closed the active terminal tab.
     pub close_terminal: bool,
+    /// A Source Control file row toggled its checkbox.
+    pub commit_toggled: bool,
+    /// The Commit button was clicked.
+    pub commit_clicked: bool,
+    /// The Push button was clicked.
+    pub push_clicked: bool,
     /// Config editor header Save/Reload clicked.
     pub config_save: bool,
     pub config_reload: bool,
@@ -672,6 +690,39 @@ pub struct FrameEffects {
     pub select_tab: Option<PathBuf>,
     /// A file/config tab close button was clicked.
     pub close_tab: Option<PathBuf>,
+}
+
+/// Draw the existing per-file Commit & Push panel in the active Source
+/// Control card. The panel owns its bounded selection/message state; the frame
+/// only supplies the current responsive rect and git snapshot.
+fn draw_source_control(f: &mut Frame, layout: &AppLayout) -> commit::PanelEffects {
+    let effects = commit::PanelEffects::default();
+    let Some(rect) = source_control_panel(layout) else {
+        return effects;
+    };
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return effects;
+    }
+    f.canvas
+        .fill_rect(rect.x, rect.y, rect.w, rect.h, f.theme.surface, f.scale);
+    let Some(status) = f.git else {
+        draw_pane_message(
+            f,
+            Rect {
+                x: rect.x + 8.0,
+                y: rect.y + 8.0,
+                w: (rect.w - 16.0).max(0.0),
+                h: (rect.h - 16.0).max(0.0),
+            },
+            "Source Control —",
+            "git status unavailable",
+        );
+        return effects;
+    };
+    let Some(panel) = f.commit.as_deref_mut() else {
+        return effects;
+    };
+    panel.draw(f.canvas, f.text, f.theme, f.scale, rect, status, f.pointer)
 }
 
 /// Compose and raster one app frame (M3 layout + M4 viewer pane). State
@@ -732,43 +783,51 @@ pub fn draw_frame(
         draw_sidebar_handle(f, handle, split_drag.dragging);
     }
 
-    chrome::draw_explorer_chrome(f, layout);
+    if f.activity == ActivityPanel::SourceControl {
+        chrome::draw_explorer_chrome(f, layout);
+        let fx = draw_source_control(f, layout);
+        effects.commit_toggled = fx.toggled;
+        effects.commit_clicked = fx.commit;
+        effects.push_clicked = fx.push;
+    } else {
+        chrome::draw_explorer_chrome(f, layout);
 
-    // Tree panel: process the frame's click, then draw the rows.
-    match tree::handle_pointer(tree, layout.tree_panel, f.pointer, f.dbl_click) {
-        tree::TreeAction::None => {}
-        tree::TreeAction::Toggled | tree::TreeAction::Selected => effects.tree_changed = true,
-        tree::TreeAction::Opened(path) => effects.opened = Some(path),
-    }
-    if tree.set_offset(tree.offset, layout.tree_panel.h) && !effects.tree_changed {
-        effects.scrolled = true;
-    }
-    tree::draw_tree_panel(
-        f.canvas,
-        f.text,
-        f.theme,
-        f.scale,
-        layout.tree_panel,
-        tree,
-        f.pointer,
-        f.git,
-    );
-    if layout.tree_panel.w > tree::TRACK_W {
-        let viewport = layout.tree_panel.h;
-        let content = tree.visible_count() as f64 * ROW_H;
-        scrollbar.offset = tree.offset;
-        if scrollbar.on_pointer(layout.scroll_track, f.pointer, content, viewport) {
-            tree.set_offset(scrollbar.offset, viewport);
+        // Tree panel: process the frame's click, then draw the rows.
+        match tree::handle_pointer(tree, layout.tree_panel, f.pointer, f.dbl_click) {
+            tree::TreeAction::None => {}
+            tree::TreeAction::Toggled | tree::TreeAction::Selected => effects.tree_changed = true,
+            tree::TreeAction::Opened(path) => effects.opened = Some(path),
+        }
+        if tree.set_offset(tree.offset, layout.tree_panel.h) && !effects.tree_changed {
             effects.scrolled = true;
         }
-        scrollbar.draw(
+        tree::draw_tree_panel(
             f.canvas,
-            layout.scroll_track,
-            content,
-            viewport,
+            f.text,
             f.theme,
             f.scale,
+            layout.tree_panel,
+            tree,
+            f.pointer,
+            f.git,
         );
+        if layout.tree_panel.w > tree::TRACK_W {
+            let viewport = layout.tree_panel.h;
+            let content = tree.visible_count() as f64 * ROW_H;
+            scrollbar.offset = tree.offset;
+            if scrollbar.on_pointer(layout.scroll_track, f.pointer, content, viewport) {
+                tree.set_offset(scrollbar.offset, viewport);
+                effects.scrolled = true;
+            }
+            scrollbar.draw(
+                f.canvas,
+                layout.scroll_track,
+                content,
+                viewport,
+                f.theme,
+                f.scale,
+            );
+        }
     }
 
     if let Some(panel) = chrome::draw_activity_bar(f, layout) {
@@ -783,7 +842,11 @@ pub fn draw_frame(
     if close_tab.is_some() {
         effects.close_tab = close_tab;
     }
-    draw_breadcrumb(f, layout.breadcrumb);
+    if f.activity == ActivityPanel::SourceControl && layout.explorer_card.w <= 0.0 {
+        chrome::draw_source_control_breadcrumb(f, layout.breadcrumb);
+    } else {
+        draw_breadcrumb(f, layout.breadcrumb);
+    }
     chrome::draw_editor_actions(f, layout);
     chrome::draw_minimap(f, layout);
 
@@ -824,8 +887,16 @@ pub fn draw_frame(
         }
     }
 
-    // Editor body.
-    if let Some(config) = f.config.as_deref_mut() {
+    // Editor body. Compact windows host Source Control here; wide windows
+    // already drew it in the left card.
+    if f.activity == ActivityPanel::SourceControl {
+        if layout.explorer_card.w <= 0.0 {
+            let fx = draw_source_control(f, layout);
+            effects.commit_toggled |= fx.toggled;
+            effects.commit_clicked |= fx.commit;
+            effects.push_clicked |= fx.push;
+        }
+    } else if let Some(config) = f.config.as_deref_mut() {
         let fx = config.draw(
             f.canvas,
             f.text,

@@ -192,6 +192,15 @@ fn layout_pins_panel_geometry() {
     let tiny = layout(Rect { x: 0.0, y: 0.0, w: 80.0, h: 60.0 });
     assert_eq!(tiny.rows, 0);
     assert!(tiny.list.h >= 0.0 && tiny.field.w >= 0.0);
+
+    // The minimum compact editor body still fits one row, the message field,
+    // and both actions without overlap.
+    let short = layout(Rect { x: 0.0, y: 0.0, w: 424.0, h: 91.0 });
+    assert!(short.rows >= 1);
+    assert!(short.title.y + short.title.h <= short.list.y);
+    assert!(short.list.y + short.list.h <= short.field.y);
+    assert!(short.field.y + short.field.h <= short.commit_button.y);
+    assert!(short.commit_button.y + short.commit_button.h <= 91.0);
 }
 
 #[test]

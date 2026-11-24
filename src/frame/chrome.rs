@@ -417,7 +417,11 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
     );
     text(
         f,
-        "EXPLORER",
+        if f.activity == ActivityPanel::SourceControl {
+            "SOURCE CONTROL"
+        } else {
+            "EXPLORER"
+        },
         header.x + 12.0,
         header.y + 10.0,
         10.0,
@@ -432,6 +436,9 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
         14.0,
         f.theme.text_muted,
     );
+    if f.activity == ActivityPanel::SourceControl {
+        return;
+    }
 
     let root = layout.explorer_root;
     icon(
@@ -503,6 +510,34 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
             10.0,
             f.theme.text_muted,
             true,
+        );
+    }
+}
+
+pub(super) fn draw_source_control_breadcrumb(f: &mut Frame, pane: Rect) {
+    if pane.w <= 0.0 || pane.h <= 0.0 {
+        return;
+    }
+    f.canvas
+        .fill_rect(pane.x, pane.y, pane.w, pane.h, f.theme.bg, f.scale);
+    text(
+        f,
+        "SOURCE CONTROL",
+        pane.x + 12.0,
+        pane.y + (pane.h - 11.0) / 2.0,
+        11.0,
+        f.theme.fg,
+        true,
+    );
+    if pane.w >= 260.0 {
+        text(
+            f,
+            f.title,
+            pane.x + 132.0,
+            pane.y + (pane.h - 11.0) / 2.0,
+            11.0,
+            f.theme.text_muted,
+            false,
         );
     }
 }

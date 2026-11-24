@@ -1,9 +1,6 @@
 //! Checkbox widget: click-to-toggle square with a check-mark glyph, drawn
 //! as a stroked path like the icons.rs glyphs.
 
-// Retained for the future Source Control card.
-#![allow(dead_code)]
-
 use tiny_skia::PathBuilder;
 
 use super::{renderable, stroke_path, stroke_rect_inset, Pointer, Rect};

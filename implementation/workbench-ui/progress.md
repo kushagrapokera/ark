@@ -132,8 +132,8 @@ five open viewers, two shells + fake agent tab):
   items. Existing tree/viewer/config/terminal interactions remain functional.
 - The terminal card is always visible; its `+` button opens the first PTY even
   when no terminal tab exists.
-- Kept the Source Control/commit backend for a future card but hid the old
-  panel from the current design.
+- Reused the Source Control/commit backend; the follow-up Source Control card
+  now exposes the per-file Commit & Push workflow.
 - No new persistent heap state or caches: chrome is drawn from static labels,
   fixed arrays, and stack-local geometry each frame. Removed the old retained
   terminal `TabBar` from the production frame.
@@ -166,6 +166,27 @@ five open viewers, two shells + fake agent tab):
   **64,896 KiB = 63.4 MiB RSS**, **57,392 KiB = 56.0 MiB PSS** — below the
   100 MiB budget; the larger framebuffer accounts for the increase over the
   1024×768 card smoke.
+
+## Source Control card
+
+- Reconnected the third activity-bar icon to the existing per-file Commit &
+  Push panel. Wide windows host it in the left card under a `SOURCE CONTROL`
+  header; compact windows host it in the editor body so it stays reachable.
+- Reused the existing bounded `CommitPanel` state, git status snapshot,
+  viewport-only changed-file list, checkboxes, message field, and streaming
+  PTY command tabs. No new persistent state or caches.
+- Matched the current card style with surface/elevated tokens, subtle rules,
+  rounded controls, and an accent Commit button. Compact panel geometry keeps
+  the message and both actions usable at the minimum window size.
+- Restored wheel scrolling and post-render Commit/Push dispatch through the
+  active Source Control rect.
+- Live scratch-repo smoke: unchecked `b.txt`, committed only `a.txt` with
+  `feat: source control smoke`, verified `b.txt` remained modified, then pushed
+  successfully to a local bare remote.
+- Verification: `cargo test` **235 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Five-viewer/two-shell stress with the card
+  active and a 400×300 → 1440×900 resize: **62,140 KiB = 60.7 MiB RSS**,
+  **54,425 KiB = 53.1 MiB PSS**.
 
 ## Notes
 

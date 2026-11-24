@@ -361,7 +361,6 @@ pub fn stage_and_commit_command(paths: &[PathBuf], message: &str) -> String {
 }
 
 /// The Push action's shell command.
-#[allow(dead_code)] // retained for the future Source Control card
 pub const PUSH_COMMAND: &str = "git push";
 
 // ---- unified=0 diff parsing ----
