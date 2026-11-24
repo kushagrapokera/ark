@@ -88,6 +88,7 @@ impl EventListener for NoopListener {}
 pub enum TermError {
     Io(std::io::Error),
     Pty(anyhow::Error),
+    NoActiveTerminal,
     TabLimit { max: usize },
 }
 
@@ -96,6 +97,7 @@ impl std::fmt::Display for TermError {
         match self {
             TermError::Io(e) => write!(f, "{e}"),
             TermError::Pty(e) => write!(f, "{e}"),
+            TermError::NoActiveTerminal => write!(f, "no active terminal to duplicate"),
             TermError::TabLimit { max } => {
                 write!(f, "terminal tab limit reached ({max}); close a tab first")
             }
@@ -129,9 +131,128 @@ pub fn default_shell() -> PathBuf {
     shell_registry().into_iter().next().unwrap_or_else(|| PathBuf::from("/bin/bash"))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalProfile {
+    Bash,
+    Fish,
+    JavaScriptDebug,
+}
+
+impl TerminalProfile {
+    pub fn program(self) -> Option<PathBuf> {
+        match self {
+            Self::Bash => ["/bin/bash", "/usr/bin/bash"]
+                .into_iter()
+                .map(PathBuf::from)
+                .find(|path| path.is_file()),
+            Self::Fish => ["/usr/bin/fish", "/bin/fish"]
+                .into_iter()
+                .map(PathBuf::from)
+                .find(|path| path.is_file()),
+            Self::JavaScriptDebug => program_on_path("node"),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Fish => "fish",
+            Self::JavaScriptDebug => "JavaScript Debug Terminal",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalMenuAction {
+    NewTerminal,
+    NewTerminalWindow,
+    OpenProfile(TerminalProfile),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TerminalMenuOption {
+    pub label: &'static str,
+    pub action: TerminalMenuAction,
+    pub separator_before: bool,
+}
+
+pub fn terminal_menu_options() -> &'static [TerminalMenuOption] {
+    &[
+        TerminalMenuOption {
+            label: "New Terminal",
+            action: TerminalMenuAction::NewTerminal,
+            separator_before: false,
+        },
+        TerminalMenuOption {
+            label: "New Terminal Window",
+            action: TerminalMenuAction::NewTerminalWindow,
+            separator_before: false,
+        },
+        TerminalMenuOption {
+            label: "bash",
+            action: TerminalMenuAction::OpenProfile(TerminalProfile::Bash),
+            separator_before: true,
+        },
+        TerminalMenuOption {
+            label: "fish",
+            action: TerminalMenuAction::OpenProfile(TerminalProfile::Fish),
+            separator_before: false,
+        },
+        TerminalMenuOption {
+            label: "JavaScript Debug Terminal",
+            action: TerminalMenuAction::OpenProfile(TerminalProfile::JavaScriptDebug),
+            separator_before: false,
+        },
+    ]
+}
+
+pub fn program_on_path(name: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+pub fn external_terminal_program() -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("TERMINAL") {
+        let path = PathBuf::from(configured);
+        if path.is_file() {
+            return Some(path);
+        }
+        if let Some(path) = program_on_path(path.to_str()?) {
+            return Some(path);
+        }
+    }
+    ["konsole", "gnome-terminal", "alacritty", "kitty", "xterm"]
+        .into_iter()
+        .find_map(program_on_path)
+}
+
+pub fn configure_external_terminal(command: &mut std::process::Command, program: &Path, root: &Path) {
+    command.current_dir(root);
+    match program.file_name().and_then(|name| name.to_str()) {
+        Some("konsole") => {
+            command.arg("--workdir").arg(root);
+        }
+        Some("gnome-terminal") => {
+            command.arg(format!("--working-directory={}", root.display()));
+        }
+        Some("alacritty") => {
+            command.arg("--working-directory").arg(root);
+        }
+        Some("kitty") => {
+            command.arg("-d").arg(root);
+        }
+        _ => {}
+    }
+}
+
 /// One terminal tab: PTY + model + bounded output channel.
 pub struct Terminal {
     shell: PathBuf,
+    /// Executable actually launched (shell, node, or a git action's shell).
+    program: PathBuf,
+    /// Launch arguments retained so `+` can clone the active terminal.
+    args: Vec<String>,
     /// Tab label: the shell's file name for interactive tabs, or the action
     /// name for command tabs ("git commit", "git push").
     label: String,
@@ -253,6 +374,32 @@ impl Terminal {
         })
     }
 
+    /// Spawn a labeled interactive program (for example Node's JavaScript
+    /// console) in a PTY rooted at `root`.
+    pub fn spawn_program(
+        root: &Path,
+        program: &Path,
+        label: &str,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<Terminal, TermError> {
+        Self::spawn_launch_with(root, program, &[], Some(label), size, move || {
+            let _ = proxy.send_event(Wake::PtyData);
+        })
+    }
+
+    fn spawn_launch_with(
+        root: &Path,
+        program: &Path,
+        args: &[String],
+        label: Option<&str>,
+        size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<Terminal, TermError> {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        Self::spawn_inner(root, program, label, size, &args, wake)
+    }
+
     /// The spawn core with a pluggable wake (tests pass a no-op).
     fn spawn_with(
         root: &Path,
@@ -358,6 +505,8 @@ impl Terminal {
         });
         Ok(Terminal {
             shell: shell.to_path_buf(),
+            program: shell.to_path_buf(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             label,
             master: Some(pair.master),
             writer,
@@ -376,6 +525,10 @@ impl Terminal {
             .file_name()
             .map(|n| n.to_str().unwrap_or("?"))
             .unwrap_or("?")
+    }
+
+    pub fn program(&self) -> &Path {
+        &self.program
     }
 
     /// The tab-strip label (shell name or the action label for command tabs).
@@ -875,6 +1028,8 @@ pub fn encode_mouse_report(
 pub struct TerminalTabs {
     pub tabs: Vec<Terminal>,
     pub active: usize,
+    /// Terminal profile dropdown visibility (bounded UI state).
+    pub menu_open: bool,
 }
 
 impl TerminalTabs {
@@ -902,9 +1057,73 @@ impl TerminalTabs {
         size: GridSize,
         proxy: EventLoopProxy<Wake>,
     ) -> Result<(), TermError> {
-        self.ensure_capacity()?;
         let shell = default_shell();
-        let term = Terminal::spawn(root, &shell, size, proxy)?;
+        self.open_shell(root, &shell, size, proxy)
+    }
+
+    /// Spawn a specific shell as a new active tab.
+    pub fn open_shell(
+        &mut self,
+        root: &Path,
+        shell: &Path,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<(), TermError> {
+        self.ensure_capacity()?;
+        let term = Terminal::spawn(root, shell, size, proxy)?;
+        self.push_tab(term);
+        Ok(())
+    }
+
+    /// Spawn a labeled interactive program as a new active tab.
+    pub fn open_program(
+        &mut self,
+        root: &Path,
+        program: &Path,
+        label: &str,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<(), TermError> {
+        self.ensure_capacity()?;
+        let term = Terminal::spawn_program(root, program, label, size, proxy)?;
+        self.push_tab(term);
+        Ok(())
+    }
+
+    /// Clone the active terminal's executable, arguments, and label.
+    pub fn duplicate_active(
+        &mut self,
+        root: &Path,
+        size: GridSize,
+        proxy: EventLoopProxy<Wake>,
+    ) -> Result<(), TermError> {
+        self.duplicate_active_inner(root, size, move || {
+            let _ = proxy.send_event(Wake::PtyData);
+        })
+    }
+
+    #[cfg(test)]
+    pub fn duplicate_active_with(
+        &mut self,
+        root: &Path,
+        size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<(), TermError> {
+        self.duplicate_active_inner(root, size, wake)
+    }
+
+    fn duplicate_active_inner(
+        &mut self,
+        root: &Path,
+        size: GridSize,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<(), TermError> {
+        self.ensure_capacity()?;
+        let active = self.active().ok_or(TermError::NoActiveTerminal)?;
+        let program = active.program().to_path_buf();
+        let args = active.args.clone();
+        let label = active.label.clone();
+        let term = Terminal::spawn_launch_with(root, &program, &args, Some(&label), size, wake)?;
         self.push_tab(term);
         Ok(())
     }
@@ -941,18 +1160,23 @@ impl TerminalTabs {
 
     /// Close the active tab: the Terminal's Drop tears down the PTY (SIGHUP
     /// to the process group + kill backstop + reap).
-    pub fn close_active(&mut self) {
-        if self.tabs.is_empty() {
+    /// Close a tab by index, clamping the active selection to a valid neighbor.
+    pub fn close_at(&mut self, index: usize) {
+        if index >= self.tabs.len() {
             return;
         }
-        self.tabs.remove(self.active);
+        self.tabs.remove(index);
         log::info!("terminal tab closed ({} left)", self.tabs.len());
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
+        } else if self.active > index {
+            self.active -= 1;
+        }
+        if self.tabs.is_empty() {
+            self.menu_open = false;
         }
     }
 
-    #[allow(dead_code)] // retained for future terminal toolbar labels
     pub fn active(&self) -> Option<&Terminal> {
         self.tabs.get(self.active)
     }
@@ -1107,6 +1331,74 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), reg.len());
+    }
+
+    #[test]
+    fn terminal_menu_excludes_github_and_split() {
+        let labels: Vec<_> = terminal_menu_options()
+            .iter()
+            .map(|option| option.label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "New Terminal",
+                "New Terminal Window",
+                "bash",
+                "fish",
+                "JavaScript Debug Terminal",
+            ]
+        );
+    }
+
+    #[test]
+    fn duplicate_active_reuses_the_current_launch_program() {
+        let d = temp_dir("duplicate-terminal");
+        let size = GridSize { cols: 80, rows: 24 };
+        let mut tabs = TerminalTabs::default();
+        tabs.tabs.push(
+            Terminal::spawn_program_with(d.path(), Path::new("/bin/cat"), "first", size, || {})
+                .expect("spawn test terminal"),
+        );
+        tabs.active = 0;
+
+        tabs.duplicate_active_with(d.path(), size, || {})
+            .expect("duplicate active terminal");
+        assert_eq!(tabs.tabs.len(), 2);
+        assert_eq!(tabs.active, 1);
+        assert_eq!(tabs.active().expect("active").label(), "first");
+        assert_eq!(tabs.active().expect("active").program(), Path::new("/bin/cat"));
+    }
+
+    #[test]
+    fn closing_a_tab_by_index_selects_a_valid_neighbor() {
+        let d = temp_dir("close-terminal-index");
+        let size = GridSize { cols: 80, rows: 24 };
+        let mut tabs = TerminalTabs::default();
+        for label in ["first", "second", "third"] {
+            tabs.tabs.push(
+                Terminal::spawn_program_with(d.path(), Path::new("/bin/cat"), label, size, || {})
+                    .expect("spawn test terminal"),
+            );
+        }
+        tabs.active = 2;
+        tabs.close_at(1);
+        assert_eq!(tabs.tabs.len(), 2);
+        assert_eq!(tabs.active, 1);
+        assert_eq!(tabs.active().expect("active").label(), "third");
+    }
+
+    #[test]
+    fn external_terminal_command_uses_the_project_root() {
+        let root = Path::new("/tmp/ark-terminal-window");
+        let mut command = std::process::Command::new("konsole");
+        configure_external_terminal(&mut command, Path::new("/usr/bin/konsole"), root);
+        assert_eq!(command.get_current_dir(), Some(root));
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.windows(2).any(|pair| pair == ["--workdir", "/tmp/ark-terminal-window"]));
     }
 
     #[test]

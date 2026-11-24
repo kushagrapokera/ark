@@ -171,7 +171,7 @@ fn responsive_layout_prioritizes_editor_on_small_windows() {
         small.term_dock.h, 140.0,
         "compact width shrinks the terminal"
     );
-    assert_eq!(small.terminal_sessions.w, 0.0);
+    assert!(small.term_grid.w > 0.0);
 
     let short = app_layout_with_commit(600.0, 480.0, 304.0, true, true);
     assert_eq!(short.explorer_card.w, 0.0);
@@ -281,8 +281,9 @@ fn compact_terminal_plus_button_opens_the_first_shell() {
     let layout = app_layout_with_commit(480.0, 640.0, 304.0, false, true);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(480, 640);
-    let plus_x = layout.term_dock.x + layout.term_dock.w - 58.0;
-    let plus_y = layout.term_dock.y + layout.terminal_toolbar.h / 2.0;
+    let plus = chrome::terminal_actions(&layout).plus;
+    let plus_x = plus.x + plus.w / 2.0;
+    let plus_y = plus.y + plus.h / 2.0;
     let effects = draw_static_frame(
         &mut canvas,
         &mut text,
@@ -1131,17 +1132,8 @@ fn app_layout_terminal_card_reserves_the_bottom() {
         Rect {
             x: 320.0,
             y: 548.0,
-            w: 652.0,
+            w: 688.0,
             h: 180.0
-        }
-    );
-    assert_eq!(
-        l.terminal_sessions,
-        Rect {
-            x: 980.0,
-            y: 548.0,
-            w: 36.0,
-            h: 188.0
         }
     );
     assert_eq!(
@@ -1203,10 +1195,40 @@ fn explorer_footer_is_removed_and_tree_uses_the_space() {
 }
 
 #[test]
-fn terminal_toolbar_only_keeps_the_terminal_tab() {
-    for width in [300.0, 400.0, 800.0] {
-        assert_eq!(chrome::terminal_tab_labels(width), &["TERMINAL"]);
-    }
+fn terminal_toolbar_uses_tabs_profiles_and_no_split_or_more() {
+    let labels: Vec<_> = term::terminal_menu_options()
+        .iter()
+        .map(|option| option.label)
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            "New Terminal",
+            "New Terminal Window",
+            "bash",
+            "fish",
+            "JavaScript Debug Terminal",
+        ]
+    );
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, true, true);
+    let (menu, rows) = chrome::terminal_menu_layout(&layout).expect("terminal menu");
+    assert_eq!(rows.len(), 5);
+    assert!(menu.y > layout.terminal_toolbar.y + layout.terminal_toolbar.h);
+    let tabs = chrome::terminal_tab_rects(&layout, 3);
+    assert_eq!(tabs.len(), 3);
+    assert!(tabs
+        .windows(2)
+        .all(|pair| pair[0].x + pair[0].w < pair[1].x));
+    let actions = chrome::terminal_actions(&layout);
+    assert!(tabs.last().expect("tab").x + tabs.last().expect("tab").w < actions.plus.x);
+    assert_eq!(
+        chrome::terminal_action_icons(),
+        &[
+            crate::icons::Icon::Plus,
+            crate::icons::Icon::ChevronDown,
+            crate::icons::Icon::Trash,
+        ]
+    );
 }
 
 #[test]
@@ -1267,9 +1289,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             &mut viewer_scrollbar,
         )
     };
-    assert!(!effects.open_terminal && !effects.close_terminal);
-    let (plus, _) = chrome::terminal_actions(&layout);
-    let plus = plus.expect("terminal toolbar action");
+    assert!(!effects.open_terminal && effects.close_terminal.is_none());
+    let plus = chrome::terminal_actions(&layout).plus;
     assert!(
         count_color_in(
             &canvas,
@@ -1298,8 +1319,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             active_path: None,
             activity: ActivityPanel::Explorer,
             pointer: Pointer {
-                x: 898.0,
-                y: 522.0,
+                x: plus.x + plus.w / 2.0,
+                y: plus.y + plus.h / 2.0,
                 down: false,
                 click: true,
             },
@@ -1342,8 +1363,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
 }
 
 #[test]
-fn vertical_terminal_sessions_switch_the_active_pty() {
-    let d = temp_dir("terminal-sessions");
+fn terminal_tabs_select_and_close_by_index() {
+    let d = temp_dir("terminal-tabs-frame");
     let size = term::GridSize { cols: 80, rows: 24 };
     let mut terms = TerminalTabs::default();
     for label in ["first", "second"] {
@@ -1353,8 +1374,7 @@ fn vertical_terminal_sessions_switch_the_active_pty() {
         );
     }
     terms.active = 0;
-    assert_eq!(terms.tabs.len(), 2);
-    let (_tree_dir, mut tree) = scene_fixture("terminal-sessions-frame");
+    let (_tree_dir, mut tree) = scene_fixture("terminal-tabs-frame-tree");
     let theme = frame_theme();
     let layout = app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
     let mut text = TextSystem::new();
@@ -1363,67 +1383,119 @@ fn vertical_terminal_sessions_switch_the_active_pty() {
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
     let mut viewer_scrollbar = Scrollbar::default();
-    let sessions = layout.terminal_sessions;
-    let click = Pointer {
-        x: sessions.x + 18.0,
-        y: sessions.y + 8.0 + 32.0 + 12.0,
-        down: false,
-        click: true,
+    let tabs = chrome::terminal_tab_rects(&layout, 2);
+    let mut draw = |pointer: Pointer, terms: &mut TerminalTabs, canvas: &mut Canvas, text: &mut TextSystem| {
+        draw_frame(
+            &mut Frame {
+                canvas,
+                text,
+                theme: &theme,
+                scale: 1.0,
+                activity_pulse: 0.0,
+                animation_time: 0.0,
+                title: "ark",
+                root: Path::new("/"),
+                open_files: &[],
+                active_path: None,
+                activity: ActivityPanel::Explorer,
+                pointer,
+                dbl_click: false,
+                viewer: None,
+                viewer_error: None,
+                viewer_flash: false,
+                highlighter: &Highlighter::new(),
+                git: None,
+                file_diff: None,
+                commit: None,
+                config: None,
+                config_error: None,
+                config_error_path: None,
+                terms: Some(terms),
+                term_focused: false,
+                new_item: None,
+                groups: None,
+                active_group: 0,
+                group_viewers: [None, None],
+                group_flash: [false, false],
+                group_scrollbars: None,
+                group_split: None,
+                group_split_drag: None,
+            },
+            &layout,
+            &mut tree,
+            &mut split,
+            &mut split_drag,
+            &mut scrollbar,
+            &mut viewer_scrollbar,
+        )
     };
-    assert!(Rect {
-        x: sessions.x + 6.0,
-        y: sessions.y + 40.0,
-        w: 24.0,
-        h: 24.0
-    }
-    .contains(click.x, click.y));
-    draw_frame(
-        &mut Frame {
-            canvas: &mut canvas,
-            text: &mut text,
-            theme: &theme,
-            scale: 1.0,
-            activity_pulse: 0.0,
-            animation_time: 0.0,
-            title: "ark",
-            root: Path::new("/"),
-            open_files: &[],
-            active_path: None,
-            activity: ActivityPanel::Explorer,
-            pointer: click,
-            dbl_click: false,
-            viewer: None,
-            viewer_error: None,
-            viewer_flash: false,
-            highlighter: &Highlighter::new(),
-            git: None,
-            file_diff: None,
-            commit: None,
-            config: None,
-            config_error: None,
-            config_error_path: None,
-            terms: Some(&mut terms),
-            term_focused: false,
-            new_item: None,
-            groups: None,
-            active_group: 0,
-            group_viewers: [None, None],
-            group_flash: [false, false],
-            group_scrollbars: None,
-            group_split: None,
-            group_split_drag: None,
+    let second = tabs[1];
+    let effects = draw(
+        Pointer {
+            x: second.x + 20.0,
+            y: second.y + second.h / 2.0,
+            down: false,
+            click: true,
         },
-        &layout,
-        &mut tree,
-        &mut split,
-        &mut split_drag,
-        &mut scrollbar,
-        &mut viewer_scrollbar,
+        &mut terms,
+        &mut canvas,
+        &mut text,
+    );
+    assert_eq!(effects.terminal_select, Some(1));
+
+    terms.menu_open = true;
+    let _ = draw(
+        Pointer::default(),
+        &mut terms,
+        &mut canvas,
+        &mut text,
+    );
+    let (_, menu_rows) = chrome::terminal_menu_layout(&layout).expect("menu layout");
+    let first_row = menu_rows[0];
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.fg,
+            first_row.x as u32,
+            first_row.y as u32,
+            (first_row.x + first_row.w) as u32,
+            (first_row.y + first_row.h) as u32,
+        ) > 0,
+        "profile menu paints above the active terminal grid"
+    );
+
+    let bash_row = menu_rows[2];
+    let effects = draw(
+        Pointer {
+            x: bash_row.x + 20.0,
+            y: bash_row.y + bash_row.h / 2.0,
+            down: false,
+            click: true,
+        },
+        &mut terms,
+        &mut canvas,
+        &mut text,
     );
     assert_eq!(
-        terms.active, 1,
-        "second session icon selects the second PTY"
+        effects.terminal_menu_action,
+        Some(term::TerminalMenuAction::OpenProfile(
+            term::TerminalProfile::Bash
+        ))
     );
+
+    let first = tabs[0];
+    let effects = draw(
+        Pointer {
+            x: first.x + first.w - 10.0,
+            y: first.y + first.h / 2.0,
+            down: false,
+            click: true,
+        },
+        &mut terms,
+        &mut canvas,
+        &mut text,
+    );
+    assert_eq!(effects.close_terminal, Some(0));
 }
 
 // ---- status line ----

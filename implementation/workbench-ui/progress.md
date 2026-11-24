@@ -297,6 +297,30 @@ five open viewers, two shells + fake agent tab):
   `smem` and `/usr/bin/time` are unavailable, so `/proc` status and
   `smaps_rollup` supplied the measurements.
 
+## Reference-style terminal tabs
+
+- Replaced the vertical session icons with a labeled terminal tab strip. Tabs
+  select individually, show a close button, and share the existing eight-PTY
+  cap; the active PTY keeps its bounded grid and scrollback.
+- `+` clones the active terminal's executable, arguments, and label (bash → bash,
+  fish → fish, Node → Node). With no open terminal it starts the default shell.
+- The dropdown contains New Terminal, New Terminal Window, bash, fish, and
+  JavaScript Debug Terminal. Split Terminal, GitHub CLI, and the three-dot menu
+  are intentionally absent. The menu paints above the live terminal grid.
+- New Terminal Window launches an available external terminal emulator in the
+  project root; JavaScript Debug Terminal runs Node's interactive console.
+  New Terminal and New Terminal Window also honor the displayed Ctrl+Shift+`
+  and Ctrl+Shift+Alt+` shortcuts.
+- Removed the right-side session strip, returning its width to the terminal grid.
+- Verification: `cargo test` **308 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live smoke verified bash/fish/Node creation,
+  bash/fish/Node cloning, tab switching, per-tab close, and a Konsole window in
+  the project root.
+- Worst-case stress with five large viewers and eight open terminal tabs at
+  1440×900 measured **77,500 KiB RSS / 69,448 KiB PSS**, below the 100 MiB
+  budget. `smem` and `/usr/bin/time` are unavailable, so `/proc` status and
+  `smaps_rollup` supplied the measurements.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

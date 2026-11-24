@@ -36,6 +36,7 @@ pub enum Icon {
     NewFile,
     NewFolder,
     DragHandle,
+    Trash,
     Bell,
     Check,
     Sync,
@@ -46,7 +47,6 @@ pub enum Icon {
     PanelLeft,
     PanelBottom,
     PanelRight,
-    ChevronUp,
     ChevronLeft,
 }
 
@@ -422,12 +422,21 @@ pub fn draw(
             }
             pb.finish().expect("valid drag handle path")
         }
-        Icon::ChevronUp => {
+        Icon::Trash => {
             let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.3 * s, cy + 0.2 * s);
-            pb.line_to(cx, cy - 0.2 * s);
-            pb.line_to(cx + 0.3 * s, cy + 0.2 * s);
-            pb.finish().expect("valid chevron up path")
+            pb.move_to(cx - 0.32 * s, cy - 0.24 * s);
+            pb.line_to(cx + 0.32 * s, cy - 0.24 * s);
+            pb.move_to(cx - 0.20 * s, cy - 0.34 * s);
+            pb.line_to(cx + 0.20 * s, cy - 0.34 * s);
+            pb.move_to(cx - 0.12 * s, cy - 0.34 * s);
+            pb.line_to(cx - 0.12 * s, cy - 0.42 * s);
+            pb.line_to(cx + 0.12 * s, cy - 0.42 * s);
+            pb.line_to(cx + 0.12 * s, cy - 0.34 * s);
+            pb.move_to(cx - 0.24 * s, cy - 0.20 * s);
+            pb.line_to(cx - 0.16 * s, cy + 0.36 * s);
+            pb.line_to(cx + 0.16 * s, cy + 0.36 * s);
+            pb.line_to(cx + 0.24 * s, cy - 0.20 * s);
+            pb.finish().expect("valid trash path")
         }
         Icon::ChevronLeft => {
             let mut pb = PathBuilder::new();
@@ -442,7 +451,6 @@ pub fn draw(
         Icon::File
         | Icon::ChevronRight
         | Icon::ChevronDown
-        | Icon::ChevronUp
         | Icon::ChevronLeft
         | Icon::SourceControl
         | Icon::Terminal
@@ -459,6 +467,7 @@ pub fn draw(
         | Icon::NewFile
         | Icon::NewFolder
         | Icon::DragHandle
+        | Icon::Trash
         | Icon::Bell
         | Icon::Check
         | Icon::Sync

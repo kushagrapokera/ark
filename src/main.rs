@@ -921,10 +921,42 @@ impl App {
         }
         self.last_render = Some(Instant::now());
         if effects.open_terminal {
-            self.open_terminal_tab();
+            self.duplicate_terminal_tab();
         }
-        if effects.close_terminal {
-            self.close_terminal_tab();
+        if let Some(index) = effects.close_terminal {
+            self.close_terminal_tab_at(index);
+        }
+        if let Some(index) = effects.terminal_select {
+            if index < self.terms.tabs.len() {
+                self.terms.active = index;
+                self.terms.menu_open = false;
+                self.term_focused = true;
+                self.activity = frame::ActivityPanel::Terminal;
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+        }
+        if effects.terminal_menu_toggle {
+            self.terms.menu_open = !self.terms.menu_open;
+            self.term_focused = !self.terms.menu_open && self.terms.is_open();
+            self.damage.mark_full();
+            self.request_redraw();
+        }
+        if effects.terminal_menu_dismiss && self.terms.menu_open {
+            self.terms.menu_open = false;
+            self.term_focused = self.terms.is_open();
+            self.damage.mark_full();
+            self.request_redraw();
+        }
+        if let Some(action) = effects.terminal_menu_action {
+            self.terms.menu_open = false;
+            match action {
+                term::TerminalMenuAction::NewTerminal => self.open_terminal_tab(),
+                term::TerminalMenuAction::NewTerminalWindow => self.open_terminal_window(),
+                term::TerminalMenuAction::OpenProfile(profile) => {
+                    self.open_terminal_profile(profile)
+                }
+            }
         }
         if effects.new_file {
             self.request_new_item(NewItemKind::File);
@@ -1084,21 +1116,83 @@ impl App {
         let advance = f64::from(m.advance);
         let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
         match self.terms.open(&self.root, size, proxy) {
-            Ok(()) => {
-                self.activity = frame::ActivityPanel::Terminal;
-                self.term_focused = true;
-                self.commit.message.focused = false;
-                self.damage.mark_full();
-                self.request_redraw();
-            }
+            Ok(()) => self.focus_terminal(),
             Err(e) => error!("terminal open failed: {e}"),
         }
     }
 
-    /// Close the active terminal tab and return focus to the remaining editor
-    /// surface when the last shell is gone.
-    fn close_terminal_tab(&mut self) {
-        self.terms.close_active();
+    /// `+` clones the active terminal; with no tabs it opens the default shell.
+    fn duplicate_terminal_tab(&mut self) {
+        if !self.terms.is_open() {
+            self.open_terminal_tab();
+            return;
+        }
+        let Some(proxy) = self.proxy.clone() else {
+            error!("terminal duplicate failed: no wake proxy");
+            return;
+        };
+        let Some(grid) = self.terminal_grid_for_new_tab() else {
+            return;
+        };
+        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+        let advance = f64::from(m.advance);
+        let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
+        match self.terms.duplicate_active(&self.root, size, proxy) {
+            Ok(()) => self.focus_terminal(),
+            Err(e) => error!("terminal duplicate failed: {e}"),
+        }
+    }
+
+    fn open_terminal_profile(&mut self, profile: term::TerminalProfile) {
+        let Some(program) = profile.program() else {
+            error!("terminal profile {} is unavailable", profile.label());
+            return;
+        };
+        let Some(proxy) = self.proxy.clone() else {
+            error!("terminal profile open failed: no wake proxy");
+            return;
+        };
+        let Some(grid) = self.terminal_grid_for_new_tab() else {
+            return;
+        };
+        let m = self.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+        let advance = f64::from(m.advance);
+        let size = term::GridSize::fit(grid.w, grid.h, advance, viewer::LINE_H);
+        match self
+            .terms
+            .open_program(&self.root, &program, profile.label(), size, proxy)
+        {
+            Ok(()) => self.focus_terminal(),
+            Err(e) => error!("terminal profile {} failed: {e}", profile.label()),
+        }
+    }
+
+    fn open_terminal_window(&mut self) {
+        let Some(program) = term::external_terminal_program() else {
+            error!("terminal window open failed: no terminal emulator found");
+            return;
+        };
+        let mut command = std::process::Command::new(&program);
+        term::configure_external_terminal(&mut command, &program, &self.root);
+        match command.spawn() {
+            Ok(_) => info!("opened terminal window with {}", program.display()),
+            Err(e) => error!("terminal window open failed: {e}"),
+        }
+    }
+
+    fn focus_terminal(&mut self) {
+        self.terms.menu_open = false;
+        self.activity = frame::ActivityPanel::Terminal;
+        self.term_focused = true;
+        self.commit.message.focused = false;
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Close a terminal tab by index and restore focus when the last one exits.
+    fn close_terminal_tab_at(&mut self, index: usize) {
+        self.terms.menu_open = false;
+        self.terms.close_at(index);
         if !self.terms.is_open() {
             self.pane = self.pane_after_terminals();
             self.activity = if self.pane == PaneMode::Config {
@@ -1110,6 +1204,14 @@ impl App {
         }
         self.damage.mark_full();
         self.request_redraw();
+    }
+
+    /// Close the active terminal tab and return focus to the remaining editor
+    /// surface when the last shell is gone.
+    fn close_terminal_tab(&mut self) {
+        if self.terms.is_open() {
+            self.close_terminal_tab_at(self.terms.active);
+        }
     }
 
     /// M12: activity-bar focus routing. The bar highlights the active panel;
@@ -2090,9 +2192,30 @@ impl ApplicationHandler<Wake> for App {
                     }
                     return;
                 }
+                if self.terms.menu_open {
+                    self.terms.menu_open = false;
+                    self.term_focused = self.terms.is_open();
+                    self.damage.mark_full();
+                    self.request_redraw();
+                    return;
+                }
                 let ctrl = self.modifiers.state().control_key();
                 // App-level shortcuts: work whether or not the shell has focus.
                 if ctrl {
+                    let state = self.modifiers.state();
+                    if state.shift_key()
+                        && matches!(
+                            &event.logical_key,
+                            winit::keyboard::Key::Character(s) if s == "`" || s == "~"
+                        )
+                    {
+                        if state.alt_key() {
+                            self.open_terminal_window();
+                        } else {
+                            self.open_terminal_tab();
+                        }
+                        return;
+                    }
                     if let winit::keyboard::Key::Character(s) = &event.logical_key {
                         match s.as_str() {
                             "t" | "T" => {

@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use cosmic_text::Weight;
 
 use crate::icons::{self, Icon};
-use crate::render::ColorRgb;
-use crate::text::TextStyle;
+use crate::render::{Canvas, ColorRgb, Theme};
+use crate::term::{terminal_menu_options, TerminalMenuAction};
+use crate::text::{TextStyle, TextSystem};
 use crate::tree::{FileTree, CHEVRON_ZONE, INDENT_PX, ROW_H, TRACK_W};
-use crate::ui::{draw_button, Press, Rect};
+use crate::ui::Rect;
 
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, CARD_RADIUS};
 
@@ -823,14 +824,235 @@ pub(super) fn draw_terminal_resize_handle(f: &mut Frame, layout: &AppLayout) {
     );
 }
 
-pub(super) fn terminal_tab_labels(_width: f64) -> &'static [&'static str] {
-    &["TERMINAL"]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TerminalActions {
+    pub plus: Rect,
+    pub menu: Rect,
+    pub close: Rect,
 }
 
-pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> (bool, bool) {
+impl Default for TerminalActions {
+    fn default() -> Self {
+        Self {
+            plus: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
+            menu: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
+            close: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct TerminalChromeEffects {
+    pub open: bool,
+    pub close: Option<usize>,
+    pub select: Option<usize>,
+    pub menu_toggle: bool,
+    pub menu_action: Option<TerminalMenuAction>,
+    pub menu_dismiss: bool,
+}
+
+pub(super) fn terminal_action_icons() -> &'static [Icon] {
+    &[Icon::Plus, Icon::ChevronDown, Icon::Trash]
+}
+
+pub(super) fn terminal_actions(layout: &AppLayout) -> TerminalActions {
+    let pane = layout.term_dock;
+    let toolbar = layout.terminal_toolbar;
+    if pane.w <= 0.0 || pane.h <= 0.0 || toolbar.h < 20.0 {
+        return TerminalActions::default();
+    }
+    let y = pane.y + (toolbar.h - 20.0) / 2.0;
+    let close_x = pane.x + pane.w - 28.0;
+    let menu_x = close_x - 24.0;
+    let plus_x = menu_x - 24.0;
+    TerminalActions {
+        plus: Rect {
+            x: plus_x,
+            y,
+            w: 20.0,
+            h: 20.0,
+        },
+        menu: Rect {
+            x: menu_x,
+            y,
+            w: 20.0,
+            h: 20.0,
+        },
+        close: Rect {
+            x: close_x,
+            y,
+            w: 20.0,
+            h: 20.0,
+        },
+    }
+}
+
+pub(super) fn terminal_tab_rects(layout: &AppLayout, count: usize) -> Vec<Rect> {
+    if count == 0 || layout.term_dock.w <= 0.0 || layout.terminal_toolbar.h < 20.0 {
+        return Vec::new();
+    }
+    let actions = terminal_actions(layout);
+    let toolbar = layout.terminal_toolbar;
+    let start = toolbar.x + 8.0;
+    let available = (actions.plus.x - 8.0 - start).max(0.0);
+    if available < 24.0 {
+        return Vec::new();
+    }
+    let gap = 2.0;
+    let width = ((available - gap * (count - 1) as f64) / count as f64).clamp(24.0, 140.0);
+    let total = width * count as f64 + gap * (count - 1) as f64;
+    let width = if total > available {
+        ((available - gap * (count - 1) as f64) / count as f64).max(1.0)
+    } else {
+        width
+    };
+    (0..count)
+        .map(|index| Rect {
+            x: start + index as f64 * (width + gap),
+            y: toolbar.y + 4.0,
+            w: width,
+            h: toolbar.h - 8.0,
+        })
+        .collect()
+}
+
+pub(super) fn terminal_tab_close_rect(tab: Rect) -> Rect {
+    Rect {
+        x: tab.x + tab.w - 18.0,
+        y: tab.y + 4.0,
+        w: 14.0,
+        h: tab.h - 8.0,
+    }
+}
+
+pub(super) fn terminal_menu_layout(layout: &AppLayout) -> Option<(Rect, Vec<Rect>)> {
+    let pane = layout.term_dock;
+    if pane.w <= 0.0 || pane.h <= 0.0 {
+        return None;
+    }
+    let actions = terminal_actions(layout);
+    let width = 260.0_f64.min(pane.w - 16.0).max(120.0);
+    let row_h = 28.0;
+    let height = row_h * terminal_menu_options().len() as f64 + 8.0;
+    let below = layout.terminal_toolbar.y + layout.terminal_toolbar.h + 4.0;
+    let y = if below + height <= pane.y + pane.h - 4.0 {
+        below
+    } else {
+        (layout.terminal_toolbar.y - 4.0 - height).max(layout.workbench.y + 4.0)
+    };
+    let x = (actions.menu.x + actions.menu.w / 2.0 - width / 2.0)
+        .max(pane.x + 4.0)
+        .min(pane.x + pane.w - width - 4.0);
+    let panel = Rect {
+        x,
+        y,
+        w: width,
+        h: height,
+    };
+    let rows = terminal_menu_options()
+        .iter()
+        .enumerate()
+        .map(|(index, _)| Rect {
+            x: x + 4.0,
+            y: y + 4.0 + index as f64 * row_h,
+            w: width - 8.0,
+            h: row_h,
+        })
+        .collect();
+    Some((panel, rows))
+}
+
+#[allow(clippy::too_many_arguments)] // explicit raster context and tab state
+fn draw_terminal_tab(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    scale: f64,
+    rect: Rect,
+    label: &str,
+    active: bool,
+    closable: bool,
+) {
+    if active {
+        canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, theme.surface_hover, scale);
+        canvas.fill_rect(
+            rect.x,
+            rect.y + rect.h - 2.0,
+            rect.w,
+            2.0,
+            theme.accent,
+            scale,
+        );
+    }
+    let compact = rect.w < 64.0;
+    let icon_x = if compact {
+        rect.x + rect.w / 2.0
+    } else {
+        rect.x + 12.0
+    };
+    icons::draw(
+        canvas.pixmap_mut(),
+        Icon::Terminal,
+        (icon_x * scale) as f32,
+        ((rect.y + rect.h / 2.0) * scale) as f32,
+        (12.0 * scale) as f32,
+        if active { theme.fg } else { theme.text_muted },
+        scale,
+    );
+    if !compact {
+        let right = rect.x + rect.w - if closable { 22.0 } else { 8.0 };
+        let max_chars = ((right - icon_x - 12.0) / 6.6).floor().max(0.0) as usize;
+        let display = super::truncate_chars(label, max_chars);
+        let font_size = (9.0 * scale) as f32;
+        let metrics = text.mono_metrics(font_size, font_size * 1.35);
+        let baseline =
+            (rect.y + rect.h / 2.0) * scale + f64::from(metrics.ascent - metrics.descent) / 2.0;
+        text.draw_line(
+            canvas,
+            &display,
+            ((icon_x + 12.0) * scale) as f32,
+            baseline as f32,
+            TextStyle {
+                color: if active { theme.fg } else { theme.text_muted },
+                font_size,
+                weight: Weight::NORMAL,
+            },
+        );
+    }
+    if closable && rect.w >= 44.0 {
+        let close = terminal_tab_close_rect(rect);
+        icons::draw(
+            canvas.pixmap_mut(),
+            Icon::Close,
+            ((close.x + close.w / 2.0) * scale) as f32,
+            ((close.y + close.h / 2.0) * scale) as f32,
+            (10.0 * scale) as f32,
+            theme.text_muted,
+            scale,
+        );
+    }
+}
+
+pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> TerminalChromeEffects {
+    let mut effects = TerminalChromeEffects::default();
     let pane = layout.term_dock;
     if pane.h <= 0.0 {
-        return (false, false);
+        return effects;
     }
     let toolbar = layout.terminal_toolbar;
     f.canvas.fill_rect(
@@ -841,153 +1063,180 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> (bool, 
         f.theme.bg_elevated,
         f.scale,
     );
-    let mut x = toolbar.x + 12.0;
-    for label in terminal_tab_labels(pane.w) {
-        let w = 62.0;
-        text(
-            f,
-            label,
-            x,
-            toolbar.y + (toolbar.h - 9.0) / 2.0,
-            9.0,
-            f.theme.fg,
-            true,
-        );
-        f.canvas.fill_rect(
-            x,
-            toolbar.y + toolbar.h - 2.0,
-            w - 12.0,
-            2.0,
-            f.theme.accent,
-            f.scale,
-        );
-        x += w;
+    let has_terms = f.terms.as_ref().is_some_and(|terms| terms.is_open());
+    let tab_count = f.terms.as_ref().map_or(1, |terms| terms.tabs.len().max(1));
+    let active = f.terms.as_ref().map_or(0, |terms| terms.active);
+    let menu_open = f.terms.as_ref().is_some_and(|terms| terms.menu_open);
+    let tabs = terminal_tab_rects(layout, tab_count);
+    if let Some(terms) = f.terms.as_ref() {
+        for (index, rect) in tabs.iter().copied().enumerate() {
+            if let Some(term) = terms.tabs.get(index) {
+                draw_terminal_tab(
+                    f.canvas,
+                    f.text,
+                    f.theme,
+                    f.scale,
+                    rect,
+                    term.label(),
+                    index == active,
+                    true,
+                );
+            }
+        }
+    } else {
+        for rect in tabs.iter().copied() {
+            draw_terminal_tab(
+                f.canvas,
+                f.text,
+                f.theme,
+                f.scale,
+                rect,
+                "Terminal",
+                true,
+                false,
+            );
+        }
     }
 
-    if pane.w >= 700.0 {
-        text(
-            f,
-            "bash",
-            toolbar.x + toolbar.w - 210.0,
-            toolbar.y + (toolbar.h - 10.0) / 2.0,
-            10.0,
-            f.theme.fg,
-            false,
+    let actions = terminal_actions(layout);
+    let plus_hover = actions.plus.contains(f.pointer.x, f.pointer.y)
+        || actions.menu.contains(f.pointer.x, f.pointer.y);
+    if plus_hover {
+        f.canvas.fill_round_rect(
+            actions.plus.x - 2.0,
+            actions.plus.y,
+            44.0,
+            actions.plus.h,
+            4.0,
+            f.theme.surface_hover,
+            f.scale,
         );
     }
-    let (plus, close) = terminal_actions(layout);
-    let open_clicked = plus.is_some_and(|rect| {
-        draw_button(f.canvas, "", rect, f.theme, f.text, f.pointer, f.scale) == Press::Clicked
-    });
-    let close_clicked = close.is_some_and(|rect| {
-        draw_button(f.canvas, "", rect, f.theme, f.text, f.pointer, f.scale) == Press::Clicked
-    });
-    let actions: &[Icon] = match terminal_action_count(pane.w) {
-        5 => &[
-            Icon::Plus,
-            Icon::Split,
-            Icon::Close,
-            Icon::More,
-            Icon::ChevronUp,
-        ],
-        2 => &[Icon::Plus, Icon::Close],
-        _ => &[Icon::Plus],
-    };
-    let first = pane.x + pane.w - 38.0 - (actions.len() - 1) as f64 * 20.0;
-    for (index, glyph) in actions.iter().enumerate() {
+    for (glyph, rect) in terminal_action_icons()
+        .iter()
+        .copied()
+        .zip([actions.plus, actions.menu, actions.close])
+    {
         icon(
             f,
-            *glyph,
-            first + index as f64 * 20.0,
-            toolbar.y + toolbar.h / 2.0,
+            glyph,
+            rect.x + rect.w / 2.0,
+            rect.y + rect.h / 2.0,
             13.0,
             f.theme.text_muted,
         );
     }
 
-    let sessions = layout.terminal_sessions;
-    if sessions.w > 0.0 && sessions.h > 0.0 {
-        f.canvas.fill_rect(
-            sessions.x,
-            sessions.y,
-            1.0,
-            sessions.h,
-            f.theme.border_subtle,
-            f.scale,
-        );
-        let (count, active) = f
-            .terms
-            .as_ref()
-            .map(|terms| (terms.tabs.len().min(3), terms.active))
-            .unwrap_or((3, 0));
-        let visible = count.min(((sessions.h - 8.0) / 32.0).floor().max(1.0) as usize);
-        for index in 0..visible {
-            let y = sessions.y + 8.0 + index as f64 * 32.0;
-            if index == active {
-                f.canvas.fill_round_rect(
-                    sessions.x + 6.0,
-                    y,
-                    24.0,
-                    24.0,
-                    3.0,
-                    f.theme.surface_hover,
-                    f.scale,
-                );
+    if f.pointer.click {
+        if actions.plus.contains(f.pointer.x, f.pointer.y) {
+            effects.open = true;
+            effects.menu_dismiss = menu_open;
+        } else if actions.menu.contains(f.pointer.x, f.pointer.y) {
+            effects.menu_toggle = true;
+        } else if actions.close.contains(f.pointer.x, f.pointer.y) && has_terms {
+            effects.close = Some(active);
+            effects.menu_dismiss = menu_open;
+        } else {
+            for (index, rect) in tabs.iter().copied().enumerate() {
+                if !rect.contains(f.pointer.x, f.pointer.y) {
+                    continue;
+                }
+                if has_terms
+                    && index < tab_count
+                    && terminal_tab_close_rect(rect).contains(f.pointer.x, f.pointer.y)
+                {
+                    effects.close = Some(index);
+                } else if has_terms && index < tab_count {
+                    effects.select = Some(index);
+                }
+                effects.menu_dismiss = menu_open;
+                break;
             }
-            icon(
-                f,
-                Icon::Terminal,
-                sessions.x + 18.0,
-                y + 12.0,
-                14.0,
-                if index == active {
-                    f.theme.fg
-                } else {
-                    f.theme.text_muted
-                },
+        }
+    }
+
+    effects
+}
+
+/// Draw the profile menu last so terminal glyphs can never paint over it.
+pub(super) fn draw_terminal_menu(
+    f: &mut Frame,
+    layout: &AppLayout,
+    effects: &mut TerminalChromeEffects,
+) {
+    if !f.terms.as_ref().is_some_and(|terms| terms.menu_open) {
+        return;
+    }
+    let Some((panel, rows)) = terminal_menu_layout(layout) else {
+        return;
+    };
+    card(f, panel);
+    let shortcuts = ["Ctrl+Shift+`", "Ctrl+Shift+Alt+`", "", "", ""];
+    for (index, (option, row)) in terminal_menu_options()
+        .iter()
+        .zip(rows.iter().copied())
+        .enumerate()
+    {
+        if option.separator_before {
+            f.canvas.fill_rect(
+                row.x,
+                row.y,
+                row.w,
+                1.0,
+                f.theme.border_subtle,
+                f.scale,
             );
         }
-    }
-    (open_clicked, close_clicked)
-}
-
-fn terminal_action_count(width: f64) -> usize {
-    if width >= 560.0 {
-        5
-    } else if width >= 360.0 {
-        2
-    } else {
-        1
-    }
-}
-
-/// Hit rects for the two functional terminal actions. Chrome and interaction
-/// share this pure geometry so resizing cannot leave a click target misplaced.
-pub(super) fn terminal_actions(layout: &AppLayout) -> (Option<Rect>, Option<Rect>) {
-    let pane = layout.term_dock;
-    let toolbar = layout.terminal_toolbar;
-    if pane.w <= 0.0 || pane.h <= 0.0 || toolbar.h < 20.0 {
-        return (None, None);
-    }
-    let count = terminal_action_count(pane.w);
-    let first = pane.x + pane.w - 38.0 - (count - 1) as f64 * 20.0;
-    let y = pane.y + (toolbar.h - 20.0) / 2.0;
-    let plus = Some(Rect {
-        x: first - 10.0,
-        y,
-        w: 20.0,
-        h: 20.0,
-    });
-    let close = (count >= 2).then(|| {
-        let index = if count == 5 { 2 } else { 1 };
-        Rect {
-            x: first + index as f64 * 20.0 - 10.0,
-            y,
-            w: 20.0,
-            h: 20.0,
+        let hovered = row.contains(f.pointer.x, f.pointer.y);
+        if hovered {
+            f.canvas
+                .fill_rect(row.x, row.y, row.w, row.h, f.theme.surface_hover, f.scale);
         }
-    });
-    (plus, close)
+        text(
+            f,
+            option.label,
+            row.x + 10.0,
+            row.y + (row.h - 10.0) / 2.0,
+            10.0,
+            f.theme.fg,
+            false,
+        );
+        if !shortcuts[index].is_empty() {
+            let shortcut_w = shortcuts[index].len() as f64 * 6.2;
+            text(
+                f,
+                shortcuts[index],
+                row.x + row.w - shortcut_w - 10.0,
+                row.y + (row.h - 9.0) / 2.0,
+                9.0,
+                f.theme.text_muted,
+                false,
+            );
+        }
+        if f.pointer.click && hovered {
+            effects.menu_action = Some(option.action);
+        }
+    }
+    let actions = terminal_actions(layout);
+    let tab_count = f.terms.as_ref().map_or(1, |terms| terms.tabs.len().max(1));
+    let tabs = terminal_tab_rects(layout, tab_count);
+    let inside_menu = rows
+        .iter()
+        .any(|row| row.contains(f.pointer.x, f.pointer.y));
+    let inside_actions = [actions.plus, actions.menu, actions.close]
+        .iter()
+        .any(|rect| rect.contains(f.pointer.x, f.pointer.y));
+    let inside_tabs = tabs
+        .iter()
+        .any(|rect| rect.contains(f.pointer.x, f.pointer.y));
+    if f.pointer.click
+        && !inside_menu
+        && !inside_actions
+        && !inside_tabs
+        && effects.menu_action.is_none()
+    {
+        effects.menu_dismiss = true;
+    }
 }
 
 pub(super) fn draw_terminal_placeholder(f: &mut Frame, layout: &AppLayout) {

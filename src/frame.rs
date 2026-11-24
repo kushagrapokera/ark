@@ -13,7 +13,7 @@ use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::new_item::NewItemPrompt;
 use crate::render::{Canvas, ColorRgb, Theme};
-use crate::term::{self, TerminalTabs};
+use crate::term::{self, TerminalMenuAction, TerminalTabs};
 use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
 use crate::tree::{self, FileTree, ROW_H};
 use crate::ui::{Pointer, Rect, Scrollbar, Split};
@@ -94,7 +94,6 @@ pub struct AppLayout {
     pub terminal_resize: Rect,
     pub terminal_toolbar: Rect,
     pub term_grid: Rect,
-    pub terminal_sessions: Rect,
     /// Damage envelope of the status line.
     pub status: Rect,
 }
@@ -370,17 +369,10 @@ pub fn app_layout_with_groups_and_terminal(
         w: terminal.w,
         h: terminal_toolbar_h,
     };
-    let sessions_w = if terminal.w >= 520.0 { 36.0 } else { 0.0 };
-    let terminal_sessions = Rect {
-        x: terminal.x + terminal.w - sessions_w,
-        y: terminal_toolbar.y + terminal_toolbar.h,
-        w: sessions_w,
-        h: (terminal.h - terminal_toolbar.h).max(0.0),
-    };
     let term_grid = Rect {
         x: terminal.x + pad,
         y: terminal_toolbar.y + terminal_toolbar.h,
-        w: (terminal.w - sessions_w - 2.0 * pad).max(0.0),
+        w: (terminal.w - 2.0 * pad).max(0.0),
         h: (terminal.h - terminal_toolbar.h - pad).max(0.0),
     };
 
@@ -421,7 +413,6 @@ pub fn app_layout_with_groups_and_terminal(
         terminal_resize,
         terminal_toolbar,
         term_grid,
-        terminal_sessions,
         status: Rect {
             x: 0.0,
             y: status_y,
@@ -793,8 +784,16 @@ pub struct FrameEffects {
     pub opened: Option<PathBuf>,
     /// The "+" button opened a new terminal tab.
     pub open_terminal: bool,
-    /// The "×" button closed the active terminal tab.
-    pub close_terminal: bool,
+    /// A terminal tab's close button was clicked.
+    pub close_terminal: Option<usize>,
+    /// A terminal tab was selected.
+    pub terminal_select: Option<usize>,
+    /// The terminal profile dropdown arrow was clicked.
+    pub terminal_menu_toggle: bool,
+    /// A terminal profile menu action was selected.
+    pub terminal_menu_action: Option<TerminalMenuAction>,
+    /// A click outside the open terminal menu dismissed it.
+    pub terminal_menu_dismiss: bool,
     /// A Source Control file row toggled its checkbox.
     pub commit_toggled: bool,
     /// The Commit button was clicked.
@@ -1092,34 +1091,13 @@ pub fn draw_frame(
         effects.focus_group = effects.focus_group.or(gx.focus.then_some(index));
     }
 
-    // Terminal card: static panel chrome plus the existing functional PTY,
-    // new/close actions and vertical session switcher.
+    // Terminal card: tab strip, profile menu, actions, and the active PTY.
     chrome::draw_terminal_resize_handle(f, layout);
-    let (open_terminal, close_terminal) = chrome::draw_terminal_chrome(f, layout);
-    effects.open_terminal = open_terminal;
+    let mut terminal_fx = chrome::draw_terminal_chrome(f, layout);
     if !f.terms.as_ref().is_some_and(|t| t.is_open()) {
         chrome::draw_terminal_placeholder(f, layout);
     }
     if let Some(terms) = f.terms.as_deref_mut().filter(|t| t.is_open()) {
-        effects.close_terminal = close_terminal;
-        let sessions = layout.terminal_sessions;
-        let count = terms.tabs.len().min(3);
-        for index in 0..count {
-            let rect = Rect {
-                x: sessions.x + 6.0,
-                y: sessions.y + 8.0 + index as f64 * 32.0,
-                w: 24.0,
-                h: 24.0,
-            };
-            if sessions.w > 0.0
-                && rect.y + rect.h <= sessions.y + sessions.h
-                && f.pointer.click
-                && rect.contains(f.pointer.x, f.pointer.y)
-            {
-                terms.active = index;
-                f.term_focused = true;
-            }
-        }
         let grid = layout.term_grid;
         if let Some(t) = terms.active_mut() {
             let font_size = (UI_FONT_SIZE as f64 * f.scale) as f32;
@@ -1129,6 +1107,13 @@ pub fn draw_frame(
             t.draw(f.canvas, f.text, f.theme, f.scale, grid, f.term_focused);
         }
     }
+    chrome::draw_terminal_menu(f, layout, &mut terminal_fx);
+    effects.open_terminal = terminal_fx.open;
+    effects.close_terminal = terminal_fx.close;
+    effects.terminal_select = terminal_fx.select;
+    effects.terminal_menu_toggle = terminal_fx.menu_toggle;
+    effects.terminal_menu_action = terminal_fx.menu_action;
+    effects.terminal_menu_dismiss = terminal_fx.menu_dismiss;
 
     // Per-group editor bodies. Config is a tab in one group; every other
     // active tab borrows its pinned viewer from the shared cache.
