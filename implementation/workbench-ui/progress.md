@@ -221,6 +221,21 @@ five open viewers, two shells + fake agent tab):
   resize: **65,420 KiB = 63.9 MiB RSS**, **57,660 KiB = 56.3 MiB PSS** — below
   the 100 MiB budget.
 
+## Horizontal viewer scrolling
+
+- Long code lines are clipped to each editor pane's visible column window;
+  syntax colors, selection backgrounds, brackets, and indent guides are clipped
+  with the text.
+- A horizontal scrollbar appears only when the longest line exceeds the pane
+  width. It supports thumb dragging, track clicks, and Shift+wheel scrolling.
+- The viewer stores only the longest-line char count, a column offset, and one
+  fixed-size scrollbar drag latch per cached file—no per-line width cache.
+- Verification: `cargo test` **270 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live split-pane smoke confirmed clipping and
+  scrollbar dragging.
+- Split stress with five large viewers, two shells, and a resize:
+  **65,552 KiB = 64.0 MiB RSS**, **57,806 KiB = 56.4 MiB PSS**.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

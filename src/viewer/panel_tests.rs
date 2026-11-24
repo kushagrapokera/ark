@@ -10,7 +10,7 @@ use crate::ui::testutil::{count_color_in, ink_bbox_in};
 use std::fs;
 use std::io::Write;
 
-const PANEL: Rect = Rect { x: 10.0, y: 10.0, w: 300.0, h: 57.0 }; // ~3 lines
+const PANEL: Rect = Rect { x: 10.0, y: 10.0, w: 400.0, h: 57.0 }; // ~3 lines
 
 /// Theme with the tokens under pin distinct; the rest sit on bg.
 fn panel_theme() -> Theme {
@@ -82,16 +82,85 @@ fn draw(theme: &Theme, panel: Rect, viewer: &Viewer, canvas: &mut Canvas) -> cra
 // ---- viewport-only rendering ----
 
 #[test]
+fn long_lines_stay_inside_the_panel_and_show_a_horizontal_scrollbar() {
+    let d = temp_dir("horizontal-clip");
+    let p = d.path().join("long.txt");
+    fs::write(&p, format!("{}\n", "a".repeat(100))).expect("write");
+    let v = Viewer::open(&p).expect("opens");
+    let theme = panel_theme();
+    let panel = Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 200.0,
+        h: 50.0,
+    };
+    let mut canvas = Canvas::new(400, 80);
+    draw(&theme, panel, &v, &mut canvas);
+
+    let code = ink_bbox_in(
+        &canvas,
+        theme.bg,
+        panel.x as u32,
+        panel.y as u32,
+        (panel.x + panel.w) as u32,
+        (panel.y + panel.h - crate::ui::HSCROLL_H) as u32,
+    )
+    .expect("code ink");
+    assert!(
+        code.2 < (panel.x + panel.w - crate::tree::TRACK_W) as u32,
+        "code ink stops before the vertical scrollbar, got {code:?}"
+    );
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.bg_elevated,
+            panel.x as u32,
+            (panel.y + panel.h - crate::ui::HSCROLL_H) as u32,
+            (panel.x + panel.w) as u32,
+            (panel.y + panel.h) as u32,
+        ) > 0,
+        "horizontal scrollbar track renders"
+    );
+}
+
+#[test]
+fn horizontal_scrollbar_drag_changes_the_column_offset() {
+    let d = temp_dir("horizontal-drag");
+    let p = d.path().join("long.txt");
+    fs::write(&p, format!("{}\n", "a".repeat(100))).expect("write");
+    let mut v = Viewer::open(&p).expect("opens");
+    let panel = Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 200.0,
+        h: 50.0,
+    };
+    let pointer = Pointer {
+        x: panel.x + panel.w - 10.0,
+        y: panel.y + panel.h - 4.0,
+        down: true,
+        click: false,
+    };
+    assert!(handle_horizontal_pointer(
+        &mut v, panel, pointer, 120.0, 7.2
+    ));
+    assert!(
+        v.horizontal_offset() > 0,
+        "dragging right scrolls to later columns"
+    );
+}
+
+#[test]
 fn viewport_only_rendering() {
     let (_d, p) = lines_fixture("viewport");
     let mut v = Viewer::open(&p).expect("opens");
     assert_eq!(v.line_count(), 40);
     let theme = panel_theme();
-    let mut canvas = Canvas::new(320, 80);
+    let mut canvas = Canvas::new(420, 80);
 
     draw(&theme, PANEL, &v, &mut canvas);
     // Ink confined to the 3 visible line bands [10, 10 + 3×18.9 ≈ 67).
-    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 320, 80).expect("viewer ink");
+    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 420, 80).expect("viewer ink");
     assert!(bbox.1 >= 10 && bbox.3 < 68, "ink confined to the visible bands, got {bbox:?}");
     // Band 3 [10 + 2×18.9, 10 + 3×18.9) shows line 3 = "aaa" (3 chars + gutter).
     let (_, short) = band_ink(&canvas, theme.bg, 47, 67);
@@ -99,7 +168,7 @@ fn viewport_only_rendering() {
     // Scroll 10 lines: band 3 shows line 13 = 13 a's → far wider ink.
     assert!(v.scroll_by_lines(10, 3));
     draw(&theme, PANEL, &v, &mut canvas);
-    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 320, 80).expect("scrolled ink");
+    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 420, 80).expect("scrolled ink");
     assert!(bbox.1 >= 10 && bbox.3 < 68, "scrolled ink still viewport-only");
     let (_, long) = band_ink(&canvas, theme.bg, 47, 67);
     assert!(long > short + 20, "band 3 shows the longer line after scrolling ({short} → {long})");
@@ -118,7 +187,7 @@ fn gutter_renders_numbers_and_reserved_mark_strip() {
     let (_d, p) = lines_fixture("gutter");
     let v = Viewer::open(&p).expect("opens");
     let theme = panel_theme();
-    let mut canvas = Canvas::new(320, 80);
+    let mut canvas = Canvas::new(420, 80);
     let m = draw(&theme, PANEL, &v, &mut canvas);
     let advance = f64::from(m.advance);
 
@@ -159,7 +228,7 @@ fn token_colors_and_selection_render() {
     let (_d, p) = lines_fixture("tokens");
     let mut v = Viewer::open(&p).expect("opens");
     let theme = panel_theme();
-    let mut canvas = Canvas::new(320, 80);
+    let mut canvas = Canvas::new(420, 80);
     let m = draw(&theme, PANEL, &v, &mut canvas);
     let advance = f64::from(m.advance);
 
@@ -171,11 +240,11 @@ fn token_colors_and_selection_render() {
     let gutter_w = gutter_width(v.line_count(), advance);
     let text_x = 10.0 + gutter_w;
     assert!(
-        count_color_in(&canvas, theme.syntax_string, text_x as u32, 47, 320, 67) > 0,
+        count_color_in(&canvas, theme.syntax_string, text_x as u32, 47, 420, 67) > 0,
         "string literal paints the syntax_string color"
     );
     assert!(
-        count_color_in(&canvas, theme.syntax_keyword, text_x as u32, 47, 320, 67) > 0,
+        count_color_in(&canvas, theme.syntax_keyword, text_x as u32, 47, 420, 67) > 0,
         "`let` paints the syntax_keyword color"
     );
 
@@ -191,7 +260,7 @@ fn token_colors_and_selection_render() {
         "selection background paints over the selected span"
     );
     assert!(
-        count_color_in(&canvas, theme.selection, sel_x1, 10, 320, 29) == 0,
+        count_color_in(&canvas, theme.selection, sel_x1, 10, 420, 29) == 0,
         "nothing beyond the span end"
     );
 }
@@ -311,7 +380,7 @@ fn panel_draw_degenerates_safely() {
     let v = Viewer::open(&p).expect("opens");
     let theme = panel_theme();
     let mut text = TextSystem::new();
-    let mut canvas = Canvas::new(320, 80);
+    let mut canvas = Canvas::new(420, 80);
     canvas.fill(theme.bg);
 
     for panel in [
@@ -324,8 +393,8 @@ fn panel_draw_degenerates_safely() {
     draw_viewer_panel(&mut canvas, &mut text, &theme, 0.0, PANEL, &v, &Highlighter::new(), None);
     draw_viewer_panel(&mut canvas, &mut text, &theme, f64::NAN, PANEL, &v, &Highlighter::new(), None);
     assert_eq!(
-        count_color_in(&canvas, theme.bg, 0, 0, 320, 80),
-        320 * 80,
+        count_color_in(&canvas, theme.bg, 0, 0, 420, 80),
+        420 * 80,
         "degenerate frames rasterize nothing"
     );
 
@@ -352,7 +421,7 @@ fn git_marks_paint_the_reserved_strip() {
     let mut theme = panel_theme();
     theme.git_added = (166, 227, 161);
     theme.git_modified = (250, 179, 135);
-    let mut canvas = Canvas::new(320, 90);
+    let mut canvas = Canvas::new(420, 90);
     // Marks: line 3 added, line 5 modified (visible); line 40 off-screen.
     let diff = crate::git::FileDiff {
         marks: vec![(3, crate::git::GutterMark::Added), (5, crate::git::GutterMark::Modified)],

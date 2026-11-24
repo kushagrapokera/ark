@@ -145,6 +145,25 @@ fn scroll_clamps_to_line_count() {
 // ---- selection ----
 
 #[test]
+fn horizontal_scroll_clamps_to_the_longest_line() {
+    let d = temp_dir("horizontal-scroll");
+    let p = d.path().join("long.txt");
+    fs::write(&p, "abcdefghij\nxy\n").expect("write");
+    let mut v = Viewer::open(&p).expect("opens");
+    assert_eq!(v.max_line_chars(), 10);
+    assert_eq!(v.max_horizontal_offset(4), 6);
+    assert!(v.set_horizontal_offset(100, 4));
+    assert_eq!(v.horizontal_offset(), 6);
+    assert!(
+        v.set_horizontal_offset(6, 8),
+        "narrowing the pane re-clamps"
+    );
+    assert_eq!(v.horizontal_offset(), 2);
+    assert!(v.set_horizontal_offset(2, 20), "no overflow resets to zero");
+    assert_eq!(v.horizontal_offset(), 0);
+}
+
+#[test]
 fn selection_clamps_and_orders() {
     let (_d, p) = text_fixture("select");
     let mut v = Viewer::open(&p).expect("opens");

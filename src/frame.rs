@@ -1051,11 +1051,28 @@ pub fn draw_frame(
                 .text
                 .mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
             let advance = f64::from(m.advance) / f.scale;
-            let viewport_lines = (pane.h / LINE_H).floor() as usize;
+            let gutter_w = viewer::gutter_width(viewer.line_count(), advance);
+            let content_w = (pane.x + pane.w - tree::TRACK_W - (pane.x + gutter_w) - 4.0).max(0.0);
+            if viewer.sync_horizontal(content_w, advance) {
+                effects.viewer_scrolled = true;
+            }
+            let horizontal_overflow =
+                content_w > 0.0 && viewer.max_line_chars() as f64 * advance > content_w;
+            let code_h = pane.h
+                - if horizontal_overflow {
+                    crate::ui::HSCROLL_H
+                } else {
+                    0.0
+                };
+            let viewport_lines = (code_h / LINE_H).floor() as usize;
             if viewer.set_offset_lines(viewer.offset_lines(), viewport_lines) {
                 effects.viewer_scrolled = true;
             }
-            if viewer::handle_pointer(viewer, pane, f.pointer, advance) {
+            let horizontal_consumed =
+                viewer::handle_horizontal_pointer(viewer, pane, f.pointer, content_w, advance);
+            if horizontal_consumed {
+                effects.viewer_scrolled = true;
+            } else if viewer::handle_pointer(viewer, pane, f.pointer, advance) {
                 effects.tree_changed = true;
             }
             let diff = if index == active_group {
@@ -1075,22 +1092,21 @@ pub fn draw_frame(
             );
             if pane.w > tree::TRACK_W {
                 let content = viewer.line_count() as f64 * LINE_H;
+                let scroll_track = Rect {
+                    x: pane.x + pane.w - tree::TRACK_W,
+                    y: pane.y,
+                    w: tree::TRACK_W,
+                    h: code_h,
+                };
                 let scrollbar = &mut group_scrollbars[index];
                 scrollbar.offset = viewer.offset_lines() as f64 * LINE_H;
-                if scrollbar.on_pointer(pane_scroll_track(pane), f.pointer, content, pane.h) {
+                if scrollbar.on_pointer(scroll_track, f.pointer, content, code_h) {
                     let lines = (scrollbar.offset / LINE_H).ceil() as usize;
                     if viewer.set_offset_lines(lines, viewport_lines) {
                         effects.viewer_scrolled = true;
                     }
                 }
-                scrollbar.draw(
-                    f.canvas,
-                    pane_scroll_track(pane),
-                    content,
-                    pane.h,
-                    f.theme,
-                    f.scale,
-                );
+                scrollbar.draw(f.canvas, scroll_track, content, code_h, f.theme, f.scale);
             }
             if (f.groups.is_some() && f.group_flash[index])
                 || (f.groups.is_none() && index == 0 && f.viewer_flash)
@@ -1119,17 +1135,6 @@ pub fn draw_frame(
 
     chrome::draw_status_bar(f, layout);
     effects
-}
-
-/// The viewer scrollbar track: the pane's right edge (8px), mirroring the
-/// tree panel's scrollbar placement.
-fn pane_scroll_track(pane: Rect) -> Rect {
-    Rect {
-        x: pane.x + (pane.w - tree::TRACK_W).max(0.0),
-        y: pane.y,
-        w: tree::TRACK_W,
-        h: pane.h,
-    }
 }
 
 /// The live status line. Without an open viewer (M3 format):

@@ -21,6 +21,7 @@
 // code out of the production binary instead of allowing it.
 mod button;
 mod checkbox;
+mod hscroll;
 mod scrollbar;
 mod split;
 #[cfg(test)]
@@ -33,6 +34,7 @@ pub use scrollbar::Scrollbar;
 pub use split::Split;
 pub use button::{draw_button, Press};
 pub use checkbox::draw_checkbox;
+pub use hscroll::{HScrollbar, HSCROLL_H};
 #[cfg(test)]
 pub use tabbar::{TabBar, TAB_HEIGHT};
 pub use text_input::{TextInput, TextInputKey};

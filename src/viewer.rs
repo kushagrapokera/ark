@@ -23,7 +23,7 @@ use std::time::SystemTime;
 use memmap2::Mmap;
 
 use crate::highlight::{lang_for_source, Lang};
-use crate::ui::{Pointer, Rect};
+use crate::ui::{HScrollbar, Pointer, Rect, HSCROLL_H};
 
 /// Cap on the viewed region of a file (larger files render a preview).
 pub const VIEW_CAP_BYTES: u64 = 64 * 1024 * 1024;
@@ -97,6 +97,12 @@ pub struct Viewer {
     starts: Vec<u32>,
     /// Scroll position in lines (kept clamped by the scroll API).
     offset_lines: usize,
+    /// Longest displayed line in chars, computed once while indexing.
+    max_line_chars: usize,
+    /// Horizontal scroll position in char columns.
+    offset_cols: usize,
+    /// Horizontal scrollbar interaction/pixel-offset state.
+    hscroll: HScrollbar,
     sel: Option<Selection>,
     /// Selection-drag latch: started on a press inside the panel, extends on
     /// every down frame (panel-clamped), ends on release.
@@ -129,16 +135,29 @@ impl Viewer {
         let map = unsafe { Mmap::map(&file).map_err(ViewerError::Io)? };
         let view = &map[..view_len as usize];
         if view[..BINARY_SNIFF_BYTES.min(view.len())].contains(&0) {
-            return Err(ViewerError::Binary { path: path.to_path_buf() });
+            return Err(ViewerError::Binary {
+                path: path.to_path_buf(),
+            });
         }
         let mut starts = Vec::new();
+        let mut max_line_chars = 0usize;
+        let mut line_chars = 0usize;
         if view_len > 0 {
             starts.push(0u32);
             for (i, b) in view.iter().enumerate() {
-                if *b == b'\n' && (i as u64) + 1 < view_len {
-                    starts.push((i + 1) as u32);
+                if *b == b'\n' {
+                    max_line_chars = max_line_chars.max(line_chars);
+                    line_chars = 0;
+                    if (i as u64) + 1 < view_len {
+                        starts.push((i + 1) as u32);
+                    }
+                } else if *b != b'\r' && (*b & 0xC0) != 0x80 {
+                    // Count UTF-8 leading bytes as display chars without
+                    // allocating or decoding the whole file a second time.
+                    line_chars += 1;
                 }
             }
+            max_line_chars = max_line_chars.max(line_chars);
         }
         let sniff_len = view.len().min(SHEBANG_SNIFF_BYTES);
         let first_line_end = view[..sniff_len]
@@ -157,6 +176,9 @@ impl Viewer {
             truncated: len > view_len,
             starts,
             offset_lines: 0,
+            max_line_chars,
+            offset_cols: 0,
+            hscroll: HScrollbar::default(),
             sel: None,
             dragging: false,
         })
@@ -186,8 +208,7 @@ impl Viewer {
     pub fn changed_on_disk(&self) -> bool {
         match std::fs::metadata(&self.path) {
             Ok(m) => {
-                m.len() != self.file_len
-                    || m.modified().map(|t| t != self.modified).unwrap_or(true)
+                m.len() != self.file_len || m.modified().map(|t| t != self.modified).unwrap_or(true)
             }
             Err(_) => true,
         }
@@ -229,6 +250,47 @@ impl Viewer {
 
     pub fn offset_lines(&self) -> usize {
         self.offset_lines
+    }
+
+    pub fn max_line_chars(&self) -> usize {
+        self.max_line_chars
+    }
+
+    pub fn horizontal_offset(&self) -> usize {
+        self.offset_cols
+    }
+
+    pub fn max_horizontal_offset(&self, viewport_cols: usize) -> usize {
+        self.max_line_chars.saturating_sub(viewport_cols)
+    }
+
+    pub fn set_horizontal_offset(&mut self, cols: usize, viewport_cols: usize) -> bool {
+        let before = self.offset_cols;
+        self.offset_cols = cols.min(self.max_horizontal_offset(viewport_cols));
+        self.offset_cols != before
+    }
+
+    pub fn scroll_horizontal_by(&mut self, cols: i64, viewport_cols: usize) -> bool {
+        let target = (self.offset_cols as i64).saturating_add(cols).max(0) as usize;
+        self.set_horizontal_offset(target, viewport_cols)
+    }
+
+    /// Synchronize column offset and scrollbar pixel offset to the current
+    /// viewport. Returns whether the column offset changed.
+    pub fn sync_horizontal(&mut self, content_w: f64, advance: f64) -> bool {
+        if !content_w.is_finite() || !advance.is_finite() || content_w <= 0.0 || advance <= 0.0 {
+            self.offset_cols = 0;
+            self.hscroll.offset = 0.0;
+            return false;
+        }
+        let viewport_cols = (content_w / advance).floor().max(1.0) as usize;
+        let before = self.offset_cols;
+        self.set_horizontal_offset(self.offset_cols, viewport_cols);
+        self.hscroll.offset = self.offset_cols as f64 * advance;
+        self.hscroll
+            .clamp(self.max_line_chars as f64 * advance, content_w);
+        self.offset_cols = (self.hscroll.offset / advance).round() as usize;
+        self.offset_cols != before
     }
 
     /// Max scroll offset (lines) for a viewport of `viewport_lines` rows.
@@ -307,7 +369,9 @@ impl Viewer {
             if line > sl {
                 out.push('\n');
             }
-            let Some(text) = self.line_text(line) else { break };
+            let Some(text) = self.line_text(line) else {
+                break;
+            };
             let len = text.chars().count();
             let (a, b) = if sl == el {
                 (sc, ec)
@@ -344,7 +408,10 @@ impl Viewer {
     /// Start (or collapse) a selection at the clamped position.
     pub fn select_at(&mut self, line: usize, col: usize) {
         let pos = self.pos_at(line, col);
-        self.sel = Some(Selection { anchor: pos, head: pos });
+        self.sel = Some(Selection {
+            anchor: pos,
+            head: pos,
+        });
     }
 
     /// Move the selection head (starting a selection if none exists).
@@ -352,7 +419,12 @@ impl Viewer {
         let pos = self.pos_at(line, col);
         match self.sel.as_mut() {
             Some(sel) => sel.head = pos,
-            None => self.sel = Some(Selection { anchor: pos, head: pos }),
+            None => {
+                self.sel = Some(Selection {
+                    anchor: pos,
+                    head: pos,
+                })
+            }
         }
     }
 
@@ -388,7 +460,11 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), std::io::Error> {
 /// Gutter width for a line count at the given LOGICAL char advance: the
 /// reserved git-mark strip, padded line-number digits, and right padding.
 pub fn gutter_width(line_count: usize, advance: f64) -> f64 {
-    let digits = if line_count == 0 { 1 } else { line_count.checked_ilog10().unwrap_or(0) as usize + 1 };
+    let digits = if line_count == 0 {
+        1
+    } else {
+        line_count.checked_ilog10().unwrap_or(0) as usize + 1
+    };
     MARK_W + GUT_PAD_L + digits as f64 * advance.max(0.0) + GUT_PAD_R
 }
 
@@ -400,6 +476,41 @@ fn pos_in_panel(viewer: &Viewer, panel: Rect, x: f64, y: f64, advance: f64) -> (
     let text_x = panel.x + gutter_width(viewer.line_count(), advance);
     let col = (((x - text_x) / advance).floor().max(0.0)) as usize;
     viewer.pos_at(line, col)
+}
+
+/// Horizontal scrollbar track at the bottom of a viewer panel.
+pub fn horizontal_track(panel: Rect) -> Rect {
+    Rect {
+        x: panel.x,
+        y: panel.y + panel.h - HSCROLL_H,
+        w: panel.w,
+        h: HSCROLL_H,
+    }
+}
+
+/// Feed the pointer to the viewer's horizontal scrollbar. Returns true when
+/// the event belongs to the scrollbar and must not start a text selection.
+pub fn handle_horizontal_pointer(
+    viewer: &mut Viewer,
+    panel: Rect,
+    pointer: Pointer,
+    content_w: f64,
+    advance: f64,
+) -> bool {
+    if content_w <= 0.0 || advance <= 0.0 || !content_w.is_finite() || !advance.is_finite() {
+        return false;
+    }
+    viewer.sync_horizontal(content_w, advance);
+    let track = horizontal_track(panel);
+    let content = viewer.max_line_chars as f64 * advance;
+    let changed = viewer
+        .hscroll
+        .on_pointer(track, pointer, content, content_w);
+    let viewport_cols = (content_w / advance).floor().max(1.0) as usize;
+    viewer.offset_cols = (viewer.hscroll.offset / advance).round() as usize;
+    viewer.set_horizontal_offset(viewer.offset_cols, viewport_cols);
+    let over = track.contains(pointer.x, pointer.y) && (pointer.down || pointer.click);
+    changed || over || viewer.hscroll.is_dragging()
 }
 
 /// Pointer interaction for the viewer panel: a press inside the panel starts
@@ -435,8 +546,8 @@ pub fn handle_pointer(viewer: &mut Viewer, panel: Rect, pointer: Pointer, advanc
 mod render;
 pub use render::draw_viewer_panel;
 
-#[cfg(test)]
-mod tests;
+mod decor;
 #[cfg(test)]
 mod panel_tests;
-mod decor;
+#[cfg(test)]
+mod tests;

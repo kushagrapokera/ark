@@ -516,7 +516,13 @@ impl App {
 
     /// Scroll the viewer in the group under the pointer, pinning both visible
     /// paths while the cache is touched.
-    fn route_wheel_viewer_group(&mut self, group: usize, rect: Rect, dy: f64) -> bool {
+    fn route_wheel_viewer_group(
+        &mut self,
+        group: usize,
+        rect: Rect,
+        dy: f64,
+        horizontal: bool,
+    ) -> bool {
         let Some(path) = self.editor_groups.groups.get(group).and_then(|g| g.active.clone()) else {
             return false;
         };
@@ -534,9 +540,23 @@ impl App {
         let Ok(viewer) = self.buffers.get_or_open_pinned(&path, &pins) else {
             return false;
         };
-        let viewport_lines = (rect.h / LINE_H).floor() as usize;
-        let dy_lines = (dy / LINE_H).round() as i64;
-        if !viewer.scroll_by_lines(dy_lines, viewport_lines) {
+        let font_size = (UI_FONT_SIZE as f64 * self.scale) as f32;
+        let m = self.text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
+        let advance = f64::from(m.advance) / self.scale;
+        let gutter_w = viewer::gutter_width(viewer.line_count(), advance);
+        let content_w = (rect.x + rect.w - tree::TRACK_W - (rect.x + gutter_w) - 4.0).max(0.0);
+        let changed = if horizontal {
+            let viewport_cols = (content_w / advance).floor().max(1.0) as usize;
+            let cols = (dy / advance).round() as i64;
+            viewer.scroll_horizontal_by(cols, viewport_cols)
+        } else {
+            let overflow = content_w > 0.0 && viewer.max_line_chars() as f64 * advance > content_w;
+            let code_h = rect.h - if overflow { ui::HSCROLL_H } else { 0.0 };
+            let viewport_lines = (code_h / LINE_H).floor() as usize;
+            let dy_lines = (dy / LINE_H).round() as i64;
+            viewer.scroll_by_lines(dy_lines, viewport_lines)
+        };
+        if !changed {
             return false;
         }
         let (cw, ch) = (self.canvas.width(), self.canvas.height());
@@ -1765,7 +1785,12 @@ impl ApplicationHandler<Wake> for App {
                     .take(layout.editor_group_count)
                     .position(|group| group.body.contains(x, y))
                 {
-                    self.route_wheel_viewer_group(group, layout.editor_groups[group].body, dy)
+                    self.route_wheel_viewer_group(
+                        group,
+                        layout.editor_groups[group].body,
+                        dy,
+                        self.modifiers.state().shift_key(),
+                    )
                 } else {
                     false
                 };

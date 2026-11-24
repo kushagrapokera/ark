@@ -449,11 +449,26 @@ fn app_wheel_routes_to_the_requested_editor_group() {
     app.open_viewer(b.clone(), 1);
     let rect = Rect { x: 0.0, y: 0.0, w: 400.0, h: 400.0 };
 
-    assert!(app.route_wheel_viewer_group(0, rect, WHEEL_PX));
+    assert!(app.route_wheel_viewer_group(0, rect, WHEEL_PX, false));
     assert_eq!(app.buffers.get_or_open(&a).expect("a").offset_lines(), 2);
     assert_eq!(app.buffers.get_or_open(&b).expect("b").offset_lines(), 0);
-    assert!(app.route_wheel_viewer_group(1, rect, WHEEL_PX));
+    assert!(app.route_wheel_viewer_group(1, rect, WHEEL_PX, false));
     assert_eq!(app.buffers.get_or_open(&b).expect("b").offset_lines(), 2);
+}
+
+#[test]
+fn app_shift_wheel_scrolls_the_viewer_horizontally() {
+    let d = temp_dir("app-horizontal-wheel");
+    let p = d.path().join("long.txt");
+    fs::write(&p, format!("{}\n", "a".repeat(100))).expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(p.clone(), 0);
+    let rect = Rect { x: 0.0, y: 0.0, w: 240.0, h: 200.0 };
+
+    assert!(app.route_wheel_viewer_group(0, rect, WHEEL_PX, true));
+    let viewer = app.buffers.get_or_open(&p).expect("viewer");
+    assert!(viewer.horizontal_offset() > 0);
+    assert_eq!(viewer.offset_lines(), 0);
 }
 
 #[test]

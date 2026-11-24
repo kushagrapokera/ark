@@ -38,6 +38,7 @@ pub(super) fn draw_indent_guides(
     line: &str,
     advance: f64,
     active: bool,
+    width: f64,
 ) {
     let indent = line
         .chars()
@@ -55,6 +56,9 @@ pub(super) fn draw_indent_guides(
             theme.editor_indent_guide
         };
         let x = text_x + (level * INDENT_WIDTH) as f64 * advance;
+        if x < text_x || x >= text_x + width {
+            continue;
+        }
         canvas.fill_rect(x, row_y + 2.0, 1.0, LINE_H - 4.0, color, scale);
     }
 }
@@ -102,7 +106,11 @@ pub(super) fn bracket_spans(
             if state.stack.len() < MAX_BRACKET_DEPTH {
                 state.stack.push((byte, color_index));
             }
-            out.push((char_index, char_index + 1, bracket_color(theme, color_index)));
+            out.push((
+                char_index,
+                char_index + 1,
+                bracket_color(theme, color_index),
+            ));
         } else if matches!(byte, b')' | b']' | b'}') {
             let color_index = if state
                 .stack
@@ -113,7 +121,11 @@ pub(super) fn bracket_spans(
             } else {
                 state.stack.len() % 3
             };
-            out.push((char_index, char_index + 1, bracket_color(theme, color_index)));
+            out.push((
+                char_index,
+                char_index + 1,
+                bracket_color(theme, color_index),
+            ));
         }
     }
     out
