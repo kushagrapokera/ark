@@ -322,7 +322,7 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
                 );
             }
         }
-        if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
+        if f.new_item.is_none() && f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
             clicked = match index {
                 0 => Some(ActivityPanel::Explorer),
                 2 => Some(ActivityPanel::SourceControl),
@@ -336,9 +336,18 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
     clicked
 }
 
-pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
+#[derive(Default)]
+pub(super) struct ExplorerEffects {
+    pub new_file: bool,
+    pub new_folder: bool,
+    pub refresh: bool,
+    pub collapse: bool,
+}
+
+pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> ExplorerEffects {
+    let mut effects = ExplorerEffects::default();
     if layout.explorer_card.w <= 0.0 {
-        return;
+        return effects;
     }
     let header = layout.explorer_header;
     f.canvas.fill_rect(
@@ -371,7 +380,7 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
         f.theme.text_muted,
     );
     if f.activity == ActivityPanel::SourceControl {
-        return;
+        return effects;
     }
 
     let root = layout.explorer_root;
@@ -399,14 +408,46 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
         Icon::Collapse,
     ];
     for (index, glyph) in actions.into_iter().enumerate() {
+        let cx = root.x + root.w - 58.0 + index as f64 * 16.0;
+        let rect = Rect {
+            x: cx - 8.0,
+            y: root.y + 4.0,
+            w: 16.0,
+            h: root.h - 8.0,
+        };
+        let hovered = rect.contains(f.pointer.x, f.pointer.y);
+        if hovered {
+            f.canvas.fill_round_rect(
+                rect.x,
+                rect.y,
+                rect.w,
+                rect.h,
+                3.0,
+                f.theme.surface_hover,
+                f.scale,
+            );
+        }
         icon(
             f,
             glyph,
-            root.x + root.w - 58.0 + index as f64 * 16.0,
+            cx,
             root.y + root.h / 2.0,
             12.0,
-            f.theme.text_muted,
+            if hovered {
+                f.theme.fg
+            } else {
+                f.theme.text_muted
+            },
         );
+        if f.new_item.is_none() && f.pointer.click && hovered {
+            match index {
+                0 => effects.new_file = true,
+                1 => effects.new_folder = true,
+                2 => effects.refresh = true,
+                3 => effects.collapse = true,
+                _ => {}
+            }
+        }
     }
 
     let footer = layout.explorer_footer;
@@ -446,6 +487,107 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) {
             true,
         );
     }
+    effects
+}
+
+struct NewItemLayout {
+    panel: Rect,
+    input: Rect,
+    create: Rect,
+    cancel: Rect,
+}
+
+fn new_item_layout(layout: &AppLayout) -> Option<NewItemLayout> {
+    let explorer = layout.explorer_card;
+    if explorer.w <= 0.0 || explorer.h <= 0.0 {
+        return None;
+    }
+    let panel = Rect {
+        x: explorer.x + 8.0,
+        y: layout.explorer_root.y + layout.explorer_root.h + 8.0,
+        w: (explorer.w - 16.0).max(0.0),
+        h: 116.0,
+    };
+    if panel.y + panel.h > explorer.y + explorer.h - 8.0 {
+        return None;
+    }
+    let inner_w = (panel.w - 16.0).max(0.0);
+    let button_w = ((inner_w - 8.0) / 2.0).max(0.0);
+    Some(NewItemLayout {
+        panel,
+        input: Rect {
+            x: panel.x + 8.0,
+            y: panel.y + 32.0,
+            w: inner_w,
+            h: 24.0,
+        },
+        create: Rect {
+            x: panel.x + 8.0,
+            y: panel.y + 82.0,
+            w: button_w,
+            h: 24.0,
+        },
+        cancel: Rect {
+            x: panel.x + 16.0 + button_w,
+            y: panel.y + 82.0,
+            w: button_w,
+            h: 24.0,
+        },
+    })
+}
+
+pub(super) fn draw_new_item_prompt(f: &mut Frame, layout: &AppLayout) -> (bool, bool) {
+    let Some(prompt) = f.new_item.take() else {
+        return (false, false);
+    };
+    let Some(l) = new_item_layout(layout) else {
+        f.new_item = Some(prompt);
+        return (false, false);
+    };
+    card(f, l.panel);
+    text(
+        f,
+        prompt.kind.title(),
+        l.panel.x + 10.0,
+        l.panel.y + 10.0,
+        11.0,
+        f.theme.fg,
+        true,
+    );
+    prompt
+        .input
+        .draw(f.canvas, l.input, f.theme, f.text, f.scale);
+    if prompt.input.text.is_empty() {
+        text(
+            f,
+            prompt.kind.placeholder(),
+            l.input.x + 10.0,
+            l.input.y + (l.input.h - 11.0) / 2.0,
+            11.0,
+            f.theme.fg_dim,
+            false,
+        );
+    }
+    if let Some(error) = &prompt.error {
+        let max_chars = ((l.panel.w - 20.0) / 6.0).floor().max(1.0) as usize;
+        text(
+            f,
+            &super::truncate_chars(error, max_chars),
+            l.panel.x + 10.0,
+            l.panel.y + 62.0,
+            9.0,
+            f.theme.git_deleted,
+            false,
+        );
+    }
+    let create = draw_button(
+        f.canvas, "Create", l.create, f.theme, f.text, f.pointer, f.scale,
+    ) == Press::Clicked;
+    let cancel = draw_button(
+        f.canvas, "Cancel", l.cancel, f.theme, f.text, f.pointer, f.scale,
+    ) == Press::Clicked;
+    f.new_item = Some(prompt);
+    (create, cancel)
 }
 
 pub(super) fn draw_source_control_breadcrumb(f: &mut Frame, pane: Rect) {

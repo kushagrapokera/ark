@@ -30,10 +30,12 @@ mod configed;
 mod editor_groups;
 mod frame;
 mod fs;
+mod fs_create;
 mod git;
 mod highlight;
 mod icons;
 mod memory;
+mod new_item;
 mod render;
 mod state;
 mod term;
@@ -51,6 +53,7 @@ use editor_groups::EditorGroups;
 use frame::{AppLayout, Frame, SplitDrag};
 use git::{FileDiff as GitFileDiff, GitStatus};
 use highlight::Highlighter;
+use new_item::{NewItemKind, NewItemPrompt};
 use render::{Canvas, Damage, DamageRect, Theme};
 use state::BufferCache;
 use alacritty_terminal::term::TermMode;
@@ -288,6 +291,8 @@ struct App {
     config_error: Option<String>,
     /// Tab path that owns a config-open failure.
     config_error_path: Option<PathBuf>,
+    /// One capped Explorer New File/New Folder name prompt.
+    new_item: Option<NewItemPrompt>,
     /// Window IME state (follows PaneMode::Config).
     ime_allowed: bool,
     /// Last input/fs/git/PTY activity (M11 idle trim gate).
@@ -370,6 +375,7 @@ impl App {
             config_edits: None,
             config_error: None,
             config_error_path: None,
+            new_item: None,
             ime_allowed: false,
             last_activity: Instant::now(),
             last_trim: None,
@@ -396,6 +402,72 @@ impl App {
             .as_ref()
             .map(|editor| editor.path().to_path_buf())
             .or_else(|| self.config_error_path.clone())
+    }
+
+    fn request_new_item(&mut self, kind: NewItemKind) {
+        self.new_item = Some(NewItemPrompt::new(kind));
+        self.activity = frame::ActivityPanel::Explorer;
+        self.term_focused = false;
+        self.commit.message.focused = false;
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn cancel_new_item(&mut self) {
+        if self.new_item.take().is_some() {
+            self.damage.mark_full();
+            self.request_redraw();
+        }
+    }
+
+    fn submit_new_item(&mut self) {
+        let Some(prompt) = self.new_item.as_ref() else {
+            return;
+        };
+        let kind = prompt.kind;
+        let name = prompt.input.text.trim().to_owned();
+        let result = match kind {
+            NewItemKind::File => fs_create::create_file(&self.root, &name),
+            NewItemKind::Folder => fs_create::create_dir(&self.root, &name),
+        };
+        match result {
+            Ok(path) => {
+                info!("created {} {}", kind.title(), path.display());
+                self.new_item = None;
+                self.tree.refresh();
+                self.tree.select(&path);
+                if kind == NewItemKind::File
+                    && config::is_editable(&self.root, &path, &self.settings.editable)
+                {
+                    self.open_config(path);
+                } else if kind == NewItemKind::File {
+                    self.open_viewer(path, self.active_group_index());
+                }
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+            Err(e) => {
+                error!("create {} failed: {e}", kind.title());
+                if let Some(prompt) = self.new_item.as_mut() {
+                    prompt.set_error(&e.to_string());
+                }
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+        }
+    }
+
+    fn refresh_explorer(&mut self) {
+        self.tree.refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn collapse_explorer(&mut self) {
+        if self.tree.collapse_all() {
+            self.damage.mark_full();
+            self.request_redraw();
+        }
     }
 
     /// Open/pin every visible viewer, then lend distinct mutable borrows to the
@@ -692,6 +764,7 @@ impl App {
                 config_error_path,
                 terms,
                 term_focused: self.term_focused,
+                new_item: self.new_item.as_mut(),
             },
             &layout,
             &mut self.tree,
@@ -738,6 +811,24 @@ impl App {
         }
         if effects.close_terminal {
             self.close_terminal_tab();
+        }
+        if effects.new_file {
+            self.request_new_item(NewItemKind::File);
+        }
+        if effects.new_folder {
+            self.request_new_item(NewItemKind::Folder);
+        }
+        if effects.refresh_tree {
+            self.refresh_explorer();
+        }
+        if effects.collapse_tree {
+            self.collapse_explorer();
+        }
+        if effects.new_item_submit {
+            self.submit_new_item();
+        }
+        if effects.new_item_cancel {
+            self.cancel_new_item();
         }
         if effects.commit_clicked {
             self.commit_now();
@@ -1250,7 +1341,7 @@ impl App {
 
     /// Keep the window IME state in sync with the config pane (M9).
     fn sync_ime(&mut self) {
-        let want = self.pane == PaneMode::Config;
+        let want = self.pane == PaneMode::Config || self.new_item.is_some();
         if want == self.ime_allowed {
             return;
         }
@@ -1694,6 +1785,10 @@ impl ApplicationHandler<Wake> for App {
                     // focused (the message field / buttons own this surface).
                     self.term_focused = false;
                 }
+                if self.new_item.is_some() {
+                    self.term_focused = false;
+                    self.commit.message.focused = false;
+                }
                 if self.pane == PaneMode::Config {
                     // Config-pane clicks (textarea/env form) never focus the
                     // hidden shell either.
@@ -1828,6 +1923,16 @@ impl ApplicationHandler<Wake> for App {
                 self.modifiers = modifiers;
             }
             WindowEvent::Ime(ime) => {
+                if let Some(prompt) = &mut self.new_item {
+                    if let winit::event::Ime::Commit(text) = ime {
+                        if prompt.input.insert(&text) {
+                            prompt.error = None;
+                            self.damage.mark_full();
+                            self.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 if self.pane != PaneMode::Config {
                     return;
                 }
@@ -1847,6 +1952,24 @@ impl ApplicationHandler<Wake> for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
+                    return;
+                }
+                if let Some(prompt) = &mut self.new_item {
+                    let handled = match &event.logical_key {
+                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                            self.submit_new_item();
+                            true
+                        }
+                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                            self.cancel_new_item();
+                            true
+                        }
+                        key => prompt.handle_key(key, event.text.as_deref()),
+                    };
+                    if handled {
+                        self.damage.mark_full();
+                        self.request_redraw();
+                    }
                     return;
                 }
                 let ctrl = self.modifiers.state().control_key();

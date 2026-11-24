@@ -251,6 +251,23 @@ five open viewers, two shells + fake agent tab):
 - Split stress with five viewers, two shells, and a resize:
   **65,748 KiB = 64.2 MiB RSS**, **57,843 KiB = 56.5 MiB PSS**.
 
+## Explorer root actions
+
+- New File and New Folder open a capped in-card name prompt (128 chars,
+  160-char error cap), support Enter/Create and Escape/Cancel, and create
+  root-contained, no-overwrite entries through a dedicated Rust filesystem
+  boundary.
+- New code files open read-only; newly created whitelisted config files open in
+  the enforced config editor. Existing symlinks are never followed or replaced.
+- Refresh re-lists the tree. Collapse All uses in-place `retain` to free every
+  expanded listing without allocating.
+- The prompt is the only new retained state and exists only while open. Stress
+  with five viewers, two shells, and a 128-char prompt measured **0 KiB RSS
+  change** (65,612 KiB before/during/after; PSS 57,634/57,633/57,634 KiB).
+- Verification: `cargo test` **285 passed, 0 failed, 3 ignored**, 5/5 CLI;
+  clippy and release build clean. Live smoke created `notes.txt` and
+  `new-folder`, collapsed expanded directories, and refreshed an external file.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

@@ -60,6 +60,23 @@ fn collapse_frees_cached_listing() {
     );
 }
 
+#[test]
+fn collapse_all_frees_every_expanded_listing_without_allocating() {
+    let (d, mut tree) = tree_fixture("collapse-all");
+    let a = d.path().join("A");
+    let c = d.path().join("A/C");
+    assert!(tree.toggle(&a, true));
+    assert!(tree.toggle(&c, true));
+    assert_eq!(tree.cached_listing_count(), 3);
+    tree.offset = 100.0;
+
+    assert!(tree.collapse_all());
+    assert_eq!(tree.expanded_dir_count(), 0);
+    assert_eq!(tree.cached_listing_count(), 1, "only the root listing remains");
+    assert_eq!(tree.offset, 0.0);
+    assert!(!tree.collapse_all(), "already collapsed is a no-op");
+}
+
 // ---- 3. depth-first row projection ----
 
 #[test]

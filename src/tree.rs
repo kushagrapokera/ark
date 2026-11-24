@@ -140,6 +140,20 @@ impl FileTree {
         self.expanded.iter().filter(|p| p.as_path() != self.root.as_path()).count()
     }
 
+    /// Collapse every user-expanded directory and free all non-root listings.
+    /// Uses in-place `retain` so the action allocates nothing.
+    pub fn collapse_all(&mut self) -> bool {
+        let changed = self.expanded.len() > 1;
+        if !changed {
+            return false;
+        }
+        self.expanded.retain(|path| path == &self.root);
+        self.children.retain(|path, _| path == &self.root);
+        self.offset = 0.0;
+        log::debug!("collapsed all Explorer directories");
+        true
+    }
+
     /// Re-list the root and every user-expanded directory (M5 live refresh).
     /// Failed sub-listings collapse that dir (vanished/unreadable — normal
     /// during refresh, not an error surface); a failed ROOT listing keeps

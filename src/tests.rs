@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::fs::testutil::temp_dir;
+use crate::new_item::NewItemKind;
 use std::fs;
 use std::thread;
 use std::time::Duration;
@@ -480,6 +481,74 @@ fn sidebar_handle_activity_pulse_decays_to_idle() {
         "pulse fades linearly after input"
     );
     assert_eq!(handle_activity_pulse(now, now - HANDLE_PULSE), 0.0);
+}
+
+#[test]
+fn app_explorer_create_actions_create_root_contained_entries() {
+    let d = temp_dir("app-explorer-create");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+
+    app.request_new_item(NewItemKind::File);
+    app.new_item.as_mut().expect("prompt").input.text = "notes.txt".into();
+    app.new_item.as_mut().expect("prompt").input.cursor = 10;
+    app.submit_new_item();
+    assert!(d.path().join("notes.txt").is_file());
+    assert!(app.new_item.is_none());
+
+    app.request_new_item(NewItemKind::Folder);
+    app.new_item.as_mut().expect("prompt").input.text = "new-folder".into();
+    app.new_item.as_mut().expect("prompt").input.cursor = 10;
+    app.submit_new_item();
+    assert!(d.path().join("new-folder").is_dir());
+    assert!(app.new_item.is_none());
+}
+
+#[test]
+fn app_new_whitelisted_config_opens_the_enforced_editor() {
+    let d = temp_dir("app-explorer-new-config");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.request_new_item(NewItemKind::File);
+    let prompt = app.new_item.as_mut().expect("prompt");
+    prompt.input.text = "config.yaml".into();
+    prompt.input.cursor = prompt.input.text.len();
+    app.submit_new_item();
+    assert!(d.path().join("config.yaml").is_file());
+    assert_eq!(app.pane, PaneMode::Config);
+    assert!(app.config_edits.is_some());
+}
+
+#[test]
+fn app_new_item_refuses_overwrite_and_keeps_the_prompt_error() {
+    let d = temp_dir("app-explorer-overwrite");
+    fs::write(d.path().join("exists.txt"), "keep").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.request_new_item(NewItemKind::File);
+    let prompt = app.new_item.as_mut().expect("prompt");
+    prompt.input.text = "exists.txt".into();
+    prompt.input.cursor = prompt.input.text.len();
+    app.submit_new_item();
+    assert!(app.new_item.is_some());
+    assert!(app.new_item.as_ref().expect("prompt").error.is_some());
+    assert_eq!(fs::read_to_string(d.path().join("exists.txt")).expect("read"), "keep");
+}
+
+#[test]
+fn app_explorer_refresh_and_collapse_actions_update_the_tree() {
+    let d = temp_dir("app-explorer-tree-actions");
+    fs::create_dir_all(d.path().join("A/C")).expect("create A/C");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let a = d.path().join("A");
+    let c = d.path().join("A/C");
+    assert!(app.tree.toggle(&a, true));
+    assert!(app.tree.toggle(&c, true));
+
+    app.collapse_explorer();
+    assert_eq!(app.tree.expanded_dir_count(), 0);
+    assert_eq!(app.tree.visible_count(), 1, "collapse keeps only root rows");
+
+    fs::write(d.path().join("fresh.txt"), "fresh\n").expect("write fresh");
+    app.refresh_explorer();
+    assert!(app.tree.visible_rows().iter().any(|row| row.name == "fresh.txt"));
 }
 
 #[test]

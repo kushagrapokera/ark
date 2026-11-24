@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::fs::testutil::{temp_dir, TempDir};
+use crate::new_item::{NewItemKind, NewItemPrompt};
 use crate::ui::testutil::count_color_in;
 use std::fs;
 
@@ -304,6 +305,122 @@ fn compact_terminal_plus_button_opens_the_first_shell() {
 }
 
 #[test]
+fn new_item_prompt_reports_create_and_cancel() {
+    let (_d, mut tree) = scene_fixture("new-item-prompt");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut prompt = NewItemPrompt::new(NewItemKind::File);
+    prompt.input.text = "notes.txt".into();
+    prompt.input.cursor = prompt.input.text.len();
+    let mut canvas = Canvas::new(1024, 768);
+    let mut text = TextSystem::new();
+    let mut split = Split { position: 304.0 };
+    let mut split_drag = SplitDrag::default();
+    let mut scrollbar = Scrollbar::default();
+    let mut viewer_scrollbar = Scrollbar::default();
+    let mut frame = Frame {
+        canvas: &mut canvas,
+        text: &mut text,
+        theme: &theme,
+        scale: 1.0,
+        activity_pulse: 0.0,
+        animation_time: 0.0,
+        title: "ark",
+        root: Path::new("/repo"),
+        open_files: &[],
+        active_path: None,
+        activity: ActivityPanel::Explorer,
+        pointer: Pointer::default(),
+        dbl_click: false,
+        viewer: None,
+        viewer_error: None,
+        viewer_flash: false,
+        highlighter: &Highlighter::new(),
+        git: None,
+        file_diff: None,
+        commit: None,
+        config: None,
+        config_error: None,
+        config_error_path: None,
+        terms: None,
+        term_focused: false,
+        groups: None,
+        active_group: 0,
+        group_viewers: [None, None],
+        group_flash: [false, false],
+        group_scrollbars: None,
+        group_split: None,
+        group_split_drag: None,
+        new_item: Some(&mut prompt),
+    };
+    let _ = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    frame.pointer = Pointer { x: 130.0, y: 206.0, down: false, click: true };
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(effects.new_item_submit);
+
+    frame.pointer = Pointer { x: 238.0, y: 206.0, down: false, click: true };
+    let effects = draw_frame(
+        &mut frame,
+        &layout,
+        &mut tree,
+        &mut split,
+        &mut split_drag,
+        &mut scrollbar,
+        &mut viewer_scrollbar,
+    );
+    assert!(effects.new_item_cancel);
+}
+
+#[test]
+fn explorer_root_actions_report_clicks() {
+    let (_d, mut tree) = scene_fixture("explorer-actions");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut canvas = Canvas::new(1024, 768);
+    let mut text = TextSystem::new();
+    for (x, expected) in [
+        (246.0, "file"),
+        (262.0, "folder"),
+        (278.0, "refresh"),
+        (294.0, "collapse"),
+    ] {
+        let effects = draw_static_frame(
+            &mut canvas,
+            &mut text,
+            &theme,
+            &mut tree,
+            &layout,
+            Pointer { x, y: 86.0, down: false, click: true },
+            &[],
+            None,
+        );
+        match expected {
+            "file" => assert!(effects.new_file),
+            "folder" => assert!(effects.new_folder),
+            "refresh" => assert!(effects.refresh_tree),
+            "collapse" => assert!(effects.collapse_tree),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn activity_bar_omits_unused_placeholders_below_config() {
     let (_d, mut tree) = scene_fixture("activity-placeholders");
     let mut theme = frame_theme();
@@ -582,6 +699,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 config_error_path: None,
                 terms: None,
                 term_focused: false,
+                new_item: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -627,6 +745,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -819,6 +938,7 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         config_error_path: None,
         terms: None,
         term_focused: false,
+        new_item: None,
         groups: Some(&groups.groups),
         active_group: 1,
         group_viewers: [Some(&mut va), Some(&mut vb)],
@@ -1061,6 +1181,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1128,6 +1249,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1215,6 +1337,7 @@ fn vertical_terminal_sessions_switch_the_active_pty() {
             config_error_path: None,
             terms: Some(&mut terms),
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1383,6 +1506,7 @@ fn draw_static_frame(
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1488,6 +1612,7 @@ fn frame_scene_renders_spec_surfaces() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1597,6 +1722,7 @@ fn frame_viewer_pane_renders_over_placeholder() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1673,6 +1799,7 @@ fn frame_interactions_report_effects() {
         config_error_path: None,
         terms: None,
         term_focused: false,
+        new_item: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -1842,6 +1969,7 @@ fn frame_double_click_opens_and_viewer_scrolls() {
         config_error_path: None,
         terms: None,
         term_focused: false,
+        new_item: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -1990,6 +2118,7 @@ fn viewer_flash_paints_accent_strip() {
                 config_error_path: None,
                 terms: None,
                 term_focused: false,
+                new_item: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2083,6 +2212,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2145,6 +2275,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2206,6 +2337,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         config_error_path: None,
         terms: None,
         term_focused: false,
+        new_item: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2345,6 +2477,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2406,6 +2539,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 config_error_path: None,
                 terms: None,
                 term_focused: false,
+                new_item: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2579,6 +2713,7 @@ fn viewer_offset_self_heals_before_hit_testing() {
             config_error_path: None,
             terms: None,
             term_focused: false,
+            new_item: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],

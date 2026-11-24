@@ -11,6 +11,7 @@ use crate::configed::ConfigEditor;
 use crate::editor_groups::EditorGroup;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
+use crate::new_item::NewItemPrompt;
 use crate::render::{Canvas, ColorRgb, Theme};
 use crate::term::{self, TerminalTabs};
 use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
@@ -716,6 +717,8 @@ pub struct Frame<'a> {
     pub terms: Option<&'a mut TerminalTabs>,
     /// Terminal pane focused (keys route to the shell; cursor visible).
     pub term_focused: bool,
+    /// Explorer New File/New Folder name prompt, when open.
+    pub new_item: Option<&'a mut NewItemPrompt>,
 }
 
 /// What `draw_frame` changed this frame — the caller marks damage AFTER the
@@ -743,6 +746,14 @@ pub struct FrameEffects {
     pub commit_clicked: bool,
     /// The Push button was clicked.
     pub push_clicked: bool,
+    /// Explorer root New File action clicked.
+    pub new_file: bool,
+    /// Explorer root New Folder action clicked.
+    pub new_folder: bool,
+    /// Explorer root Refresh action clicked.
+    pub refresh_tree: bool,
+    /// Explorer root Collapse All action clicked.
+    pub collapse_tree: bool,
     /// Config editor header Save/Reload clicked.
     pub config_save: bool,
     pub config_reload: bool,
@@ -762,6 +773,10 @@ pub struct FrameEffects {
     pub toggle_split: bool,
     /// The editor-group divider moved.
     pub group_split_moved: bool,
+    /// The New File/New Folder prompt's Create button was clicked.
+    pub new_item_submit: bool,
+    /// The prompt's Cancel button was clicked.
+    pub new_item_cancel: bool,
 }
 
 /// Draw the existing per-file Commit & Push panel in the active Source
@@ -925,16 +940,25 @@ pub fn draw_frame(
     }
 
     if f.activity == ActivityPanel::SourceControl {
-        chrome::draw_explorer_chrome(f, layout);
+        let _ = chrome::draw_explorer_chrome(f, layout);
         let fx = draw_source_control(f, layout);
         effects.commit_toggled = fx.toggled;
         effects.commit_clicked = fx.commit;
         effects.push_clicked = fx.push;
     } else {
-        chrome::draw_explorer_chrome(f, layout);
+        let fx = chrome::draw_explorer_chrome(f, layout);
+        effects.new_file = fx.new_file;
+        effects.new_folder = fx.new_folder;
+        effects.refresh_tree = fx.refresh;
+        effects.collapse_tree = fx.collapse;
 
-        // Tree panel: process the frame's click, then draw the rows.
-        match tree::handle_pointer(tree, layout.tree_panel, f.pointer, f.dbl_click) {
+        // Tree panel: the modal name prompt blocks clicks/hover underneath it.
+        let tree_pointer = if f.new_item.is_some() {
+            Pointer::default()
+        } else {
+            f.pointer
+        };
+        match tree::handle_pointer(tree, layout.tree_panel, tree_pointer, f.dbl_click) {
             tree::TreeAction::None => {}
             tree::TreeAction::Toggled | tree::TreeAction::Selected => effects.tree_changed = true,
             tree::TreeAction::Opened(path) => effects.opened = Some(path),
@@ -949,14 +973,14 @@ pub fn draw_frame(
             f.scale,
             layout.tree_panel,
             tree,
-            f.pointer,
+            tree_pointer,
             f.git,
         );
         if layout.tree_panel.w > tree::TRACK_W {
             let viewport = layout.tree_panel.h;
             let content = tree.visible_count() as f64 * ROW_H;
             scrollbar.offset = tree.offset;
-            if scrollbar.on_pointer(layout.scroll_track, f.pointer, content, viewport) {
+            if scrollbar.on_pointer(layout.scroll_track, tree_pointer, content, viewport) {
                 tree.set_offset(scrollbar.offset, viewport);
                 effects.scrolled = true;
             }
@@ -1178,6 +1202,10 @@ pub fn draw_frame(
     f.group_scrollbars = group_scrollbars_state;
     f.group_split = group_split;
     f.group_split_drag = group_split_drag;
+
+    let (new_item_submit, new_item_cancel) = chrome::draw_new_item_prompt(f, layout);
+    effects.new_item_submit = new_item_submit;
+    effects.new_item_cancel = new_item_cancel;
 
     chrome::draw_status_bar(f, layout);
     effects
