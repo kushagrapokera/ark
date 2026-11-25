@@ -69,6 +69,119 @@ fn search_caps_results_and_reports_truncation() {
 }
 
 #[test]
+fn search_keeps_an_exact_case_source_match_beyond_the_result_cap() {
+    let d = temp_dir("search-ranked-cap");
+    for i in 0..100 {
+        fs::write(
+            d.path().join(format!("generated{i:03}.txt")),
+            "camelcasefunction\n",
+        )
+        .expect("write generated match");
+    }
+    fs::create_dir_all(d.path().join("src")).expect("mkdir src");
+    let source = d.path().join("src/real.rs");
+    fs::write(&source, "pub fn camelCaseFunction() {}\n").expect("write source");
+    let mut capped = limits();
+    capped.max_results = 1;
+
+    let report = run_search_with_limits(
+        d.path(),
+        "camelCaseFunction",
+        1,
+        &AtomicBool::new(false),
+        capped,
+    );
+
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].path, source,
+        "an exact-case source match must outrank earlier case-insensitive matches"
+    );
+    assert_eq!(report.results[0].line, 1);
+    assert!(report.results[0].snippet.contains("camelCaseFunction"));
+    assert!(report.truncated, "the report still discloses that results were capped");
+}
+
+#[test]
+fn search_skips_generated_build_and_dependency_directories() {
+    let d = temp_dir("search-generated-dirs");
+    let source = d.path().join("real.rs");
+    fs::write(&source, "pub fn camelCaseFunction() {}\n").expect("write source");
+    for generated in ["target/debug", "node_modules/pkg"] {
+        let dir = d.path().join(generated);
+        fs::create_dir_all(&dir).expect("mkdir generated directory");
+        for i in 0..20 {
+            fs::write(dir.join(format!("noise{i}.txt")), "camelCaseFunction\n")
+                .expect("write generated match");
+        }
+    }
+
+    let report = run_search(d.path(), "camelCaseFunction", 1, &AtomicBool::new(false));
+
+    assert_eq!(report.scanned_files, 1, "generated directories are not project source");
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(report.results[0].path, source);
+    assert!(!report.truncated);
+}
+
+#[test]
+fn fractional_scroll_keeps_result_ink_out_of_the_search_chrome() {
+    use std::path::Path;
+
+    use crate::render::{Canvas, Theme};
+    use crate::text::TextSystem;
+    use crate::ui::{Pointer, Rect, Scrollbar};
+
+    let rect = Rect { x: 0.0, y: 0.0, w: 304.0, h: 768.0 };
+    let panel = panel_layout(rect);
+    let mut state = SearchState::default();
+    for i in 0..20 {
+        state.results.push(SearchResult {
+            path: PathBuf::from(format!("/repo/src/f{i:02}.rs")),
+            matches: 1,
+            line: 1,
+            snippet: format!("fn target{i}() {{}}"),
+        });
+    }
+    state.scroll = 32.0;
+    let mut theme = Theme::DARK_PLUS;
+    theme.bg = (0, 0, 0);
+    theme.surface = (0, 0, 0);
+    theme.bg_elevated = (0, 0, 0);
+    theme.fg = (255, 255, 255);
+    let mut canvas = Canvas::new(304, 768);
+    canvas.fill(theme.bg);
+    let mut text = TextSystem::new();
+    let mut scrollbar = Scrollbar::default();
+
+    let _ = draw_search_panel(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        1.0,
+        rect,
+        Path::new("/repo"),
+        &mut state,
+        Pointer::default(),
+        &mut scrollbar,
+    );
+
+    assert_eq!(
+        crate::ui::testutil::count_color_in(
+            &canvas,
+            theme.fg,
+            0,
+            (panel.results.y - 24.0) as u32,
+            304,
+            panel.results.y as u32,
+        ),
+        0,
+        "a partially visible row must not paint its label into the status/input area"
+    );
+}
+
+#[test]
 fn search_caps_files_and_bytes() {
     let d = temp_dir("search-scan-cap");
     for i in 0..5 {

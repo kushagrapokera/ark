@@ -511,6 +511,23 @@ five open viewers, two shells + fake agent tab):
   search measured **38,960 KiB RSS / 30,261 KiB PSS** (sampled peak RSS 39,540
   KiB), below the 100 MiB budget.
 
+## Search reliability follow-up
+
+- Fixed missing camel-case hits caused by generated trees consuming the scan
+  budget and the worker stopping at 100 matches. Search now skips conventional
+  build/dependency directories, scans through the existing file/byte limits, and
+  retains the top 100 results with exact-case matches ranked first.
+- Fixed result rows using only their intra-row offset instead of the full scroll
+  position, which blanked middle/bottom pages. Row painting and hit testing are
+  now clipped to the visible result viewport, including fractional scroll offsets.
+- Verification: **364 unit tests + 5 CLI tests**, clippy/release clean. Live smoke
+  found `open_search_result` in ark source while scanning 430 files (excluding
+  `target/`), scrolled a 100-result fixture to its bottom, and opened the visible
+  result. Updated five-viewer/two-terminal stress measured **39,192 KiB RSS /
+  31,788 KiB PSS** (sampled peak RSS 39,792 KiB), below the 100 MiB budget.
+- `smem` is unavailable in this environment; PSS was read from
+  `/proc/<pid>/smaps_rollup` during the live stress run.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

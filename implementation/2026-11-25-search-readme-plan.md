@@ -75,3 +75,16 @@ Files: `src/readme.rs` (new), `src/icons.rs`, `src/frame.rs`,
   only three icons.
 - [x] Record five-viewer/two-terminal RSS/PSS below 100 MiB and update
   `implementation/workbench-ui/progress.md`.
+
+## 5. Search reliability follow-up
+
+Files: `src/search/mod.rs`, `src/search/ui.rs`, `src/search/tests.rs`,
+`src/frame/tests.rs`.
+
+- [x] Add regressions for exact-case source matches hidden beyond the result cap,
+  generated directories consuming the scan budget, and blank scrolled result pages.
+- [x] Skip conventional generated/dependency directories and keep scanning within
+  the existing file/byte caps while retaining the top 100 ranked results.
+- [x] Position viewport rows from the full scroll offset so middle/bottom pages
+  render and remain clickable.
+- [x] Re-run unit/integration tests, clippy, release build, and live search/scroll smoke.

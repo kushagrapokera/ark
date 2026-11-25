@@ -97,7 +97,7 @@ pub fn draw_search_panel(
     draw_clipped(
         canvas, text, scale, ui_scale, "SEARCH",
         rect.x + 12.0, rect.y + 10.0, (rect.w - 24.0).max(0.0),
-        theme.fg, Weight::BOLD,
+        theme.fg, Weight::BOLD, rect,
     );
     if pointer.click && layout.input.contains(pointer.x, pointer.y) {
         state.input.focused = true;
@@ -106,25 +106,29 @@ pub fn draw_search_panel(
     draw_clipped(
         canvas, text, scale, ui_scale, &state.status,
         layout.status.x, layout.status.y + 4.0, layout.status.w,
-        theme.text_muted, Weight::NORMAL,
+        theme.text_muted, Weight::NORMAL, layout.status,
     );
 
     let content_h = state.results.len() as f64 * SEARCH_ROW_H;
     let max_scroll = (content_h - layout.results.h).max(0.0);
     state.scroll = state.scroll.clamp(0.0, max_scroll);
     let first = (state.scroll / SEARCH_ROW_H).floor() as usize;
-    let offset = state.scroll - first as f64 * SEARCH_ROW_H;
     let visible = ((layout.results.h / SEARCH_ROW_H).ceil() as usize).saturating_add(1);
     for (row_index, result) in state.results.iter().enumerate().skip(first).take(visible) {
-        let row_y = layout.results.y + row_index as f64 * SEARCH_ROW_H - offset;
+        let row_y = layout.results.y + row_index as f64 * SEARCH_ROW_H - state.scroll;
         if row_y + SEARCH_ROW_H <= layout.results.y || row_y >= layout.results.y + layout.results.h {
+            continue;
+        }
+        let visible_top = row_y.max(layout.results.y);
+        let visible_bottom = (row_y + SEARCH_ROW_H).min(layout.results.y + layout.results.h);
+        if visible_top >= visible_bottom {
             continue;
         }
         let row_rect = Rect {
             x: layout.results.x,
-            y: row_y,
+            y: visible_top,
             w: layout.results.w,
-            h: SEARCH_ROW_H,
+            h: visible_bottom - visible_top,
         };
         let hovered = row_rect.contains(pointer.x, pointer.y);
         if hovered {
@@ -137,17 +141,17 @@ pub fn draw_search_panel(
         draw_clipped(
             canvas, text, scale, ui_scale, &label,
             row_rect.x + 8.0, row_rect.y + 5.0, (row_rect.w - count_w - 16.0).max(0.0),
-            theme.fg, Weight::BOLD,
+            theme.fg, Weight::BOLD, row_rect,
         );
         draw_clipped(
             canvas, text, scale, ui_scale, &result.snippet,
             row_rect.x + 8.0, row_rect.y + 25.0, (row_rect.w - 16.0).max(0.0),
-            theme.text_dim, Weight::NORMAL,
+            theme.text_dim, Weight::NORMAL, row_rect,
         );
         draw_clipped(
             canvas, text, scale, ui_scale, &count,
             row_rect.x + row_rect.w - count_w, row_rect.y + 6.0, count_w,
-            theme.text_muted, Weight::NORMAL,
+            theme.text_muted, Weight::NORMAL, row_rect,
         );
         if pointer.click && hovered {
             effects.open = Some((result.path.clone(), result.line));
@@ -176,9 +180,14 @@ fn draw_clipped(
     width: f64,
     color: ColorRgb,
     weight: Weight,
+    clip: Rect,
 ) {
     let font_size = (crate::frame::ui_size(9.0, ui_scale) * scale) as f32;
     let metrics = text.mono_metrics(font_size, font_size * 1.35);
+    let line_h = f64::from(metrics.line_height) / scale;
+    if y < clip.y || y + line_h > clip.y + clip.h {
+        return;
+    }
     let advance = f64::from(metrics.advance) / scale;
     let max_chars = (width / advance.max(1.0)).floor().max(0.0) as usize;
     let shown: String = label.chars().take(max_chars).collect();

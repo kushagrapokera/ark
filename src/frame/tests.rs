@@ -971,6 +971,64 @@ fn search_panel_focuses_input_and_opens_a_result() {
 }
 
 #[test]
+fn search_bottom_page_renders_and_opens_the_visible_result() {
+    let (_d, mut tree) = scene_fixture("search-scroll-bottom");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let panel: search::SearchLayout = search::panel_layout(layout.explorer_card);
+    let mut state = crate::search::SearchState::default();
+    for i in 0..150 {
+        state.results.push(crate::search::SearchResult {
+            path: PathBuf::from(format!("/repo/src/f{i:03}.rs")),
+            matches: 1,
+            line: 1,
+            snippet: format!("fn target{i}() {{}}"),
+        });
+    }
+    state.scroll = state.results.len() as f64 * 46.0 - panel.results.h;
+    let expected_index = ((state.scroll + 10.0) / 46.0).floor() as usize;
+    let expected = state.results[expected_index].clone();
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+
+    let effects = draw_static_frame_with(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: panel.results.x + 10.0,
+            y: panel.results.y + 10.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+        ActivityPanel::Search,
+        Some(&mut state),
+        None,
+    );
+
+    assert_eq!(
+        effects.search_open,
+        Some((expected.path, expected.line)),
+        "the bottom page must hit-test the row actually visible at its top"
+    );
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.fg,
+            panel.results.x as u32,
+            panel.results.y as u32,
+            (panel.results.x + panel.results.w) as u32,
+            (panel.results.y + panel.results.h) as u32,
+        ) > 0,
+        "the final result page must paint instead of going blank"
+    );
+}
+
+#[test]
 fn source_control_icon_opens_the_per_file_commit_card() {
     let status = crate::git::parse_status(
         "? two words.txt\n\

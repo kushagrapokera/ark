@@ -38,10 +38,14 @@ action that toggles a GitHub-style formatted view when the active tab is a READM
 - `SearchState { input, results, status, scroll, running }`
 - `run_search(root, query, generation, cancel) -> SearchReport`
 
-The worker walks directories without following symlinks, skips `.git`, refuses
+The worker walks directories without following symlinks and skips Git internals
+plus conventional generated/dependency directories (`target`, `node_modules`,
+virtual environments, caches, build output, and coverage). It refuses
 binary/invalid UTF-8 files, reads at most 1 MiB per file, scans at most 50,000
-files or 128 MiB total, and returns at most 100 file results. A cancelled or stale
-report is discarded by generation/query identity.
+files or 128 MiB total, and returns at most 100 file results. Reaching the result
+cap does not end the scan: the worker keeps the best bounded set, ranking
+exact-case matches ahead of case-insensitive-only matches, then match count and
+path. A cancelled or stale report is discarded by generation/query identity.
 
 The App debounces typing by 250 ms, runs one worker at a time, cancels stale work,
 and receives `Wake::SearchFinished(Box<SearchReport>)`. Search UI lives in the
@@ -97,7 +101,8 @@ work and show a clear truncation notice.
 
 ## Verification
 
-- Unit tests for bounded search, cancellation identity, binary refusal, result
+- Unit tests for bounded search, generated-directory refusal, relevance ranking
+  beyond the result cap, cancellation identity, binary refusal, result
   caps, README detection, Markdown block/inline layout, wrapping, and scrolling.
 - Frame tests for the three-item activity bar, functional Search routing, result
   click effects, conditional README action, and formatted/raw toggle.

@@ -1,8 +1,9 @@
 //! Bounded project keyword search. No persistent index: each query walks the
 //! filesystem in a worker, reads capped text files, and returns a bounded report.
 
+use std::cmp::Ordering;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 use crate::ui::TextInput;
 
@@ -133,6 +134,46 @@ pub fn run_search(
     run_search_with_limits(root, query, generation, cancel, SearchLimits::default())
 }
 
+#[derive(Debug)]
+struct RankedResult {
+    result: SearchResult,
+    exact_case: bool,
+}
+
+impl RankedResult {
+    fn compare(&self, other: &Self) -> Ordering {
+        other
+            .exact_case
+            .cmp(&self.exact_case)
+            .then_with(|| other.result.matches.cmp(&self.result.matches))
+            .then_with(|| self.result.path.cmp(&other.result.path))
+    }
+}
+
+const EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    ".cache",
+    "dist",
+    "build",
+    "out",
+    "coverage",
+];
+
+fn is_excluded_dir(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    EXCLUDED_DIRS
+        .iter()
+        .any(|excluded| name.eq_ignore_ascii_case(excluded))
+}
+
 fn run_search_with_limits(
     root: &std::path::Path,
     query: &str,
@@ -155,9 +196,10 @@ fn run_search_with_limits(
     }
 
     let mut dirs = vec![root.to_path_buf()];
+    let mut ranked_results: Vec<RankedResult> = Vec::new();
     let mut scanned_bytes = 0u64;
     'walk: while let Some(dir) = dirs.pop() {
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.load(AtomicOrdering::Relaxed) {
             report.cancelled = true;
             break;
         }
@@ -173,7 +215,7 @@ fn run_search_with_limits(
             }
         };
         for entry in entries {
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.load(AtomicOrdering::Relaxed) {
                 report.cancelled = true;
                 break 'walk;
             }
@@ -195,7 +237,8 @@ fn run_search_with_limits(
                 continue;
             }
             if file_type.is_dir() {
-                if entry.file_name() == ".git" {
+                if is_excluded_dir(&entry.file_name()) {
+                    log::trace!("search skipped generated directory {}", entry.path().display());
                     continue;
                 }
                 if dirs.len() >= limits.max_pending_dirs {
@@ -210,7 +253,7 @@ fn run_search_with_limits(
             }
             if report.scanned_files >= limits.max_files {
                 report.truncated = true;
-                break;
+                break 'walk;
             }
             let path = entry.path();
             let len = match entry.metadata() {
@@ -227,7 +270,7 @@ fn run_search_with_limits(
             }
             if scanned_bytes.saturating_add(len) > limits.max_total_bytes {
                 report.truncated = true;
-                break;
+                break 'walk;
             }
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
@@ -252,8 +295,9 @@ fn run_search_with_limits(
             let mut matches = 0usize;
             let mut first_line = 0usize;
             let mut first_snippet = String::new();
+            let mut exact_case = false;
             for (index, line) in text.lines().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
+                if cancel.load(AtomicOrdering::Relaxed) {
                     report.cancelled = true;
                     break 'walk;
                 }
@@ -266,22 +310,32 @@ fn run_search_with_limits(
                     first_line = index + 1;
                     first_snippet = bounded_snippet(line, limits.max_snippet_chars);
                 }
+                if line.contains(query) {
+                    exact_case = true;
+                }
             }
             if matches > 0 {
-                report.results.push(SearchResult {
-                    path,
-                    matches,
-                    line: first_line,
-                    snippet: first_snippet,
+                ranked_results.push(RankedResult {
+                    result: SearchResult {
+                        path,
+                        matches,
+                        line: first_line,
+                        snippet: first_snippet,
+                    },
+                    exact_case,
                 });
-                if report.results.len() >= limits.max_results {
+                ranked_results.sort_by(RankedResult::compare);
+                if ranked_results.len() > limits.max_results {
+                    ranked_results.truncate(limits.max_results);
                     report.truncated = true;
-                    break;
                 }
             }
         }
     }
-    report.results.sort_by(|a, b| a.path.cmp(&b.path));
+    report.results = ranked_results
+        .into_iter()
+        .map(|ranked| ranked.result)
+        .collect();
     report
 }
 
