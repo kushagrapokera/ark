@@ -306,6 +306,38 @@ impl Canvas {
             .fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
     }
 
+    /// Fill a logical-space rect, expanding its device-pixel bounds outward so
+    /// adjacent fractional cells cannot leave raster seams.
+    pub fn fill_rect_cover(&mut self, x: f64, y: f64, w: f64, h: f64, color: ColorRgb, scale: f64) {
+        if !(scale > 0.0 && scale.is_finite() && w > 0.0 && h > 0.0)
+            || !x.is_finite()
+            || !y.is_finite()
+            || !w.is_finite()
+            || !h.is_finite()
+        {
+            return;
+        }
+        let x0 = (x * scale).floor() as i32;
+        let y0 = (y * scale).floor() as i32;
+        let x1 = ((x + w) * scale).ceil() as i32;
+        let y1 = ((y + h) * scale).ceil() as i32;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let rect = tiny_skia::Rect::from_xywh(
+            x0 as f32,
+            y0 as f32,
+            (x1 - x0) as f32,
+            (y1 - y0) as f32,
+        )
+        .expect("valid covered rect");
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(color.0, color.1, color.2, 255);
+        paint.anti_alias = false;
+        self.pixmap
+            .fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+    }
+
     /// Fill an anti-aliased rounded rectangle in logical space. The path is
     /// temporary; no geometry or cache is retained by the canvas.
     #[allow(clippy::too_many_arguments)] // explicit rounded-rect geometry

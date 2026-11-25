@@ -342,6 +342,51 @@ fn app_search_result_uses_the_enforced_editor_for_config_files() {
 }
 
 #[test]
+#[ignore = "needs a live Wayland compositor"]
+fn app_terminal_selection_copies_to_the_native_clipboard() {
+    let d = temp_dir("app-terminal-copy");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let mut term = term::Terminal::spawn_program_with(
+        d.path(),
+        Path::new("/bin/cat"),
+        "copy test",
+        term::GridSize::new(80, 24),
+        || {},
+    )
+    .expect("spawn copy terminal");
+    term.key_input(b"hello");
+    for _ in 0..50 {
+        term.drain_output(64);
+        thread::sleep(Duration::from_millis(10));
+    }
+    app.terms.tabs.push(term);
+    app.terms.active = 0;
+    app.term_focused = true;
+    let rect = Rect { x: 0.0, y: 0.0, w: 800.0, h: 500.0 };
+    let metrics = app.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+    let advance = f64::from(metrics.advance);
+    let start = app
+        .terms
+        .active()
+        .expect("term")
+        .point_at(rect, 1.0, 1.0, advance)
+        .expect("start");
+    let end = app
+        .terms
+        .active()
+        .expect("term")
+        .point_at(rect, advance * 4.0 + 1.0, 1.0, advance)
+        .expect("end");
+    let terminal = app.terms.active_mut().expect("term");
+    terminal.begin_selection(start);
+    terminal.extend_selection(end);
+    terminal.end_selection();
+
+    assert!(app.copy_terminal_selection());
+    assert_eq!(clipboard::paste_text(64).expect("paste"), "hello");
+}
+
+#[test]
 fn app_caret_blink_toggles_focused_inputs_and_reschedules() {
     let d = temp_dir("app-caret-blink");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);

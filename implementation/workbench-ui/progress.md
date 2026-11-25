@@ -594,6 +594,18 @@ five open viewers, two shells + fake agent tab):
   and release build clean. Live fish/search smoke confirmed carets blink on and
   off, and terminal regressions cover background clearing and scaled geometry.
 
+## Terminal background seams and selection
+
+- Fixed terminal row seams by snapping base/cell/selection/cursor fills outward
+  to whole device pixels.
+- Added terminal text selection using alacritty's bounded grid selection:
+  drag when mouse reporting is off, Shift+drag when OpenCode-style apps own the
+  mouse, and Ctrl+Shift+C to copy. Ctrl+C remains SIGINT.
+- Corrected pointer-to-terminal-cell mapping for device and UI scale.
+- Verification: `cargo test` **402 passed, 0 failed, 5 ignored**, 5/5 CLI; clippy
+  and release build clean. Live Wayland copy round-trip, fish drag selection,
+  and colored-row seam smoke passed.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

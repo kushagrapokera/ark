@@ -23,7 +23,8 @@ use std::thread;
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{self, cell::Flags, Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color as TermColor, NamedColor, Rgb};
 use cosmic_text::Weight;
@@ -314,6 +315,7 @@ pub struct Terminal {
     pty_size: GridSize,
     exited: bool,
     caret_visible: bool,
+    selection_dragging: bool,
 }
 
 impl Drop for Terminal {
@@ -572,6 +574,7 @@ impl Terminal {
             pgid,
             exited: false,
             caret_visible: true,
+            selection_dragging: false,
         })
     }
 
@@ -675,6 +678,63 @@ impl Terminal {
         self.caret_visible = visible;
     }
 
+    pub fn mouse_reporting_enabled(&self) -> bool {
+        self.mode().intersects(
+            TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+        )
+    }
+
+    /// Map logical terminal-grid coordinates to an absolute grid point,
+    /// including the current scrollback offset.
+    pub fn point_at(&self, rect: Rect, x: f64, y: f64, advance: f64) -> Option<Point> {
+        if !(advance > 0.0 && advance.is_finite()) || rect.w <= 0.0 || rect.h <= 0.0 {
+            return None;
+        }
+        let content = self.term.renderable_content();
+        let rows = (rect.h / TERM_LINE_H).floor().max(1.0) as usize;
+        let row = ((y - rect.y) / TERM_LINE_H)
+            .floor()
+            .clamp(0.0, rows.saturating_sub(1) as f64) as usize;
+        let col = ((x - rect.x) / advance)
+            .floor()
+            .clamp(0.0, self.size.cols.saturating_sub(1) as f64) as usize;
+        let line = Line(row as i32 - content.display_offset as i32)
+            .max(self.term.grid().topmost_line())
+            .min(self.term.grid().bottommost_line());
+        Some(Point::new(line, Column(col)))
+    }
+
+    pub fn begin_selection(&mut self, point: Point) {
+        self.term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
+        self.selection_dragging = true;
+    }
+
+    pub fn extend_selection(&mut self, point: Point) {
+        if self.selection_dragging {
+            if let Some(selection) = self.term.selection.as_mut() {
+                selection.update(point, Side::Right);
+            }
+        }
+    }
+
+    pub fn end_selection(&mut self) {
+        self.selection_dragging = false;
+        self.term.selection = self.term.selection.take().filter(|selection| !selection.is_empty());
+    }
+
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    pub fn is_selecting(&self) -> bool {
+        self.selection_dragging
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection_dragging = false;
+        self.term.selection = None;
+    }
+
     /// Scroll the viewport by `lines` (positive = toward history).
     pub fn scroll_display(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
@@ -723,7 +783,7 @@ impl Terminal {
         {
             return;
         }
-        canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, theme.bg, scale);
+        canvas.fill_rect_cover(rect.x, rect.y, rect.w, rect.h, theme.bg, scale);
         let content = self.term.renderable_content();
         let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
         let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
@@ -746,7 +806,16 @@ impl Terminal {
             if cell.flags.contains(Flags::HIDDEN) {
                 ch = ' ';
             }
-            grid[vp.line].push(CellView { col: vp.column.0, ch, fg, bg, flags: cell.flags });
+            grid[vp.line].push(CellView {
+                col: vp.column.0,
+                ch,
+                fg,
+                bg,
+                flags: cell.flags,
+                selected: content.selection.is_some_and(|range| {
+                    range.contains_cell(&indexed, indexed.point, content.cursor.shape)
+                }),
+            });
         }
         // Rows may arrive sparse — sort by column (the iterator is in order,
         // but a skipped WIDE_CHAR_SPACER keeps it stable; sort is a no-op).
@@ -760,12 +829,22 @@ impl Terminal {
             let row_y = rect.y + i as f64 * TERM_LINE_H;
             for cell in row {
                 if cell.bg != theme.bg {
-                    canvas.fill_rect(
+                    canvas.fill_rect_cover(
                         rect.x + cell.col as f64 * advance,
                         row_y,
                         advance,
                         TERM_LINE_H,
                         cell.bg,
+                        scale,
+                    );
+                }
+                if cell.selected {
+                    canvas.fill_rect_cover(
+                        rect.x + cell.col as f64 * advance,
+                        row_y,
+                        advance,
+                        TERM_LINE_H,
+                        theme.selection,
                         scale,
                     );
                 }
@@ -818,7 +897,7 @@ impl Terminal {
                 if vp.line < rows {
                     let x = rect.x + vp.column.0 as f64 * advance;
                     let y = rect.y + vp.line as f64 * TERM_LINE_H;
-                    canvas.fill_rect(x, y, advance, TERM_LINE_H, theme.accent, scale);
+                    canvas.fill_rect_cover(x, y, advance, TERM_LINE_H, theme.accent, scale);
                     let cursor_char = self
                         .term
                         .grid()[Point::new(Line(vp.line as i32 - content.display_offset as i32), Column(vp.column.0))]
@@ -843,6 +922,7 @@ struct CellView {
     fg: ColorRgb,
     bg: ColorRgb,
     flags: Flags,
+    selected: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -862,6 +942,9 @@ fn flush_run(
     bold: bool,
     underline: bool,
 ) {
+    if run.trim().is_empty() && !underline {
+        return;
+    }
     let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
     let baseline = (row_y + TERM_LINE_H / 2.0) * scale + baseline_off;
     text.draw_line(

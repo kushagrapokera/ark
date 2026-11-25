@@ -898,9 +898,51 @@ impl App {
     /// Terminal grid as if the dock were open (new tab spawn size).
     fn terminal_grid_for_new_tab(&mut self) -> Option<(Rect, f64)> {
         let layout = self.app_layout()?;
-        let font_size = UI_FONT_SIZE * layout.ui_scale as f32;
+        Some((layout.term_grid, self.terminal_advance(layout.ui_scale)))
+    }
+
+    fn terminal_advance(&mut self, ui_scale: f64) -> f64 {
+        let font_size = UI_FONT_SIZE * self.scale as f32 * ui_scale as f32;
         let m = self.text.mono_metrics(font_size, font_size * 1.35);
-        Some((layout.term_grid, f64::from(m.advance)))
+        f64::from(m.advance) / self.scale
+    }
+
+    fn begin_terminal_selection(&mut self, grid: Rect, advance: f64) -> bool {
+        let Some(point) = self
+            .terms
+            .active()
+            .and_then(|term| term.point_at(grid, self.pointer.x, self.pointer.y, advance))
+        else {
+            return false;
+        };
+        if let Some(term) = self.terms.active_mut() {
+            term.begin_selection(point);
+        }
+        true
+    }
+
+    fn update_terminal_selection(&mut self, grid: Rect, advance: f64) -> bool {
+        let Some(point) = self
+            .terms
+            .active()
+            .and_then(|term| term.point_at(grid, self.pointer.x, self.pointer.y, advance))
+        else {
+            return false;
+        };
+        if let Some(term) = self.terms.active_mut() {
+            term.extend_selection(point);
+        }
+        true
+    }
+
+    fn finish_terminal_selection(&mut self) -> bool {
+        if let Some(term) = self.terms.active_mut() {
+            if term.is_selecting() {
+                term.end_selection();
+                return true;
+            }
+        }
+        false
     }
 
     /// Scroll the viewer in the group under the pointer, pinning both visible
@@ -2192,6 +2234,22 @@ impl App {
         }
     }
 
+    fn copy_terminal_selection(&mut self) -> bool {
+        let Some(text) = self.terms.active().and_then(|term| term.selection_text()) else {
+            return false;
+        };
+        match clipboard::copy_text(&text) {
+            Ok(()) => {
+                info!("copied {} terminal chars", text.chars().count());
+                true
+            }
+            Err(e) => {
+                error!("terminal copy failed: {e}");
+                false
+            }
+        }
+    }
+
     /// M8 Commit: validate the panel, then stage the checked paths and commit
     /// with the typed message in a streaming terminal tab.
     fn commit_now(&mut self) {
@@ -2607,6 +2665,17 @@ impl ApplicationHandler<Wake> for App {
                     }
                     return;
                 }
+                if self.terms.active().is_some_and(|term| term.is_selecting()) {
+                    if let Some(layout) = self.app_layout() {
+                        let advance = self.terminal_advance(layout.ui_scale);
+                        if self.update_terminal_selection(layout.term_grid, advance) {
+                            let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                            self.damage.mark(damage_rect(layout.term_grid, self.scale, cw, ch));
+                            self.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 // Full repaint on pointer movement: hover backgrounds and the
                 // split divider react to position; simple and correct in M3.
                 self.damage.mark_full();
@@ -2634,6 +2703,11 @@ impl ApplicationHandler<Wake> for App {
                     .as_ref()
                     .map(|l| l.term_grid.contains(self.pointer.x, self.pointer.y))
                     .unwrap_or(false);
+                if state == ElementState::Pressed && !over_grid {
+                    if let Some(term) = self.terms.active_mut() {
+                        term.clear_selection();
+                    }
+                }
                 if state == ElementState::Pressed
                     && layout.as_ref().is_some_and(|l| {
                         l.terminal_resize.contains(self.pointer.x, self.pointer.y)
@@ -2660,10 +2734,29 @@ impl ApplicationHandler<Wake> for App {
                     self.term_focused = false;
                     self.commit.message.focused = false;
                 }
+                let mut terminal_selection_handled = false;
+                if self.terms.is_open() {
+                    if state == ElementState::Released {
+                        terminal_selection_handled = self.finish_terminal_selection();
+                    } else if state == ElementState::Pressed && over_grid {
+                        let force_selection = self.modifiers.state().shift_key();
+                        let mouse_reporting = self
+                            .terms
+                            .active()
+                            .is_some_and(|term| term.mouse_reporting_enabled());
+                        if force_selection || !mouse_reporting {
+                            if let Some(layout) = layout.as_ref() {
+                                let advance = self.terminal_advance(layout.ui_scale);
+                                terminal_selection_handled =
+                                    self.begin_terminal_selection(layout.term_grid, advance);
+                            }
+                        }
+                    }
+                }
                 if self.terms.is_open() && over_grid {
                     self.term_focused = true;
                     self.commit.message.focused = false;
-                    if self.term_mouse_report(state) {
+                    if !terminal_selection_handled && self.term_mouse_report(state) {
                         self.damage.mark_full();
                         self.request_redraw();
                     }
@@ -3039,6 +3132,18 @@ impl ApplicationHandler<Wake> for App {
                 // Focused terminal: every other key goes to the shell (Ctrl+C
                 // included — it is SIGINT there, not copy).
                 if self.terms.is_open() && self.term_focused {
+                    let is_copy = ctrl
+                        && self.modifiers.state().shift_key()
+                        && matches!(
+                            &event.logical_key,
+                            winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("c")
+                        );
+                    if is_copy {
+                        if !self.copy_terminal_selection() {
+                            info!("nothing selected to copy from terminal");
+                        }
+                        return;
+                    }
                     if let Some(term) = self.terms.active_mut() {
                         let mode = term.mode();
                         let is_paste = ctrl
@@ -3054,16 +3159,6 @@ impl ApplicationHandler<Wake> for App {
                                 Ok(bytes) => term.key_input(&bytes),
                                 Err(e) => error!("terminal clipboard paste failed: {e}"),
                             }
-                            return;
-                        }
-                        let is_copy = ctrl
-                            && self.modifiers.state().shift_key()
-                            && matches!(
-                                &event.logical_key,
-                                winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("c")
-                            );
-                        if is_copy {
-                            info!("terminal copy shortcut: no terminal text selection available");
                             return;
                         }
                         let bytes = term::encode_key(
