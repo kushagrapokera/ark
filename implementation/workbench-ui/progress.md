@@ -548,6 +548,18 @@ five open viewers, two shells + fake agent tab):
   highlighting. Five-viewer/two-terminal stress with Markdown preview and search
   active measured **34,352 KiB RSS / 27,570 KiB PSS**, below the 100 MiB budget.
 
+## Config editor auto-save
+
+- Added a 750 ms debounced automatic save for whitelisted `.env`, YAML, and TOML
+  editors. Code and Markdown source remain read-only.
+- Saves use the existing enforced atomic write boundary; manual Save/`Ctrl+S`
+  still work. Pending edits flush before config/tab/window close.
+- Auto-save pauses on external-file conflicts instead of overwriting them, and
+  further edits no longer hide the conflict. Reload or explicit Save resolves it.
+- Verification: `cargo test` **388 passed, 0 failed, 4 ignored**, 5/5 CLI; clippy
+  and release build clean. Live YAML and `.env` edits saved without keyboard
+  commands, and the header transitioned from “saves automatically” to “saved”.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

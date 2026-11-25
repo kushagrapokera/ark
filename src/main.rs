@@ -95,6 +95,8 @@ const FLASH_DURATION: Duration = Duration::from_millis(900);
 const TERM_FRAME_BUDGET: Duration = Duration::from_millis(33);
 /// Keyword search waits for a short typing pause before walking the project.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
+/// Config edits save automatically after a short typing pause.
+const CONFIG_AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 
 /// Which surface owns the right pane. Terminal tabs keep running while
 /// hidden; the explicit mode makes config editing (M9) reachable even when a
@@ -336,6 +338,8 @@ struct App {
     settings: config::Config,
     /// The open config editor (one at a time; M9).
     config_edits: Option<ConfigEditor>,
+    /// Pending debounced automatic save for the config editor.
+    config_autosave_at: Option<Instant>,
     /// Streamed formatted preview state for the active Markdown tab.
     markdown: MarkdownState,
     /// Most recent config-open failure (rendered in the pane).
@@ -435,6 +439,7 @@ impl App {
             layout_visibility: frame::LayoutVisibility::default(),
             settings,
             config_edits: None,
+            config_autosave_at: None,
             markdown: MarkdownState::default(),
             config_error: None,
             config_error_path: None,
@@ -1239,6 +1244,9 @@ impl App {
         if effects.config_reload {
             self.reload_config();
         }
+        if effects.config_changed {
+            self.schedule_config_autosave();
+        }
         if let Some(panel) = effects.set_activity {
             self.set_activity(panel);
         }
@@ -1766,6 +1774,9 @@ impl App {
     }
 
     fn toggle_editor_split(&mut self) {
+        if !self.flush_config_autosave() {
+            return;
+        }
         let was_split = self.editor_groups.is_split();
         if !was_split {
             if let Some(layout) = self.app_layout() {
@@ -1780,7 +1791,7 @@ impl App {
             .is_some_and(|path| closed.contains(&path));
         self.evict_group_tabs(closed);
         if closed_config {
-            self.close_config();
+            let _ = self.close_config();
         }
         if was_split {
             self.editor_groups.active = 0;
@@ -1811,13 +1822,16 @@ impl App {
         if group != 1 || !self.editor_groups.is_split() {
             return;
         }
+        if !self.flush_config_autosave() {
+            return;
+        }
         let closed = self.editor_groups.close_secondary_group();
         let closed_config = self
             .config_path()
             .is_some_and(|path| closed.contains(&path));
         self.evict_group_tabs(closed);
         if closed_config {
-            self.close_config();
+            let _ = self.close_config();
         }
         self.sync_active_pane();
         self.activity = if self.pane == PaneMode::Config {
@@ -1842,7 +1856,7 @@ impl App {
             return false;
         };
         if Some(path.as_path()) == self.config_path().as_deref() {
-            self.close_config();
+            return self.close_config();
         } else {
             self.close_tab(group, path);
         }
@@ -1883,14 +1897,14 @@ impl App {
 
     /// Close one tab and evict its viewer after the last group reference.
     fn close_tab(&mut self, group: usize, path: PathBuf) {
+        if Some(path.as_path()) == self.config_path().as_deref() {
+            let _ = self.close_config();
+            return;
+        }
         if self.editor_groups.close_tab(group, &path).is_none() {
             return;
         }
-        if Some(path.as_path()) == self.config_path().as_deref() {
-            self.close_config();
-        } else {
-            self.buffers.evict(&path);
-        }
+        self.buffers.evict(&path);
         self.sync_active_pane();
         self.activity = if self.pane == PaneMode::Config {
             frame::ActivityPanel::Config
@@ -1904,6 +1918,10 @@ impl App {
 
     /// Open a whitelisted config file as a tab in the active editor group.
     fn open_config(&mut self, path: PathBuf) {
+        if !self.flush_config_autosave() {
+            return;
+        }
+        self.config_autosave_at = None;
         self.markdown.preview = false;
         self.markdown.scroll = 0.0;
         if let Some(old) = self.config_path() {
@@ -1945,7 +1963,12 @@ impl App {
     }
 
     /// Close the config tab and return focus to the group's remaining tab.
-    fn close_config(&mut self) {
+    /// Pending edits are flushed first; a failed save keeps the editor open.
+    fn close_config(&mut self) -> bool {
+        if !self.flush_config_autosave() {
+            return false;
+        }
+        self.config_autosave_at = None;
         let path = self.config_path();
         if let Some(path) = path {
             for group in &mut self.editor_groups.groups {
@@ -1968,20 +1991,74 @@ impl App {
         };
         self.damage.mark_full();
         self.request_redraw();
+        true
     }
 
-    /// Save the open config through the enforced atomic boundary.
-    fn save_config(&mut self) {
+    fn schedule_config_autosave(&mut self) {
+        if self
+            .config_edits
+            .as_ref()
+            .is_some_and(|editor| editor.is_dirty() && !editor.external_change())
+        {
+            self.config_autosave_at = Some(Instant::now() + CONFIG_AUTOSAVE_DEBOUNCE);
+        } else {
+            self.config_autosave_at = None;
+        }
+    }
+
+    fn autosave_config_if_due(&mut self, now: Instant) -> bool {
+        let Some(due) = self.config_autosave_at else {
+            return false;
+        };
+        if now < due {
+            return false;
+        }
+        let _ = self.flush_config_autosave();
+        true
+    }
+
+    /// Flush pending edits now. Returns false when an external-change conflict
+    /// or I/O error prevents a safe save; the editor stays open and dirty.
+    fn flush_config_autosave(&mut self) -> bool {
+        self.config_autosave_at = None;
+        let Some(editor) = &mut self.config_edits else {
+            return true;
+        };
+        if !editor.is_dirty() {
+            return true;
+        }
+        if editor.changed_on_disk() {
+            editor.refresh_if_clean();
+            if editor.external_change() {
+                info!("autosave paused: config changed externally at {}", editor.path().display());
+                self.damage.mark_full();
+                self.request_redraw();
+                return false;
+            }
+        }
+        self.save_config()
+    }
+
+    /// Save the open config through the enforced atomic boundary. Returns true
+    /// when there was nothing to save or the atomic write succeeded.
+    fn save_config(&mut self) -> bool {
+        self.config_autosave_at = None;
         let mut saved_path = None;
+        let mut ok = true;
         if let Some(editor) = &mut self.config_edits {
             match editor.save() {
-                Ok(()) => info!("config saved: {}", editor.path().display()),
-                Err(e) => error!("config save failed: {e}"),
+                Ok(()) => {
+                    saved_path = Some(editor.path().to_path_buf());
+                    info!("config saved: {}", editor.path().display());
+                }
+                Err(e) => {
+                    ok = false;
+                    error!("config save failed: {e}");
+                }
             }
-            saved_path = Some(editor.path().to_path_buf());
         }
         // Editing ark.toml itself applies the new whitelist immediately.
-        if saved_path.as_deref() == Some(self.root.join("ark.toml").as_path()) {
+        if ok && saved_path.as_deref() == Some(self.root.join("ark.toml").as_path()) {
             match config::load(&self.root) {
                 Ok(settings) => {
                     self.settings = settings;
@@ -1992,9 +2069,11 @@ impl App {
         }
         self.damage.mark_full();
         self.request_redraw();
+        ok
     }
 
     fn reload_config(&mut self) {
+        self.config_autosave_at = None;
         let Some(editor) = &mut self.config_edits else {
             return;
         };
@@ -2166,15 +2245,20 @@ impl App {
         self.fs_dirty = true;
         self.request_git_refresh();
         let mut viewer_changed = false;
+        let mut config_conflict = false;
         if let Some(ed) = &mut self.config_edits {
             if ed.refresh_if_clean() {
-                if ed.external_change() {
+                config_conflict = ed.external_change();
+                if config_conflict {
                     info!("config changed on disk while dirty (edits kept)");
                 } else {
                     info!("config reloaded (changed on disk): {}", ed.path().display());
                 }
                 viewer_changed = true;
             }
+        }
+        if config_conflict {
+            self.config_autosave_at = None;
         }
         let config_path = self.config_path();
         let visible: Vec<PathBuf> = self
@@ -2240,6 +2324,9 @@ impl App {
         }
         if let Some((_, due)) = &self.search_debounce {
             earliest = Some(earliest.map_or(*due, |d| d.min(*due)));
+        }
+        if let Some(due) = self.config_autosave_at {
+            earliest = Some(earliest.map_or(due, |d| d.min(due)));
         }
         if let Some(d) = earliest {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
@@ -2341,6 +2428,10 @@ impl ApplicationHandler<Wake> for App {
         if self.search_debounce.is_some() {
             self.schedule_followups(event_loop);
         }
+        self.autosave_config_if_due(now);
+        if self.config_autosave_at.is_some() {
+            self.schedule_followups(event_loop);
+        }
         // M11: return free heap pages after a quiet period (glibc only).
         if memory::should_trim(now, self.last_activity, self.last_trim) {
             let trimmed = memory::trim_heap();
@@ -2411,6 +2502,10 @@ impl ApplicationHandler<Wake> for App {
         }
         match event {
             WindowEvent::CloseRequested => {
+                if !self.flush_config_autosave() {
+                    info!("close cancelled: config auto-save needs attention");
+                    return;
+                }
                 info!("close requested — exiting");
                 event_loop.exit();
             }
@@ -2693,6 +2788,7 @@ impl ApplicationHandler<Wake> for App {
                     _ => false,
                 };
                 if changed {
+                    self.schedule_config_autosave();
                     self.damage.mark_full();
                     self.request_redraw();
                 }
@@ -2856,6 +2952,7 @@ impl ApplicationHandler<Wake> for App {
                     let mods = self.modifiers.state();
                     if let Some(editor) = &mut self.config_edits {
                         if editor.handle_key(&event.logical_key, event.text.as_deref(), &mods) {
+                            self.schedule_config_autosave();
                             self.damage.mark_full();
                             self.request_redraw();
                         }

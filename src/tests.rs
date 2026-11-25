@@ -342,6 +342,66 @@ fn app_search_result_uses_the_enforced_editor_for_config_files() {
 }
 
 #[test]
+fn app_config_autosave_waits_for_debounce_then_saves() {
+    let d = temp_dir("app-config-autosave");
+    let path = d.path().join("config.yaml");
+    fs::write(&path, "a: 1\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_config(path.clone());
+    assert!(app.config_edits.as_mut().expect("editor").on_ime_commit("b: 2\n"));
+    app.schedule_config_autosave();
+    let due = app.config_autosave_at.expect("autosave scheduled");
+
+    assert!(!app.autosave_config_if_due(due - Duration::from_nanos(1)));
+    assert_eq!(fs::read_to_string(&path).expect("read"), "a: 1\n");
+    assert!(app.autosave_config_if_due(due));
+    assert_eq!(fs::read_to_string(&path).expect("read"), "a: 1\nb: 2\n");
+    assert!(!app.config_edits.as_ref().expect("editor").is_dirty());
+    assert!(app.config_autosave_at.is_none());
+}
+
+#[test]
+fn app_config_autosave_does_not_overwrite_external_changes() {
+    let d = temp_dir("app-config-autosave-conflict");
+    let path = d.path().join("config.yaml");
+    fs::write(&path, "a: 1\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_config(path.clone());
+    assert!(app.config_edits.as_mut().expect("editor").on_ime_commit("mine\n"));
+    app.schedule_config_autosave();
+    let due = app.config_autosave_at.expect("autosave scheduled");
+    thread::sleep(Duration::from_millis(20));
+    fs::write(&path, "a: 2\n").expect("external edit");
+
+    assert!(app.autosave_config_if_due(due));
+    assert_eq!(fs::read_to_string(&path).expect("read"), "a: 2\n");
+    let editor = app.config_edits.as_ref().expect("editor");
+    assert!(editor.is_dirty());
+    assert!(editor.external_change());
+    assert!(app.config_autosave_at.is_none());
+    assert!(app.config_edits.as_mut().expect("editor").on_ime_commit("more\n"));
+    app.schedule_config_autosave();
+    assert!(app.config_autosave_at.is_none(), "conflicts require explicit reload or save");
+}
+
+#[test]
+fn app_closing_config_flushes_pending_autosave() {
+    let d = temp_dir("app-config-autosave-close");
+    let path = d.path().join("config.yaml");
+    fs::write(&path, "a: 1\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_config(path.clone());
+    assert!(app.config_edits.as_mut().expect("editor").on_ime_commit("b: 2\n"));
+    app.schedule_config_autosave();
+
+    app.close_config();
+
+    assert_eq!(fs::read_to_string(&path).expect("read"), "a: 1\nb: 2\n");
+    assert!(app.config_edits.is_none());
+    assert!(app.config_autosave_at.is_none());
+}
+
+#[test]
 fn app_markdown_preview_toggles_and_resets_on_tab_change() {
     let d = temp_dir("app-readme-preview");
     let readme = d.path().join("README.md");

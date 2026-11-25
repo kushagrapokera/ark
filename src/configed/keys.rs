@@ -56,7 +56,6 @@ pub(super) fn handle(
     if dirty {
         editor.dirty = true;
         editor.error = None;
-        editor.external_change = false;
     }
     changed
 }

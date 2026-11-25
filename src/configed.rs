@@ -346,7 +346,6 @@ impl ConfigEditor {
         if changed {
             self.dirty = true;
             self.error = None;
-            self.external_change = false;
         }
         changed
     }
@@ -383,7 +382,6 @@ fn disk_stamp(path: &Path) -> Option<(u64, SystemTime)> {
 pub(crate) fn mark_dirty(editor: &mut ConfigEditor) {
     editor.dirty = true;
     editor.error = None;
-    editor.external_change = false;
 }
 
 #[cfg(test)]

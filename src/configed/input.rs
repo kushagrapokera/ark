@@ -24,7 +24,6 @@ impl ConfigEditor {
         if changed && matches!(self.body, Body::Text(_)) {
             self.dirty = true;
             self.error = None;
-            self.external_change = false;
         }
         changed
     }

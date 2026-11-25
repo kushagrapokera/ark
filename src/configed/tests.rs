@@ -8,6 +8,8 @@ use crate::highlight::Highlighter;
 use crate::render::Canvas;
 use crate::text::{TextSystem, UI_FONT_SIZE};
 use crate::ui::Pointer;
+use std::thread;
+use std::time::Duration;
 
 fn patterns() -> Vec<String> {
     Config::default().editable
@@ -71,6 +73,23 @@ fn save_is_atomic_and_clears_dirty() {
     let mut stale = ConfigEditor::open(d.path(), &yaml, &patterns()).expect("open");
     stale.patterns = vec!["*.env".into()];
     assert!(stale.save().is_err());
+}
+
+#[test]
+fn external_change_conflict_survives_further_edits_until_reload_or_save() {
+    let d = temp_dir("configed-conflict-sticky");
+    let yaml = d.path().join("config.yaml");
+    std::fs::write(&yaml, "a: 1\n").expect("write");
+    let mut editor = ConfigEditor::open(d.path(), &yaml, &patterns()).expect("open");
+    assert!(editor.on_ime_commit("mine\n"));
+    thread::sleep(Duration::from_millis(20));
+    std::fs::write(&yaml, "a: 2\n").expect("external edit");
+    assert!(editor.refresh_if_clean());
+    assert!(editor.external_change());
+
+    assert!(editor.on_ime_commit("more\n"));
+    assert!(editor.external_change(), "new edits must not hide the conflict");
+    assert!(editor.is_dirty());
 }
 
 #[test]
