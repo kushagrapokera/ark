@@ -58,6 +58,7 @@ fn panel_theme() -> Theme {
         syntax_decorator: bg,
         syntax_selector: bg,
         editor_current_line: bg,
+        editor_search_match: bg,
         editor_indent_guide: bg,
         editor_indent_guide_active: bg,
         editor_bracket_1: bg,

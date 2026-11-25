@@ -13,7 +13,7 @@ use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::icons::IconTooltip;
 use crate::new_item::NewItemPrompt;
-use crate::readme::ReadmeState;
+use crate::markdown::MarkdownState;
 use crate::render::{Canvas, ColorRgb, Theme};
 use crate::search::SearchState;
 use crate::term::{self, TerminalMenuAction, TerminalTabs};
@@ -811,7 +811,7 @@ pub struct Frame<'a> {
     /// Bounded project keyword-search state while the Search panel is active.
     pub search: Option<&'a mut SearchState>,
     /// Formatted README state for the active mmap-backed README tab.
-    pub readme: Option<&'a mut ReadmeState>,
+    pub markdown: Option<&'a mut MarkdownState>,
 }
 
 /// What `draw_frame` changed this frame — the caller marks damage AFTER the
@@ -874,8 +874,8 @@ pub struct FrameEffects {
     pub focus_group: Option<usize>,
     /// The Split editor action was clicked.
     pub toggle_split: bool,
-    /// The README preview action was clicked.
-    pub toggle_readme: bool,
+    /// The Markdown preview action was clicked.
+    pub toggle_markdown: bool,
     /// The editor-group divider moved.
     pub group_split_moved: bool,
     /// A title-bar layout action was selected.
@@ -1215,7 +1215,7 @@ pub fn draw_frame(
             effects.close_group = Some(index);
         }
         effects.toggle_split |= gx.toggle_split;
-        effects.toggle_readme |= gx.toggle_readme;
+        effects.toggle_markdown |= gx.toggle_markdown;
         effects.focus_group = effects.focus_group.or(gx.focus.then_some(index));
     }
 
@@ -1307,8 +1307,8 @@ pub fn draw_frame(
                 draw_placeholder(f, pane, group.error.as_deref());
             }
         } else if let Some(viewer) = viewers[index].as_deref_mut() {
-            if f.readme.as_ref().is_some_and(|state| state.preview)
-                && crate::readme::is_readme(viewer.path())
+            if f.markdown.as_ref().is_some_and(|state| state.preview)
+                && crate::markdown::is_markdown(viewer.path())
             {
                 let track_w = tree::TRACK_W;
                 let content_rect = Rect {
@@ -1317,8 +1317,8 @@ pub fn draw_frame(
                     w: (pane.w - 16.0 - track_w).max(0.0),
                     h: (pane.h - 16.0).max(0.0),
                 };
-                let state = f.readme.as_deref_mut().expect("checked preview state");
-                let drawn: crate::readme::ReadmeDraw = crate::readme::draw(
+                let state = f.markdown.as_deref_mut().expect("checked preview state");
+                let drawn: crate::markdown::MarkdownDraw = crate::markdown::draw_markdown_preview(
                     f.canvas,
                     f.text,
                     f.theme,
@@ -1329,7 +1329,7 @@ pub fn draw_frame(
                     state,
                 );
                 if drawn.truncated {
-                    log::trace!("README preview truncated at its line cap");
+                    log::trace!("Markdown preview truncated at its line cap");
                 }
                 let track = Rect {
                     x: pane.x + pane.w - track_w,

@@ -141,6 +141,17 @@ fn growth_cap_and_line_accounting() {
 }
 
 #[test]
+fn search_match_selection_is_case_insensitive_and_line_local() {
+    let mut editor = TextEditor::new("alpha\nFinalVerdict omega\n".into(), 1024);
+
+    assert!(editor.select_search_match(2, "finalverdict"));
+    assert_eq!(editor.selection(), Some(6..18));
+    assert_eq!(editor.selected_text(), Some("FinalVerdict"));
+    assert!(editor.select_search_match(1, "finalverdict"));
+    assert_eq!(editor.selection(), None);
+}
+
+#[test]
 fn scroll_and_hscroll_keep_the_caret_visible() {
     let mut e = ed(&(0..50).map(|i| format!("line {i}\n")).collect::<String>());
     e.set_cursor(40, 3, false);

@@ -38,6 +38,7 @@ pub use hscroll::{HScrollbar, HSCROLL_H};
 #[cfg(test)]
 pub use tabbar::{TabBar, TAB_HEIGHT};
 pub use text_input::{TextInput, TextInputKey};
+pub(crate) use text_input::TEXT_INPUT_MAX_CHARS;
 
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 

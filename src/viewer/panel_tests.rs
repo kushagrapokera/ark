@@ -47,6 +47,7 @@ fn panel_theme() -> Theme {
         syntax_decorator: bg,
         syntax_selector: bg,
         editor_current_line: bg,
+        editor_search_match: (123, 45, 67),
         editor_indent_guide: bg,
         editor_indent_guide_active: bg,
         editor_bracket_1: bg,
@@ -80,6 +81,54 @@ fn draw(theme: &Theme, panel: Rect, viewer: &Viewer, canvas: &mut Canvas) -> cra
     canvas.fill(theme.bg);
     draw_viewer_panel(canvas, &mut text, theme, 1.0, panel, viewer, &Highlighter::new(), None, 1.0);
     m
+}
+
+#[test]
+fn search_match_background_follows_the_visible_column_window() {
+    let d = temp_dir("viewer-search-highlight");
+    let path = d.path().join("code.rs");
+    fs::write(
+        &path,
+        format!("xx needle suffix\n{}needle{}\n", "x".repeat(60), "x".repeat(100)),
+    )
+    .expect("write");
+    let mut viewer = Viewer::open(&path).expect("viewer");
+    assert!(viewer.set_search_match(1, "NEEDLE"));
+    let theme = panel_theme();
+    let panel = Rect { x: 10.0, y: 10.0, w: 240.0, h: 3.0 * LINE_H };
+    let mut canvas = Canvas::new(400, 100);
+    let metrics = draw(&theme, panel, &viewer, &mut canvas);
+
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.editor_search_match,
+            panel.x as u32,
+            panel.y as u32,
+            (panel.x + panel.w) as u32,
+            (panel.y + panel.h) as u32,
+        ) > 20,
+        "the searched word paints a distinct background"
+    );
+
+    let gutter = gutter_width(viewer.line_count(), f64::from(metrics.advance));
+    let content_w = panel.w - crate::tree::TRACK_W - gutter - 4.0;
+    let viewport_cols = (content_w / f64::from(metrics.advance)).floor().max(1.0) as usize;
+    assert!(viewer.set_search_match(2, "NEEDLE"));
+    viewer.set_horizontal_offset(usize::MAX, viewport_cols);
+    draw(&theme, panel, &viewer, &mut canvas);
+    assert_eq!(
+        count_color_in(
+            &canvas,
+            theme.editor_search_match,
+            panel.x as u32,
+            panel.y as u32,
+            (panel.x + panel.w) as u32,
+            (panel.y + panel.h) as u32,
+        ),
+        0,
+        "horizontal scrolling clips the highlight with its word"
+    );
 }
 
 #[test]

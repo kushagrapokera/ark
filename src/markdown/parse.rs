@@ -4,13 +4,16 @@
 use crate::viewer::Viewer;
 
 const MAX_INLINE_CHARS: usize = 2_000;
+const MAX_PARAGRAPH_LINES: usize = 64;
 const MAX_CODE_LINES: usize = 512;
 const MAX_TABLE_ROWS: usize = 64;
+const MAX_TABLE_COLS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum InlineKind {
     Normal,
     Bold,
+    Strike,
     Code,
     Link,
 }
@@ -23,13 +26,24 @@ pub(super) struct InlineSpan {
 
 #[derive(Debug)]
 pub(super) enum BlockKind {
-    Heading { level: usize, spans: Vec<InlineSpan> },
+    Heading {
+        level: usize,
+        spans: Vec<InlineSpan>,
+    },
     Paragraph(Vec<InlineSpan>),
-    List { ordered: Option<usize>, spans: Vec<InlineSpan> },
+    List {
+        ordered: Option<usize>,
+        task: Option<bool>,
+        spans: Vec<InlineSpan>,
+    },
     Quote(Vec<InlineSpan>),
     Code(Vec<String>),
     Rule,
-    Table { headers: Vec<Vec<InlineSpan>>, rows: Vec<Vec<Vec<InlineSpan>>> },
+    Table {
+        headers: Vec<Vec<InlineSpan>>,
+        rows: Vec<Vec<Vec<InlineSpan>>>,
+        truncated: bool,
+    },
 }
 
 pub(super) fn inline_spans(line: &str) -> Vec<InlineSpan> {
@@ -44,8 +58,28 @@ pub(super) fn inline_spans(line: &str) -> Vec<InlineSpan> {
                 push_normal(&mut spans, &line[normal_start..i]);
                 let inner_end = i + 2 + end;
                 spans.push(InlineSpan {
-                    text: line[i + 2..inner_end].chars().take(MAX_INLINE_CHARS).collect(),
+                    text: line[i + 2..inner_end]
+                        .chars()
+                        .take(MAX_INLINE_CHARS)
+                        .collect(),
                     kind: InlineKind::Bold,
+                });
+                i = inner_end + 2;
+                normal_start = i;
+                chars += 2;
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix("~~") {
+            if let Some(end) = after.find("~~") {
+                push_normal(&mut spans, &line[normal_start..i]);
+                let inner_end = i + 2 + end;
+                spans.push(InlineSpan {
+                    text: line[i + 2..inner_end]
+                        .chars()
+                        .take(MAX_INLINE_CHARS)
+                        .collect(),
+                    kind: InlineKind::Strike,
                 });
                 i = inner_end + 2;
                 normal_start = i;
@@ -58,7 +92,10 @@ pub(super) fn inline_spans(line: &str) -> Vec<InlineSpan> {
                 push_normal(&mut spans, &line[normal_start..i]);
                 let inner_end = i + 1 + end;
                 spans.push(InlineSpan {
-                    text: line[i + 1..inner_end].chars().take(MAX_INLINE_CHARS).collect(),
+                    text: line[i + 1..inner_end]
+                        .chars()
+                        .take(MAX_INLINE_CHARS)
+                        .collect(),
                     kind: InlineKind::Code,
                 });
                 i = inner_end + 1;
@@ -101,7 +138,10 @@ pub(super) fn inline_spans(line: &str) -> Vec<InlineSpan> {
 
 fn push_normal(spans: &mut Vec<InlineSpan>, text: &str) {
     if !text.is_empty() {
-        spans.push(InlineSpan { text: text.to_owned(), kind: InlineKind::Normal });
+        spans.push(InlineSpan {
+            text: text.to_owned(),
+            kind: InlineKind::Normal,
+        });
     }
 }
 
@@ -138,20 +178,35 @@ pub(super) fn next_block(viewer: &Viewer, index: usize) -> (BlockKind, usize) {
         return (BlockKind::Rule, index + 1);
     }
     if let Some((ordered, text)) = list_marker(trimmed) {
+        let (task, text) = if let Some(text) = text.strip_prefix("[ ] ") {
+            (Some(false), text)
+        } else if let Some(text) = text
+            .strip_prefix("[x] ")
+            .or_else(|| text.strip_prefix("[X] "))
+        {
+            (Some(true), text)
+        } else {
+            (None, text)
+        };
         return (
-            BlockKind::List { ordered, spans: inline_spans(text) },
+            BlockKind::List {
+                ordered,
+                task,
+                spans: inline_spans(text),
+            },
             index + 1,
         );
     }
     if let Some(text) = trimmed.strip_prefix('>') {
-        return (
-            BlockKind::Quote(inline_spans(text.trim_start())),
-            index + 1,
-        );
+        return (BlockKind::Quote(inline_spans(text.trim_start())), index + 1);
     }
-    if trimmed.contains('|') && is_table_separator(&viewer.line_text(index + 1).unwrap_or_default()) {
-        let headers = table_cells(&line)
+    if trimmed.contains('|') && is_table_separator(&viewer.line_text(index + 1).unwrap_or_default())
+    {
+        let header_cells = table_cells(&line);
+        let mut truncated = header_cells.len() > MAX_TABLE_COLS;
+        let headers = header_cells
             .into_iter()
+            .take(MAX_TABLE_COLS)
             .map(inline_spans)
             .collect();
         let mut rows = Vec::new();
@@ -161,14 +216,67 @@ pub(super) fn next_block(viewer: &Viewer, index: usize) -> (BlockKind, usize) {
             if !row.contains('|') || row.trim().is_empty() {
                 break;
             }
+            let cells = table_cells(&row);
+            truncated |= cells.len() > MAX_TABLE_COLS;
             if rows.len() < MAX_TABLE_ROWS {
-                rows.push(table_cells(&row).into_iter().map(inline_spans).collect());
+                rows.push(
+                    cells
+                        .into_iter()
+                        .take(MAX_TABLE_COLS)
+                        .map(inline_spans)
+                        .collect(),
+                );
+            } else {
+                truncated = true;
             }
             next += 1;
         }
-        return (BlockKind::Table { headers, rows }, next);
+        return (
+            BlockKind::Table {
+                headers,
+                rows,
+                truncated,
+            },
+            next,
+        );
     }
-    (BlockKind::Paragraph(inline_spans(&line)), index + 1)
+    let mut paragraph = line.trim_end().to_owned();
+    let mut next = index + 1;
+    while next < viewer.line_count() && next - index < MAX_PARAGRAPH_LINES {
+        let candidate = viewer.line_text(next).unwrap_or_default();
+        let following = viewer.line_text(next + 1).unwrap_or_default();
+        if candidate.trim().is_empty() || starts_block(candidate.trim_start(), &following) {
+            break;
+        }
+        let remaining = MAX_INLINE_CHARS.saturating_sub(paragraph.chars().count());
+        if remaining <= 1 {
+            break;
+        }
+        let candidate = candidate.trim();
+        let take = remaining - 1;
+        let split = char_split(candidate, take);
+        paragraph.push(' ');
+        paragraph.push_str(&candidate[..split]);
+        next += 1;
+        if split < candidate.len() {
+            break;
+        }
+    }
+    (BlockKind::Paragraph(inline_spans(&paragraph)), next)
+}
+
+fn starts_block(line: &str, following: &str) -> bool {
+    line.starts_with("```")
+        || line.starts_with("~~~")
+        || line.starts_with('>')
+        || list_marker(line).is_some()
+        || is_rule(line)
+        || ((1..=6).contains(&line.bytes().take_while(|b| *b == b'#').count())
+            && line
+                .as_bytes()
+                .get(line.bytes().take_while(|b| *b == b'#').count())
+                == Some(&b' '))
+        || (line.contains('|') && is_table_separator(following))
 }
 
 fn is_rule(line: &str) -> bool {
@@ -201,12 +309,19 @@ fn is_table_separator(line: &str) -> bool {
     !cells.is_empty()
         && cells.iter().all(|cell| {
             let cell = cell.trim();
-            cell.len() >= 3 && cell.bytes().all(|b| matches!(b, b'-' | b':' | b' ' | b'\t'))
+            cell.len() >= 3
+                && cell
+                    .bytes()
+                    .all(|b| matches!(b, b'-' | b':' | b' ' | b'\t'))
         })
 }
 
 fn table_cells(line: &str) -> Vec<&str> {
-    line.trim().trim_matches('|').split('|').map(str::trim).collect()
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect()
 }
 
 pub(super) fn wrap_spans(spans: Vec<InlineSpan>, width: f64, advance: f64) -> Vec<Vec<InlineSpan>> {
@@ -226,7 +341,10 @@ pub(super) fn wrap_spans(spans: Vec<InlineSpan>, width: f64, advance: f64) -> Ve
                 if used == 0 && piece.starts_with(' ') {
                     piece.remove(0);
                 }
-                current.push(InlineSpan { text: piece, kind: span.kind });
+                current.push(InlineSpan {
+                    text: piece,
+                    kind: span.kind,
+                });
                 used += head.chars().count();
             }
             text = tail;
@@ -246,5 +364,8 @@ pub(super) fn wrap_spans(spans: Vec<InlineSpan>, width: f64, advance: f64) -> Ve
 }
 
 fn char_split(text: &str, chars: usize) -> usize {
-    text.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(text.len())
+    text.char_indices()
+        .nth(chars)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
 }

@@ -19,6 +19,7 @@ use crate::ui::{Rect, TextInput};
 
 pub mod env;
 pub mod text;
+mod input;
 mod keys;
 mod ui;
 

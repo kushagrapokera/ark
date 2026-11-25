@@ -161,9 +161,13 @@ impl BufferCache {
         pinned: &[&Path],
     ) -> Result<&mut Viewer, ViewerError> {
         let old_offset = self.entries.get(path).map(|v| v.offset_lines());
+        let old_search = self.entries.get(path).and_then(|v| v.search_match()).cloned();
         let mut viewer = Viewer::open(path)?;
         if let Some(off) = old_offset {
             viewer.restore_offset(off);
+        }
+        if let Some(matched) = old_search {
+            viewer.set_search_match(matched.line + 1, &matched.query);
         }
         self.entries.insert(path.to_path_buf(), viewer);
         let mut protected = pinned.to_vec();
@@ -256,6 +260,22 @@ mod tests {
         let v = cache.get_or_open(&c).expect("reopen c");
         assert_eq!(v.line_count(), 1);
         assert!(v.is_open_for(&c), "the reopened viewer tracks its path");
+    }
+
+    #[test]
+    fn refresh_reapplies_the_bounded_search_highlight() {
+        let d = temp_dir("lru-search-refresh");
+        let path = d.path().join("code.rs");
+        fs::write(&path, "needle\n").expect("write");
+        let mut cache = BufferCache::new(4);
+        assert!(cache.get_or_open(&path).expect("open").set_search_match(1, "NEEDLE"));
+
+        fs::write(&path, "prefix NEEDLE suffix\n").expect("rewrite");
+        let viewer = cache.refresh(&path).expect("refresh");
+
+        let matched = viewer.search_match().expect("highlight survives refresh");
+        assert_eq!((matched.line, matched.start_col, matched.end_col), (0, 7, 13));
+        assert_eq!(matched.query, "NEEDLE");
     }
 
     #[test]

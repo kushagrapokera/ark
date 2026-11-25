@@ -26,7 +26,7 @@ pub struct TextInput {
 }
 
 /// Upper bound on stored text (fixed-size state rule, AGENTS.md guardrail 3).
-const TEXT_INPUT_MAX_CHARS: usize = 128;
+pub(crate) const TEXT_INPUT_MAX_CHARS: usize = 128;
 
 /// Keyboard events a focused [`TextInput`] understands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

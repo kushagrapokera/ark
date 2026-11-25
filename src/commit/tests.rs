@@ -46,6 +46,7 @@ fn panel_theme() -> Theme {
         syntax_decorator: (0, 0, 0),
         syntax_selector: (0, 0, 0),
         editor_current_line: (0, 0, 0),
+        editor_search_match: (0, 0, 0),
         editor_indent_guide: (0, 0, 0),
         editor_indent_guide_active: (0, 0, 0),
         editor_bracket_1: (0, 0, 0),

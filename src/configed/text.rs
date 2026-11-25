@@ -234,6 +234,36 @@ impl TextEditor {
         (self.cursor, self.anchor) != before
     }
 
+    /// Select the first case-insensitive literal match on a 1-based line.
+    /// Missing/empty matches clear the selection without modifying the document.
+    pub fn select_search_match(&mut self, line_1_based: usize, query: &str) -> bool {
+        let before = (self.cursor, self.anchor);
+        let line = line_1_based.saturating_sub(1).min(self.line_count().saturating_sub(1));
+        let start = self.line_start(line);
+        let end = self.line_end(line);
+        let found = if query.is_empty() || query.chars().count() > 128 {
+            None
+        } else {
+            regex::RegexBuilder::new(&regex::escape(query))
+                .case_insensitive(true)
+                .build()
+                .ok()
+                .and_then(|pattern| pattern.find(&self.text[start..end]))
+        };
+        match found {
+            Some(found) => {
+                self.anchor = Some(start + found.start());
+                self.cursor = start + found.end();
+            }
+            None => {
+                self.anchor = None;
+                self.cursor = start;
+            }
+        }
+        self.preferred_col = None;
+        (self.cursor, self.anchor) != before
+    }
+
     /// Set the caret from (line, char-col), clamped. `select` keeps the old
     /// caret as the anchor.
     pub fn set_cursor(&mut self, line: usize, col: usize, select: bool) {

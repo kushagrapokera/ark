@@ -416,7 +416,7 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
         new_item: Some(&mut prompt),
         icon_tooltip: None,
         search: None,
-        readme: None,
+        markdown: None,
     };
     let _ = draw_frame(
         &mut frame,
@@ -462,30 +462,36 @@ fn editor_strip_has_no_more_action() {
     );
     assert_eq!(
         chrome::editor_action_icons(700.0, false, true),
-        &[crate::icons::Icon::Readme, crate::icons::Icon::Split]
+        &[crate::icons::Icon::Markdown, crate::icons::Icon::Split]
     );
     assert_eq!(
         chrome::editor_action_icons(700.0, true, true),
         &[
             crate::icons::Icon::Close,
-            crate::icons::Icon::Readme,
+            crate::icons::Icon::Markdown,
             crate::icons::Icon::Split,
         ]
     );
 }
 
 #[test]
-fn readme_action_is_clickable_only_for_readme_tabs() {
-    let d = temp_dir("readme-action");
+fn markdown_action_is_clickable_only_for_markdown_tabs() {
+    let d = temp_dir("markdown-action");
     let readme = d.path().join("README.md");
+    let guide = d.path().join("guide.md");
     fs::write(&readme, "# Title\n").expect("write readme");
+    fs::write(&guide, "# Guide\n").expect("write guide");
     let theme = frame_theme();
     let layout = app_layout(1024.0, 768.0, 304.0);
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(1024, 768);
     let (_d, mut tree) = scene_fixture("readme-action-tree");
 
-    for (path, expected) in [(readme.as_path(), true), (Path::new("/repo/main.rs"), false)] {
+    for (path, expected) in [
+        (readme.as_path(), true),
+        (guide.as_path(), true),
+        (Path::new("/repo/main.rs"), false),
+    ] {
         let files = vec![path.to_path_buf()];
         let effects = draw_static_frame_with(
             &mut canvas,
@@ -505,7 +511,7 @@ fn readme_action_is_clickable_only_for_readme_tabs() {
             None,
             None,
         );
-        assert_eq!(effects.toggle_readme, expected, "active path {path:?}");
+        assert_eq!(effects.toggle_markdown, expected, "active path {path:?}");
     }
 }
 
@@ -1095,7 +1101,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 new_item: None,
                 icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -1146,7 +1152,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1336,7 +1342,7 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         new_item: None,
         icon_tooltip: None,
         search: None,
-        readme: None,
+        markdown: None,
         groups: Some(&groups.groups),
         active_group: 1,
         group_viewers: [Some(&mut va), Some(&mut vb)],
@@ -1697,7 +1703,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1769,7 +1775,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1923,7 +1929,7 @@ fn terminal_tabs_select_and_close_by_index() {
                 new_item: None,
                 icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2060,7 +2066,7 @@ fn draw_static_frame_with(
     active_path: Option<&Path>,
     activity: ActivityPanel,
     search: Option<&mut crate::search::SearchState>,
-    readme: Option<&mut crate::readme::ReadmeState>,
+    markdown: Option<&mut crate::markdown::MarkdownState>,
 ) -> FrameEffects {
     let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
@@ -2098,7 +2104,7 @@ fn draw_static_frame_with(
             new_item: None,
             icon_tooltip: None,
             search,
-            readme,
+            markdown,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2148,6 +2154,7 @@ fn frame_theme() -> Theme {
         syntax_decorator: (0, 0, 0),
         syntax_selector: (0, 0, 0),
         editor_current_line: (0, 0, 0),
+        editor_search_match: (0, 0, 0),
         editor_indent_guide: (0, 0, 0),
         editor_indent_guide_active: (0, 0, 0),
         editor_bracket_1: (0, 0, 0),
@@ -2209,7 +2216,7 @@ fn frame_scene_renders_spec_surfaces() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2317,7 +2324,7 @@ fn frame_viewer_pane_renders_over_placeholder() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2399,7 +2406,7 @@ fn frame_interactions_report_effects() {
         new_item: None,
         icon_tooltip: None,
         search: None,
-        readme: None,
+        markdown: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2574,7 +2581,7 @@ fn frame_single_click_opens_and_viewer_scrolls() {
         new_item: None,
         icon_tooltip: None,
         search: None,
-        readme: None,
+        markdown: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2715,7 +2722,7 @@ fn viewer_flash_paints_accent_strip() {
                 new_item: None,
                 icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2814,7 +2821,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2876,7 +2883,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2943,7 +2950,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         new_item: None,
         icon_tooltip: None,
         search: None,
-        readme: None,
+        markdown: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -3088,7 +3095,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -3155,7 +3162,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 new_item: None,
                 icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -3334,7 +3341,7 @@ fn viewer_offset_self_heals_before_hit_testing() {
             new_item: None,
             icon_tooltip: None,
             search: None,
-            readme: None,
+            markdown: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],

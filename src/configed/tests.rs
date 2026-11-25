@@ -122,6 +122,66 @@ fn ime_preedit_and_commit_hit_the_textarea() {
 }
 
 #[test]
+fn paste_replaces_text_selection_normalizes_newlines_and_marks_dirty() {
+    let d = temp_dir("configed-paste-text");
+    let yaml = d.path().join("config.yaml");
+    std::fs::write(&yaml, "old: value\n").expect("write");
+    let mut editor = ConfigEditor::open(d.path(), &yaml, &patterns()).expect("open");
+    let Body::Text(text) = &mut editor.body else { panic!("text") };
+    text.set_cursor(0, 0, true);
+
+    assert!(editor.paste("new: value\r\nnext: item\r"));
+    assert!(editor.is_dirty());
+    {
+        let Body::Text(text) = &editor.body else { panic!("text") };
+        assert_eq!(text.text(), "new: value\nnext: item\n");
+    }
+    assert!(!editor.paste("bad\0value"));
+    let Body::Text(text) = &editor.body else { panic!("text") };
+    assert_eq!(text.text(), "new: value\nnext: item\n");
+}
+
+#[test]
+fn paste_into_env_fields_is_single_line_and_capped() {
+    let d = temp_dir("configed-paste-env");
+    let env = d.path().join(".env");
+    std::fs::write(&env, "A=1\n").expect("write");
+    let mut editor = ConfigEditor::open(d.path(), &env, &patterns()).expect("open");
+    let Body::Env(form) = &mut editor.body else { panic!("env") };
+    form.value.focused = true;
+    form.value.text.clear();
+    form.value.cursor = 0;
+
+    assert!(editor.paste("alpha\r\nbeta\ngamma"));
+    let Body::Env(form) = &editor.body else { panic!("env") };
+    assert_eq!(form.value.text, "alpha beta gamma");
+    assert!(!editor.is_dirty(), "form edits become dirty only when applied");
+
+    let oversized = "x".repeat(ENV_VALUE_CAP + 1);
+    assert!(!editor.paste(&oversized));
+    let Body::Env(form) = &editor.body else { panic!("env") };
+    assert_eq!(form.value.text, "alpha beta gamma");
+}
+
+#[test]
+#[ignore = "needs a live Wayland compositor"]
+fn live_clipboard_paste_routes_through_the_config_editor() {
+    let d = temp_dir("configed-live-paste");
+    let yaml = d.path().join("config.yaml");
+    std::fs::write(&yaml, "value: ").expect("write");
+    let mut editor = ConfigEditor::open(d.path(), &yaml, &patterns()).expect("open");
+    crate::clipboard::copy_text("from-clipboard\nsecond-line").expect("copy");
+
+    let mut mods = winit::keyboard::ModifiersState::empty();
+    mods.set(winit::keyboard::ModifiersState::CONTROL, true);
+    assert!(editor.handle_key(&winit::keyboard::Key::Character("v".into()), None, &mods));
+
+    let Body::Text(text) = &editor.body else { panic!("text") };
+    assert_eq!(text.text(), "value: from-clipboard\nsecond-line");
+    assert!(editor.is_dirty());
+}
+
+#[test]
 fn textarea_drag_keeps_its_selection_on_release() {
     let d = temp_dir("configed-text-drag");
     let yaml = d.path().join("config.yaml");
@@ -201,6 +261,7 @@ fn panel_theme() -> crate::render::Theme {
         syntax_decorator: (0, 0, 0),
         syntax_selector: (0, 0, 0),
         editor_current_line: (0, 0, 0),
+        editor_search_match: (0, 0, 0),
         editor_indent_guide: (0, 0, 0),
         editor_indent_guide_active: (0, 0, 0),
         editor_bracket_1: (0, 0, 0),

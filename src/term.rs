@@ -37,6 +37,9 @@ use crate::ui::Rect;
 use crate::viewer::LINE_H;
 use crate::watch::Wake;
 
+mod paste;
+pub use paste::{encode_paste, MAX_PASTE_BYTES};
+
 /// Terminal scrollback cap (memory rule 3: capped terminal scrollback).
 pub const SCROLLBACK_LINES: usize = 2000;
 /// Hard cap on open terminal tabs (shell, git commands and agents share it).

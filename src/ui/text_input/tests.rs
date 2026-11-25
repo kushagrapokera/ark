@@ -240,6 +240,7 @@ fn tab_and_input_text_baseline_scales_with_dpi() {
         syntax_decorator: bg,
         syntax_selector: bg,
         editor_current_line: bg,
+        editor_search_match: bg,
         editor_indent_guide: bg,
         editor_indent_guide_active: bg,
         editor_bracket_1: bg,

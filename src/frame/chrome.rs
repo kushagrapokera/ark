@@ -582,17 +582,17 @@ pub(super) struct EditorGroupEffects {
     pub close: Option<PathBuf>,
     pub close_group: bool,
     pub toggle_split: bool,
-    pub toggle_readme: bool,
+    pub toggle_markdown: bool,
     pub focus: bool,
 }
 
-pub(super) fn editor_action_icons(width: f64, is_split: bool, readme: bool) -> Vec<Icon> {
+pub(super) fn editor_action_icons(width: f64, is_split: bool, markdown: bool) -> Vec<Icon> {
     let mut actions = Vec::with_capacity(3);
     if is_split {
         actions.push(Icon::Close);
     }
-    if readme {
-        actions.push(Icon::Readme);
+    if markdown {
+        actions.push(Icon::Markdown);
     }
     if (is_split && width >= 240.0) || (!is_split && width >= 640.0) {
         actions.push(Icon::Split);
@@ -633,8 +633,8 @@ pub(super) fn draw_editor_group_chrome(
         );
     }
 
-    let readme = group.active.as_deref().is_some_and(crate::readme::is_readme);
-    let actions = editor_action_icons(tabs.w, is_split, readme);
+    let markdown = group.active.as_deref().is_some_and(crate::markdown::is_markdown);
+    let actions = editor_action_icons(tabs.w, is_split, markdown);
     let reserve = match actions.len() {
         3 => 76.0,
         2 => 58.0,
@@ -742,7 +742,7 @@ pub(super) fn draw_editor_group_chrome(
             if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
                 match glyph {
                     Icon::Close if is_split && index == 1 => effects.close_group = true,
-                    Icon::Readme => effects.toggle_readme = true,
+                    Icon::Markdown => effects.toggle_markdown = true,
                     Icon::Split => effects.toggle_split = true,
                     _ => {}
                 }

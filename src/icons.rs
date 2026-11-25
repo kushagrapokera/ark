@@ -28,7 +28,7 @@ pub enum Icon {
     SourceControl,
     Terminal,
     Code,
-    Readme,
+    Markdown,
     Search,
     Split,
     Plus,
@@ -65,7 +65,7 @@ impl Icon {
             Self::SourceControl => "Source Control",
             Self::Terminal => "Terminal",
             Self::Code => "ark",
-            Self::Readme => "Toggle README Preview",
+            Self::Markdown => "Toggle Markdown Preview",
             Self::Search => "Search",
             Self::Split => "Split Editor",
             Self::Plus => "New Terminal",
@@ -227,7 +227,7 @@ pub fn draw(
             pb.line_to(cx - 0.08 * s, cy + 0.38 * s);
             pb.finish().expect("valid code path")
         }
-        Icon::Readme => {
+        Icon::Markdown => {
             let mut pb = PathBuilder::new();
             pb.move_to(cx - 0.28 * s, cy - 0.34 * s);
             pb.line_to(cx + 0.24 * s, cy - 0.34 * s);
@@ -237,7 +237,7 @@ pub fn draw(
             pb.close();
             pb.move_to(cx - 0.12 * s, cy - 0.34 * s);
             pb.line_to(cx - 0.12 * s, cy + 0.34 * s);
-            pb.finish().expect("valid readme path")
+            pb.finish().expect("valid markdown path")
         }
         Icon::Search => {
             let mut pb = PathBuilder::new();
@@ -396,7 +396,7 @@ pub fn draw(
         | Icon::SourceControl
         | Icon::Terminal
         | Icon::Code
-        | Icon::Readme
+        | Icon::Markdown
         | Icon::Search
         | Icon::Split
         | Icon::Plus
@@ -465,7 +465,7 @@ mod tests {
             Icon::SourceControl,
             Icon::Terminal,
             Icon::Code,
-            Icon::Readme,
+            Icon::Markdown,
             Icon::Search,
             Icon::Split,
             Icon::Plus,

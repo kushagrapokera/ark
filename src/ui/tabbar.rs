@@ -124,6 +124,7 @@ mod tests {
             syntax_decorator: (10, 0, 0),
             syntax_selector: (10, 0, 0),
             editor_current_line: (10, 0, 0),
+            editor_search_match: (10, 0, 0),
             editor_indent_guide: (10, 0, 0),
             editor_indent_guide_active: (10, 0, 0),
             editor_bracket_1: (10, 0, 0),

@@ -1,5 +1,8 @@
 # Implementation plan: keyword search and README preview
 
+> Follow-up: the Markdown scope and renderer were expanded in
+> `implementation/2026-11-25-markdown-search-clipboard-plan.md`.
+
 Design: `implementation/2026-11-25-search-readme-design.md`
 
 ## 1. Bounded keyword-search core

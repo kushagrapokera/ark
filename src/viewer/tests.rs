@@ -187,6 +187,39 @@ fn selection_clamps_and_orders() {
 }
 
 #[test]
+fn search_match_tracks_the_first_case_insensitive_literal_span() {
+    let (_d, path) = text_fixture("search-match");
+    fs::write(&path, "let Alpha = 1; // alpha\nCAFÉ\n").expect("write");
+    let mut viewer = Viewer::open(&path).expect("viewer");
+
+    assert!(viewer.set_search_match(1, "ALPHA"));
+    let matched = viewer.search_match().expect("search match");
+    assert_eq!((matched.line, matched.start_col, matched.end_col), (0, 4, 9));
+    assert_eq!(matched.query, "ALPHA");
+
+    assert!(viewer.set_search_match(2, "café"));
+    let matched = viewer.search_match().expect("unicode search match");
+    assert_eq!((matched.line, matched.start_col, matched.end_col), (1, 0, 4));
+}
+
+#[test]
+fn search_match_clears_for_empty_missing_or_over_cap_queries() {
+    let (_d, path) = text_fixture("search-match-clear");
+    fs::write(&path, "needle\n").expect("write");
+    let mut viewer = Viewer::open(&path).expect("viewer");
+    assert!(viewer.set_search_match(1, "needle"));
+
+    assert!(viewer.set_search_match(1, ""));
+    assert!(viewer.search_match().is_none());
+    assert!(viewer.set_search_match(1, "needle"));
+    assert!(viewer.set_search_match(1, "missing"));
+    assert!(viewer.search_match().is_none());
+    assert!(viewer.set_search_match(1, "needle"));
+    assert!(viewer.set_search_match(1, &"x".repeat(129)));
+    assert!(viewer.search_match().is_none());
+}
+
+#[test]
 fn selection_text_extracts_lines_and_spans() {
     let (_d, p) = text_fixture("seltext");
     let mut v = Viewer::open(&p).expect("opens");
@@ -235,26 +268,6 @@ fn selection_counts_chars_not_bytes() {
     v.extend_select(1, 2);
     assert_eq!(v.selection_len(), 4, "\"é\\nna\" = 2 + 1 + 2 chars");
     assert_eq!(v.selection_text().as_deref(), Some("é\nna"));
-}
-
-// ---- clipboard (needs a live Wayland compositor — run manually) ----
-
-/// End-to-end copy round-trip: copy via the data-control protocol, read back
-/// via the same protocol. Requires `WAYLAND_DISPLAY` (run on a real session:
-/// `cargo test clipboard_round_trip -- --ignored`).
-#[test]
-#[ignore = "needs a live Wayland compositor"]
-fn clipboard_round_trip() {
-    copy_to_clipboard("ark clipboard round trip").expect("copy succeeds");
-    let (mut pipe, _) = wl_clipboard_rs::paste::get_contents(
-        wl_clipboard_rs::paste::ClipboardType::Regular,
-        wl_clipboard_rs::paste::Seat::Unspecified,
-        wl_clipboard_rs::paste::MimeType::Text,
-    )
-    .expect("paste succeeds");
-    let mut buf = String::new();
-    std::io::Read::read_to_string(&mut pipe, &mut buf).expect("read pipe");
-    assert_eq!(buf.trim_end_matches('\n'), "ark clipboard round trip");
 }
 
 // ---- disk-change detection + read-position carry (M5) ----

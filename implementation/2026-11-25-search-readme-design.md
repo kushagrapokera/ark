@@ -1,5 +1,8 @@
 # Project keyword search and formatted README preview
 
+> Follow-up: Markdown preview now covers all `.md` files and uses the redesigned
+> renderer in `implementation/2026-11-25-markdown-search-clipboard-design.md`.
+
 ## Goal
 
 Make the activity-bar Search icon useful for finding code keywords across the

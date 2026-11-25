@@ -1,24 +1,29 @@
-//! Streamed, viewport-only README preview. Reuses the existing mmap-backed
+//! Streamed, viewport-only Markdown preview. Reuses the existing mmap-backed
 //! `Viewer`; no full-document AST, duplicate file buffer, or persistent layout
 //! index is retained.
 
 use std::path::Path;
 
+mod blocks;
+mod paint;
 mod parse;
 mod render;
+mod table;
 
+#[cfg(test)]
+mod parse_tests;
 #[cfg(test)]
 mod tests;
 
-pub use render::{draw, ReadmeDraw};
+pub use render::{draw_markdown_preview, MarkdownDraw};
 
 #[derive(Debug, Default)]
-pub struct ReadmeState {
+pub struct MarkdownState {
     pub preview: bool,
     pub scroll: f64,
 }
 
-impl ReadmeState {
+impl MarkdownState {
     pub fn scroll_by(&mut self, dy: f64) -> bool {
         if !dy.is_finite() {
             return false;
@@ -32,14 +37,14 @@ impl ReadmeState {
     }
 }
 
-pub fn is_readme(path: &Path) -> bool {
+pub fn is_markdown(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
     let lower = name.to_ascii_lowercase();
     match lower.rsplit_once('.') {
         Some((stem, ext)) => {
-            stem == "readme" && matches!(ext, "md" | "markdown" | "txt" | "mdown" | "mkd")
+            matches!(ext, "md" | "markdown" | "mdown" | "mkd") || (stem == "readme" && ext == "txt")
         }
         None => lower == "readme",
     }

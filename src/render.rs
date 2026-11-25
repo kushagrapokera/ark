@@ -71,6 +71,8 @@ pub struct Theme {
     pub on_accent: ColorRgb,
     /// Current editor line background.
     pub editor_current_line: ColorRgb,
+    /// Search navigation match background.
+    pub editor_search_match: ColorRgb,
     /// Indent-guide colors, inactive and active.
     pub editor_indent_guide: ColorRgb,
     pub editor_indent_guide_active: ColorRgb,
@@ -121,6 +123,7 @@ impl Theme {
         syntax_selector: (0xF9, 0xE2, 0xAF),
         on_accent: (0x1E, 0x1E, 0x2E),
         editor_current_line: (0x31, 0x32, 0x44),
+        editor_search_match: (0x5C, 0x4F, 0x2E),
         editor_indent_guide: (0x45, 0x47, 0x5A),
         editor_indent_guide_active: (0x6C, 0x70, 0x86),
         editor_bracket_1: (0xF9, 0xE2, 0xAF),
@@ -165,6 +168,7 @@ impl Theme {
         syntax_selector: (0xD7, 0xBA, 0x7D),
         on_accent: (0xFF, 0xFF, 0xFF),
         editor_current_line: (0x2A, 0x2D, 0x2E),
+        editor_search_match: (0x61, 0x54, 0x1D),
         editor_indent_guide: (0x40, 0x40, 0x40),
         editor_indent_guide_active: (0x70, 0x70, 0x70),
         editor_bracket_1: (0xFF, 0xD7, 0x00),

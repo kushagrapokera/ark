@@ -528,6 +528,26 @@ five open viewers, two shells + fake agent tab):
 - `smem` is unavailable in this environment; PSS was read from
   `/proc/<pid>/smaps_rollup` during the live stress run.
 
+## Markdown, search highlighting, and clipboard follow-up
+
+- Replaced the README-only preview with a streamed VS Code-style Markdown view
+  for every `.md`/Markdown file: centered reading column, heading hierarchy and
+  rules, paragraph spacing, task checkboxes, strikethrough, padded code blocks,
+  blockquotes, and wrapped content-sized tables. The existing mmap viewer,
+  viewport-only rendering, and bounded parser guards remain in place.
+- Search-result navigation now retains a bounded per-viewer highlight for the
+  queried word, renders it beneath syntax/selection, and reapplies it after live
+  file refresh. YAML/TOML search hits select the matching source range.
+- Added bounded `wl-clipboard-rs` copy/paste routing. `Ctrl+V` works in config
+  editors, `.env` fields, search, commit messages, and new-item prompts;
+  `Ctrl+Shift+V` pastes into terminals with bracketed-paste support. Terminal
+  `Ctrl+C` remains SIGINT, and code/Markdown source stays read-only.
+- Verification: `cargo test` **384 passed, 0 failed, 4 ignored**, 5/5 CLI;
+  clippy and release build clean. Both live Wayland clipboard tests passed.
+  Visual smoke confirmed non-README Markdown formatting and clicked-search
+  highlighting. Five-viewer/two-terminal stress with Markdown preview and search
+  active measured **34,352 KiB RSS / 27,570 KiB PSS**, below the 100 MiB budget.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

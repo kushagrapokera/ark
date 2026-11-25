@@ -29,6 +29,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod clipboard;
 mod commit;
 mod config;
 mod configed;
@@ -42,7 +43,7 @@ mod icons;
 mod memory;
 mod new_item;
 mod render;
-mod readme;
+mod markdown;
 mod search;
 mod state;
 mod term;
@@ -61,7 +62,7 @@ use frame::{AppLayout, Frame, SplitDrag};
 use git::{FileDiff as GitFileDiff, GitStatus};
 use highlight::Highlighter;
 use new_item::{NewItemKind, NewItemPrompt};
-use readme::ReadmeState;
+use markdown::MarkdownState;
 use render::{Canvas, Damage, DamageRect, Theme};
 use state::BufferCache;
 use alacritty_terminal::term::TermMode;
@@ -335,8 +336,8 @@ struct App {
     settings: config::Config,
     /// The open config editor (one at a time; M9).
     config_edits: Option<ConfigEditor>,
-    /// Streamed formatted preview state for the active README tab.
-    readme: ReadmeState,
+    /// Streamed formatted preview state for the active Markdown tab.
+    markdown: MarkdownState,
     /// Most recent config-open failure (rendered in the pane).
     config_error: Option<String>,
     /// Tab path that owns a config-open failure.
@@ -434,7 +435,7 @@ impl App {
             layout_visibility: frame::LayoutVisibility::default(),
             settings,
             config_edits: None,
-            readme: ReadmeState::default(),
+            markdown: MarkdownState::default(),
             config_error: None,
             config_error_path: None,
             new_item: None,
@@ -566,7 +567,7 @@ impl App {
             }
             Key::Named(NamedKey::Enter) => {
                 self.search_debounce = None;
-                let query = self.search.input.text.clone();
+                let query = self.search.input.text.trim().to_owned();
                 self.start_search(query);
                 true
             }
@@ -1112,7 +1113,7 @@ impl App {
                 new_item: self.new_item.as_mut(),
                 icon_tooltip: None,
                 search: Some(&mut self.search),
-                readme: Some(&mut self.readme),
+                markdown: Some(&mut self.markdown),
             },
             &layout,
             &mut self.tree,
@@ -1250,8 +1251,8 @@ impl App {
         if effects.toggle_split {
             self.toggle_editor_split();
         }
-        if effects.toggle_readme {
-            self.toggle_readme_preview();
+        if effects.toggle_markdown {
+            self.toggle_markdown_preview();
         }
         if let Some(group) = effects.close_group {
             self.close_editor_group(group);
@@ -1659,8 +1660,8 @@ impl App {
 
     /// Open a viewer in a group, or focus the group that already owns it.
     fn open_viewer(&mut self, path: PathBuf, group: usize) {
-        self.readme.preview = false;
-        self.readme.scroll = 0.0;
+        self.markdown.preview = false;
+        self.markdown.scroll = 0.0;
         if group < self.editor_groups.groups.len() {
             self.editor_groups.active = group;
         }
@@ -1684,7 +1685,8 @@ impl App {
             .collect();
         let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
         match self.buffers.get_or_open_pinned(&path, &pins) {
-            Ok(_) => {
+            Ok(viewer) => {
+                viewer.clear_search_match();
                 info!("viewer: opened {}", path.display());
                 self.editor_groups.groups[owner].error = None;
             }
@@ -1707,7 +1709,11 @@ impl App {
     fn open_search_result(&mut self, path: PathBuf, line: usize, group: usize) {
         let activity = self.activity;
         if config::is_editable(&self.root, &path, &self.settings.editable) {
+            let query = self.search.input.text.trim().to_owned();
             self.open_config(path);
+            if let Some(editor) = &mut self.config_edits {
+                editor.select_search_match(line, &query);
+            }
             self.activity = activity;
             self.search.input.focused = false;
             self.damage.mark_full();
@@ -1733,8 +1739,10 @@ impl App {
             .map(Path::to_path_buf)
             .collect();
         let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+        let query = self.search.input.text.trim().to_owned();
         if let Ok(viewer) = self.buffers.get_or_open_pinned(&path, &pins) {
             viewer.set_offset_lines(line.saturating_sub(1), viewport_lines.max(1));
+            viewer.set_search_match(line, &query);
         }
         self.damage.mark_full();
         self.request_redraw();
@@ -1789,12 +1797,12 @@ impl App {
         self.request_redraw();
     }
 
-    fn toggle_readme_preview(&mut self) {
-        if !self.active_path().is_some_and(|path| readme::is_readme(&path)) {
+    fn toggle_markdown_preview(&mut self) {
+        if !self.active_path().is_some_and(|path| markdown::is_markdown(&path)) {
             return;
         }
-        self.readme.preview = !self.readme.preview;
-        self.readme.scroll = 0.0;
+        self.markdown.preview = !self.markdown.preview;
+        self.markdown.scroll = 0.0;
         self.damage.mark_full();
         self.request_redraw();
     }
@@ -1843,8 +1851,8 @@ impl App {
 
     /// Select a tab in its owning group. Config paths enter the enforced editor.
     fn select_tab(&mut self, group: usize, path: PathBuf) {
-        self.readme.preview = false;
-        self.readme.scroll = 0.0;
+        self.markdown.preview = false;
+        self.markdown.scroll = 0.0;
         let Some(owner) = self.editor_groups.select(group, &path) else {
             return;
         };
@@ -1896,8 +1904,8 @@ impl App {
 
     /// Open a whitelisted config file as a tab in the active editor group.
     fn open_config(&mut self, path: PathBuf) {
-        self.readme.preview = false;
-        self.readme.scroll = 0.0;
+        self.markdown.preview = false;
+        self.markdown.scroll = 0.0;
         if let Some(old) = self.config_path() {
             for group in &mut self.editor_groups.groups {
                 if let Some(index) = group.tabs.iter().position(|tab| tab == &old) {
@@ -2597,14 +2605,14 @@ impl ApplicationHandler<Wake> for App {
                         }
                     }
                 }
-                if self.readme.preview
-                    && self.active_path().is_some_and(|path| readme::is_readme(&path))
+                if self.markdown.preview
+                    && self.active_path().is_some_and(|path| markdown::is_markdown(&path))
                 {
                     let group = self
                         .active_group_index()
                         .min(layout.editor_group_count.saturating_sub(1));
                     let rect = layout.editor_groups[group].body;
-                    if rect.contains(x, y) && self.readme.scroll_by(dy) {
+                    if rect.contains(x, y) && self.markdown.scroll_by(dy) {
                         let (cw, ch) = (self.canvas.width(), self.canvas.height());
                         self.damage.mark(damage_rect(rect, self.scale, cw, ch));
                         self.request_redraw();
@@ -2694,6 +2702,35 @@ impl ApplicationHandler<Wake> for App {
                     return;
                 }
                 if self.new_item.is_some() {
+                    let mods = self.modifiers.state();
+                    if mods.control_key()
+                        && matches!(
+                            &event.logical_key,
+                            winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("v")
+                        )
+                    {
+                        let result = clipboard::paste_single_line(ui::TEXT_INPUT_MAX_CHARS)
+                            .map(|text| {
+                                let prompt = self.new_item.as_mut().expect("checked prompt");
+                                let changed = prompt.input.insert_with_cap(&text, ui::TEXT_INPUT_MAX_CHARS);
+                                if changed {
+                                    prompt.error = None;
+                                }
+                                changed
+                            });
+                        match result {
+                            Ok(_) => {}
+                            Err(e) => {
+                                if let Some(prompt) = &mut self.new_item {
+                                    prompt.error = Some(format!("Clipboard paste failed: {e}"));
+                                }
+                                error!("new-item clipboard paste failed: {e}");
+                            }
+                        }
+                        self.damage.mark_full();
+                        self.request_redraw();
+                        return;
+                    }
                     let handled = self.handle_new_item_key(
                         &event.logical_key,
                         event.text.as_deref(),
@@ -2753,6 +2790,31 @@ impl ApplicationHandler<Wake> for App {
                 // (Escape blurs). It sits in the left panel and can hold focus
                 // while a config editor is shown on the right.
                 if self.commit.message.focused {
+                    let is_paste = ctrl
+                        && matches!(
+                            &event.logical_key,
+                            winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("v")
+                        );
+                    if is_paste {
+                        match clipboard::paste_single_line(ui::TEXT_INPUT_MAX_CHARS) {
+                            Ok(text) => {
+                                let changed = self.commit.message.insert_with_cap(
+                                    &text,
+                                    ui::TEXT_INPUT_MAX_CHARS,
+                                );
+                                if changed {
+                                    self.commit.error = None;
+                                }
+                            }
+                            Err(e) => {
+                                self.commit.error = Some(format!("Clipboard paste failed: {e}"));
+                                error!("commit clipboard paste failed: {e}");
+                            }
+                        }
+                        self.damage.mark_full();
+                        self.request_redraw();
+                        return;
+                    }
                     if self.commit.handle_key(&event.logical_key, event.text.as_deref()) {
                         self.damage.mark_full();
                         self.request_redraw();
@@ -2760,6 +2822,28 @@ impl ApplicationHandler<Wake> for App {
                     return;
                 }
                 if self.activity == frame::ActivityPanel::Search && self.search.input.focused {
+                    let is_paste = ctrl
+                        && matches!(
+                            &event.logical_key,
+                            winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("v")
+                        );
+                    if is_paste {
+                        match clipboard::paste_single_line(ui::TEXT_INPUT_MAX_CHARS) {
+                            Ok(text) => {
+                                if self.search.input.insert_with_cap(&text, ui::TEXT_INPUT_MAX_CHARS) {
+                                    self.search.scroll = 0.0;
+                                    self.request_search(self.search.input.text.clone());
+                                }
+                            }
+                            Err(e) => {
+                                self.search.status = format!("Clipboard paste failed: {e}");
+                                error!("search clipboard paste failed: {e}");
+                            }
+                        }
+                        self.damage.mark_full();
+                        self.request_redraw();
+                        return;
+                    }
                     if self.handle_search_key(&event.logical_key, event.text.as_deref()) {
                         self.damage.mark_full();
                         self.request_redraw();
@@ -2783,6 +2867,31 @@ impl ApplicationHandler<Wake> for App {
                 if self.terms.is_open() && self.term_focused {
                     if let Some(term) = self.terms.active_mut() {
                         let mode = term.mode();
+                        let is_paste = ctrl
+                            && self.modifiers.state().shift_key()
+                            && matches!(
+                                &event.logical_key,
+                                winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("v")
+                            );
+                        if is_paste {
+                            match clipboard::paste_text(term::MAX_PASTE_BYTES)
+                                .and_then(|text| term::encode_paste(&mode, &text))
+                            {
+                                Ok(bytes) => term.key_input(&bytes),
+                                Err(e) => error!("terminal clipboard paste failed: {e}"),
+                            }
+                            return;
+                        }
+                        let is_copy = ctrl
+                            && self.modifiers.state().shift_key()
+                            && matches!(
+                                &event.logical_key,
+                                winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("c")
+                            );
+                        if is_copy {
+                            info!("terminal copy shortcut: no terminal text selection available");
+                            return;
+                        }
                         let bytes = term::encode_key(
                             &event.logical_key,
                             event.text.as_deref(),
@@ -2800,10 +2909,15 @@ impl ApplicationHandler<Wake> for App {
                     return;
                 }
                 let is_c = matches!(&event.logical_key, winit::keyboard::Key::Character(s) if s == "c");
+                let is_v = matches!(&event.logical_key, winit::keyboard::Key::Character(s) if s == "v");
+                if is_v {
+                    info!("paste ignored: code and Markdown source are read-only");
+                    return;
+                }
                 if !is_c {
                     return;
                 }
-                let copied = self.active_path().and_then(|path| {
+                let copied = self.active_path().map(|path| {
                     let config_path = self.config_path();
                     let visible: Vec<PathBuf> = self
                         .editor_groups
@@ -2815,12 +2929,8 @@ impl ApplicationHandler<Wake> for App {
                     let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
                     self.buffers
                         .get_or_open_pinned(&path, &pins)
-                        .ok()
-                        .and_then(|viewer| viewer.selection_text())
-                        .map(|text| {
-                            let n = text.chars().count();
-                            viewer::copy_to_clipboard(&text).map(|_| n)
-                        })
+                        .map_err(std::io::Error::other)
+                        .and_then(|viewer| clipboard::copy_viewer_selection(&*viewer))
                 });
                 match copied {
                     Some(Ok(n)) => info!("copied {n} chars to the clipboard"),

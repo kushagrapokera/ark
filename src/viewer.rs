@@ -104,6 +104,7 @@ pub struct Viewer {
     /// Horizontal scrollbar interaction/pixel-offset state.
     hscroll: HScrollbar,
     sel: Option<Selection>,
+    search_match: Option<SearchMatch>,
     /// Selection-drag latch: started on a press inside the panel, extends on
     /// every down frame (panel-clamped), ends on release.
     dragging: bool,
@@ -180,6 +181,7 @@ impl Viewer {
             offset_cols: 0,
             hscroll: HScrollbar::default(),
             sel: None,
+            search_match: None,
             dragging: false,
         })
     }
@@ -441,20 +443,6 @@ impl Viewer {
     }
 }
 
-/// Copy `text` to the Wayland clipboard (data-control protocol). The crate
-/// spawns its own serving thread and returns immediately; ownership ends
-/// when something else copies. Errors surface to the caller (logged — a
-/// failed copy is never silent, but it is also never fatal).
-pub fn copy_to_clipboard(text: &str) -> Result<(), std::io::Error> {
-    use wl_clipboard_rs::copy::{copy, MimeType, Options, Source};
-    copy(
-        Options::new(),
-        Source::Bytes(text.as_bytes().to_vec().into_boxed_slice()),
-        MimeType::Text,
-    )
-    .map_err(|e| std::io::Error::other(format!("clipboard copy failed: {e}")))
-}
-
 // ---- Panel surface: interaction + viewport-only rendering ----
 
 /// Gutter width for a line count at the given LOGICAL char advance: the
@@ -545,6 +533,9 @@ pub fn handle_pointer(viewer: &mut Viewer, panel: Rect, pointer: Pointer, advanc
 // all tests together would bloat this file).
 mod render;
 pub use render::draw_viewer_panel;
+
+mod search;
+pub use search::SearchMatch;
 
 mod decor;
 #[cfg(test)]

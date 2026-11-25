@@ -132,6 +132,24 @@ pub fn draw_viewer_panel(
             content_w,
         );
 
+        // Search navigation highlight, clipped to the visible column window.
+        if let Some(matched) = viewer.search_match() {
+            if matched.line == i {
+                let a = matched.start_col.max(start_col);
+                let b = matched.end_col.min(end_col);
+                if b > a {
+                    canvas.fill_rect(
+                        text_x + (a - start_col) as f64 * advance,
+                        row_y,
+                        (b - a) as f64 * advance,
+                        LINE_H,
+                        theme.editor_search_match,
+                        scale,
+                    );
+                }
+            }
+        }
+
         // Selection background, clipped to the visible column window.
         if let Some(((sl, sc), (el, ec))) = viewer.selection() {
             if i >= sl && i <= el {

@@ -16,6 +16,22 @@ pub(super) fn handle(
 ) -> bool {
     let ctrl = mods.control_key();
     let shift = mods.shift_key();
+    if ctrl && matches!(key, Key::Character(s) if s.eq_ignore_ascii_case("v")) {
+        return match crate::clipboard::paste_text(crate::fs::MAX_CONFIG_BYTES) {
+            Ok(text) => {
+                let changed = editor.paste(&text);
+                if !changed && !text.is_empty() {
+                    editor.error = Some("Paste rejected by the active editor".into());
+                }
+                true
+            }
+            Err(e) => {
+                editor.error = Some(format!("Clipboard paste failed: {e}"));
+                log::error!("config clipboard paste failed: {e}");
+                true
+            }
+        };
+    }
     // Ctrl chords are either App shortcuts or textarea undo/copy; env form
     // fields must never insert the chord's text (e.g. Ctrl+Z → "z").
     if ctrl && matches!(editor.body, Body::Env(_)) {
@@ -119,7 +135,7 @@ fn text_key(
                 "y" => return t.redo(),
                 "c" => {
                     if let Some(sel) = t.selected_text() {
-                        match crate::viewer::copy_to_clipboard(sel) {
+                        match crate::clipboard::copy_text(sel) {
                             Ok(()) => log::info!("copied {} config chars", sel.chars().count()),
                             Err(e) => log::error!("config copy failed: {e}"),
                         }

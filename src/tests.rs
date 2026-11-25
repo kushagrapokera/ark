@@ -246,9 +246,17 @@ fn app_search_activity_focuses_the_keyword_field() {
 fn app_search_result_opens_at_the_matching_line() {
     let d = temp_dir("app-search-open");
     let path = d.path().join("lines.txt");
-    fs::write(&path, (0..40).map(|i| format!("line {i}\n")).collect::<String>()).expect("write");
+    fs::write(
+        &path,
+        (0..40)
+            .map(|i| if i == 29 { "finalVerdict\n".to_owned() } else { format!("line {i}\n") })
+            .collect::<String>(),
+    )
+    .expect("write");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
     app.set_activity(frame::ActivityPanel::Search);
+    app.search.input.text = "finalverdict".into();
+    app.search.input.cursor = app.search.input.text.len();
 
     app.open_search_result(path.clone(), 30, 0);
 
@@ -257,6 +265,22 @@ fn app_search_result_opens_at_the_matching_line() {
     assert!(!app.search.input.focused);
     let viewer = app.buffers.get_or_open(&path).expect("viewer");
     assert_eq!(viewer.offset_lines(), 29);
+    let matched = viewer.search_match().expect("search result highlight");
+    assert_eq!((matched.line, matched.start_col, matched.end_col), (29, 0, 12));
+}
+
+#[test]
+fn app_normal_open_clears_the_search_highlight() {
+    let d = temp_dir("app-search-highlight-clear");
+    let path = d.path().join("code.rs");
+    fs::write(&path, "needle\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(path.clone(), 0);
+    assert!(app.buffers.get_or_open(&path).expect("viewer").set_search_match(1, "needle"));
+
+    app.open_viewer(path.clone(), 0);
+
+    assert!(app.buffers.get_or_open(&path).expect("viewer").search_match().is_none());
 }
 
 #[test]
@@ -318,7 +342,7 @@ fn app_search_result_uses_the_enforced_editor_for_config_files() {
 }
 
 #[test]
-fn app_readme_preview_toggles_and_resets_on_tab_change() {
+fn app_markdown_preview_toggles_and_resets_on_tab_change() {
     let d = temp_dir("app-readme-preview");
     let readme = d.path().join("README.md");
     let code = d.path().join("main.rs");
@@ -327,17 +351,17 @@ fn app_readme_preview_toggles_and_resets_on_tab_change() {
     let mut app = App::new(d.path().to_path_buf(), false, None, None);
     app.open_viewer(readme.clone(), 0);
 
-    app.toggle_readme_preview();
-    assert!(app.readme.preview);
-    app.readme.scroll = 40.0;
-    app.toggle_readme_preview();
-    assert!(!app.readme.preview);
-    assert_eq!(app.readme.scroll, 0.0);
+    app.toggle_markdown_preview();
+    assert!(app.markdown.preview);
+    app.markdown.scroll = 40.0;
+    app.toggle_markdown_preview();
+    assert!(!app.markdown.preview);
+    assert_eq!(app.markdown.scroll, 0.0);
 
-    app.toggle_readme_preview();
+    app.toggle_markdown_preview();
     app.open_viewer(code.clone(), 0);
-    assert!(!app.readme.preview, "non-README tabs reset formatted mode");
-    assert_eq!(app.readme.scroll, 0.0);
+    assert!(!app.markdown.preview, "non-Markdown tabs reset formatted mode");
+    assert_eq!(app.markdown.scroll, 0.0);
 }
 
 #[test]
