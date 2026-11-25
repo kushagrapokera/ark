@@ -13,7 +13,9 @@ use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
 use crate::icons::IconTooltip;
 use crate::new_item::NewItemPrompt;
+use crate::readme::ReadmeState;
 use crate::render::{Canvas, ColorRgb, Theme};
+use crate::search::SearchState;
 use crate::term::{self, TerminalMenuAction, TerminalTabs};
 use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
 use crate::tree::{self, FileTree, ROW_H};
@@ -612,6 +614,7 @@ fn draw_sidebar_handle(f: &mut Frame, rect: Rect, dragging: bool) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivityPanel {
     Explorer,
+    Search,
     SourceControl,
     Terminal,
     Config,
@@ -805,6 +808,10 @@ pub struct Frame<'a> {
     pub new_item: Option<&'a mut NewItemPrompt>,
     /// Hovered icon collected during this frame; painted last as a tooltip.
     pub icon_tooltip: Option<IconTooltip>,
+    /// Bounded project keyword-search state while the Search panel is active.
+    pub search: Option<&'a mut SearchState>,
+    /// Formatted README state for the active mmap-backed README tab.
+    pub readme: Option<&'a mut ReadmeState>,
 }
 
 /// What `draw_frame` changed this frame — the caller marks damage AFTER the
@@ -836,6 +843,8 @@ pub struct FrameEffects {
     pub terminal_menu_dismiss: bool,
     /// A Source Control file row toggled its checkbox.
     pub commit_toggled: bool,
+    /// A keyword-search result was clicked: open this path at this 1-based line.
+    pub search_open: Option<(PathBuf, usize)>,
     /// The Commit button was clicked.
     pub commit_clicked: bool,
     /// The Push button was clicked.
@@ -865,6 +874,8 @@ pub struct FrameEffects {
     pub focus_group: Option<usize>,
     /// The Split editor action was clicked.
     pub toggle_split: bool,
+    /// The README preview action was clicked.
+    pub toggle_readme: bool,
     /// The editor-group divider moved.
     pub group_split_moved: bool,
     /// A title-bar layout action was selected.
@@ -872,6 +883,23 @@ pub struct FrameEffects {
     /// Accessible name of the icon under the pointer (test/inspection surface).
     #[cfg_attr(not(test), allow(dead_code))]
     pub hovered_icon: Option<&'static str>,
+}
+
+fn draw_search_panel(f: &mut Frame, rect: Rect, scrollbar: &mut Scrollbar) -> Option<(PathBuf, usize)> {
+    let search = f.search.as_deref_mut()?;
+    let effects: crate::search::SearchEffects = crate::search::draw_search_panel(
+        f.canvas,
+        f.text,
+        f.theme,
+        f.scale,
+        f.ui_scale,
+        rect,
+        f.root,
+        search,
+        f.pointer,
+        scrollbar,
+    );
+    effects.open
 }
 
 /// Draw the existing per-file Commit & Push panel in the active Source
@@ -1090,6 +1118,8 @@ pub fn draw_frame(
         effects.commit_toggled = fx.toggled;
         effects.commit_clicked = fx.commit;
         effects.push_clicked = fx.push;
+    } else if f.activity == ActivityPanel::Search {
+        effects.search_open = draw_search_panel(f, layout.explorer_card, scrollbar);
     } else {
         let fx = chrome::draw_explorer_chrome(f, layout);
         effects.new_file = fx.new_file;
@@ -1185,6 +1215,7 @@ pub fn draw_frame(
             effects.close_group = Some(index);
         }
         effects.toggle_split |= gx.toggle_split;
+        effects.toggle_readme |= gx.toggle_readme;
         effects.focus_group = effects.focus_group.or(gx.focus.then_some(index));
     }
 
@@ -1224,6 +1255,13 @@ pub fn draw_frame(
         }
         if f.pointer.click && pane.contains(f.pointer.x, f.pointer.y) {
             effects.focus_group = Some(index);
+        }
+        if f.activity == ActivityPanel::Search
+            && layout.explorer_card.w <= 0.0
+            && index == active_group
+        {
+            effects.search_open = draw_search_panel(f, pane, &mut group_scrollbars[index]);
+            continue;
         }
         if f.activity == ActivityPanel::SourceControl
             && layout.explorer_card.w <= 0.0
@@ -1269,6 +1307,44 @@ pub fn draw_frame(
                 draw_placeholder(f, pane, group.error.as_deref());
             }
         } else if let Some(viewer) = viewers[index].as_deref_mut() {
+            if f.readme.as_ref().is_some_and(|state| state.preview)
+                && crate::readme::is_readme(viewer.path())
+            {
+                let track_w = tree::TRACK_W;
+                let content_rect = Rect {
+                    x: pane.x + 8.0,
+                    y: pane.y + 8.0,
+                    w: (pane.w - 16.0 - track_w).max(0.0),
+                    h: (pane.h - 16.0).max(0.0),
+                };
+                let state = f.readme.as_deref_mut().expect("checked preview state");
+                let drawn: crate::readme::ReadmeDraw = crate::readme::draw(
+                    f.canvas,
+                    f.text,
+                    f.theme,
+                    f.scale,
+                    f.ui_scale,
+                    content_rect,
+                    viewer,
+                    state,
+                );
+                if drawn.truncated {
+                    log::trace!("README preview truncated at its line cap");
+                }
+                let track = Rect {
+                    x: pane.x + pane.w - track_w,
+                    y: content_rect.y,
+                    w: track_w,
+                    h: content_rect.h,
+                };
+                let scrollbar = &mut group_scrollbars[index];
+                scrollbar.offset = state.scroll;
+                if scrollbar.on_pointer(track, f.pointer, drawn.content_h, track.h) {
+                    state.scroll = scrollbar.offset;
+                }
+                scrollbar.draw(f.canvas, track, drawn.content_h, track.h, f.theme, f.scale);
+                continue;
+            }
             let font_size = (UI_FONT_SIZE as f64 * f.scale * f.ui_scale) as f32;
             let m = f
                 .text

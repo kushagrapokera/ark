@@ -30,6 +30,8 @@ pub enum Wake {
         path: std::path::PathBuf,
         diff: std::sync::Arc<crate::git::FileDiff>,
     },
+    /// A bounded project keyword-search worker finished.
+    SearchFinished(Box<crate::search::SearchReport>),
 }
 
 /// Coalescing flag shared with notify's event thread: `signal` sets it,

@@ -25,7 +25,7 @@ use winit::keyboard::{Key, NamedKey};
 use crate::git::{self, GitStatus};
 use crate::render::{Canvas, Theme};
 use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
-use crate::ui::{draw_button, draw_checkbox, Pointer, Press, Rect, TextInput, TextInputKey};
+use crate::ui::{draw_button, draw_checkbox, Pointer, Press, Rect, TextInput};
 
 /// Preferred panel height used by the original layout pins. The Source
 /// Control card now uses all available card/body height.
@@ -221,30 +221,14 @@ impl CommitPanel {
         if !self.message.focused {
             return false;
         }
-        let changed = match key {
-            Key::Named(NamedKey::Escape) => {
-                self.message.focused = false;
-                return true;
-            }
-            Key::Named(NamedKey::Backspace) => self.message.handle_key(TextInputKey::Backspace),
-            Key::Named(NamedKey::ArrowLeft) => self.message.handle_key(TextInputKey::Left),
-            Key::Named(NamedKey::ArrowRight) => self.message.handle_key(TextInputKey::Right),
-            Key::Named(NamedKey::Home) => self.message.handle_key(TextInputKey::Home),
-            Key::Named(NamedKey::End) => self.message.handle_key(TextInputKey::End),
-            // Every other text-bearing key (space arrives as NamedKey::Space,
-            // punctuation as Character) inserts its printable text. Control
-            // text (Enter/Tab…) is filtered here.
-            _ => match text {
-                Some(t) if !t.is_empty() && !t.chars().any(char::is_control) => {
-                    let mut changed = false;
-                    for c in t.chars() {
-                        changed |= self.message.handle_key(TextInputKey::Char(c));
-                    }
-                    changed
-                }
-                _ => false,
-            },
-        };
+        if matches!(key, Key::Named(NamedKey::Escape)) {
+            self.message.focused = false;
+            return true;
+        }
+        let mut changed = false;
+        for edit in TextInput::keys_from_logical_and_text(key, text) {
+            changed |= self.message.handle_key(edit);
+        }
         if changed {
             self.error = None;
         }

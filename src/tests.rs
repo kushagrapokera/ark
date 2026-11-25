@@ -179,6 +179,168 @@ fn commit_panel_wheel_scrolls_rows_to_full_pages() {
 /// M8: applying a new status snapshot prunes stale unchecks and leaves live
 /// ones in place (bounded panel state).
 #[test]
+fn app_keyword_search_runs_inline_without_a_proxy() {
+    let d = temp_dir("app-search-inline");
+    fs::write(d.path().join("code.rs"), "fn Target() {}\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.search.input.text = "target".into();
+    app.search.input.cursor = app.search.input.text.len();
+
+    app.start_search("target".into());
+
+    assert!(!app.search.running);
+    assert_eq!(app.search.results.len(), 1);
+    assert_eq!(app.search.results[0].path, d.path().join("code.rs"));
+    assert_eq!(app.search.results[0].line, 1);
+    assert!(app.search.status.contains("1 file"));
+}
+
+#[test]
+fn app_keyword_search_rejects_stale_reports_and_runs_the_queued_query() {
+    let d = temp_dir("app-search-stale");
+    fs::write(d.path().join("old.txt"), "old\n").expect("write old");
+    fs::write(d.path().join("new.txt"), "beta\n").expect("write new");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.search.input.text = "beta".into();
+    app.search.input.cursor = app.search.input.text.len();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.search_inflight = true;
+    app.search_cancel = Some(cancel.clone());
+
+    app.start_search("beta".into());
+    assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(app.search_queued.is_some());
+
+    app.apply_search_report(search::SearchReport {
+        generation: 0,
+        query: "old".into(),
+        results: vec![search::SearchResult {
+            path: d.path().join("old.txt"),
+            matches: 1,
+            line: 1,
+            snippet: "old".into(),
+        }],
+        scanned_files: 1,
+        truncated: false,
+        cancelled: false,
+        error: None,
+    });
+
+    assert!(app.search_queued.is_none());
+    assert!(!app.search_inflight);
+    assert_eq!(app.search.results.len(), 1);
+    assert_eq!(app.search.results[0].path, d.path().join("new.txt"));
+}
+
+#[test]
+fn app_search_activity_focuses_the_keyword_field() {
+    let d = temp_dir("app-search-focus");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.set_activity(frame::ActivityPanel::Search);
+    assert_eq!(app.activity, frame::ActivityPanel::Search);
+    assert!(app.search.input.focused);
+    assert!(!app.term_focused);
+}
+
+#[test]
+fn app_search_result_opens_at_the_matching_line() {
+    let d = temp_dir("app-search-open");
+    let path = d.path().join("lines.txt");
+    fs::write(&path, (0..40).map(|i| format!("line {i}\n")).collect::<String>()).expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.set_activity(frame::ActivityPanel::Search);
+
+    app.open_search_result(path.clone(), 30, 0);
+
+    assert_eq!(app.active_path().as_deref(), Some(path.as_path()));
+    assert_eq!(app.activity, frame::ActivityPanel::Search);
+    assert!(!app.search.input.focused);
+    let viewer = app.buffers.get_or_open(&path).expect("viewer");
+    assert_eq!(viewer.offset_lines(), 29);
+}
+
+#[test]
+fn app_keyword_search_ignores_obsolete_reports_from_an_older_worker() {
+    let d = temp_dir("app-search-obsolete");
+    fs::write(d.path().join("new.txt"), "new needle\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.search.input.text = "needle".into();
+    app.search_generation = 2;
+    app.search_inflight = true;
+    let current_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.search_cancel = Some(current_cancel.clone());
+
+    app.apply_search_report(search::SearchReport {
+        generation: 1,
+        query: "old".into(),
+        results: Vec::new(),
+        scanned_files: 0,
+        truncated: false,
+        cancelled: true,
+        error: None,
+    });
+
+    assert!(app.search_inflight, "an unrelated stale report must not clear the current worker");
+    assert!(app.search_cancel.is_some());
+    assert!(!current_cancel.load(std::sync::atomic::Ordering::Relaxed));
+
+    app.apply_search_report(search::SearchReport {
+        generation: 2,
+        query: "needle".into(),
+        results: vec![search::SearchResult {
+            path: d.path().join("new.txt"),
+            matches: 1,
+            line: 1,
+            snippet: "new needle".into(),
+        }],
+        scanned_files: 1,
+        truncated: false,
+        cancelled: false,
+        error: None,
+    });
+    assert!(!app.search_inflight);
+    assert_eq!(app.search.results.len(), 1);
+}
+
+#[test]
+fn app_search_result_uses_the_enforced_editor_for_config_files() {
+    let d = temp_dir("app-search-config");
+    let path = d.path().join("config.yaml");
+    fs::write(&path, "keyword: true\n").expect("write");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.set_activity(frame::ActivityPanel::Search);
+
+    app.open_search_result(path.clone(), 1, 0);
+
+    assert!(app.config_edits.is_some());
+    assert_eq!(app.pane, PaneMode::Config);
+    assert_eq!(app.activity, frame::ActivityPanel::Search);
+}
+
+#[test]
+fn app_readme_preview_toggles_and_resets_on_tab_change() {
+    let d = temp_dir("app-readme-preview");
+    let readme = d.path().join("README.md");
+    let code = d.path().join("main.rs");
+    fs::write(&readme, "# Title\n\n**bold**\n").expect("write readme");
+    fs::write(&code, "fn main() {}\n").expect("write code");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.open_viewer(readme.clone(), 0);
+
+    app.toggle_readme_preview();
+    assert!(app.readme.preview);
+    app.readme.scroll = 40.0;
+    app.toggle_readme_preview();
+    assert!(!app.readme.preview);
+    assert_eq!(app.readme.scroll, 0.0);
+
+    app.toggle_readme_preview();
+    app.open_viewer(code.clone(), 0);
+    assert!(!app.readme.preview, "non-README tabs reset formatted mode");
+    assert_eq!(app.readme.scroll, 0.0);
+}
+
+#[test]
 fn app_commit_selection_survives_and_prunes_with_status() {
     use crate::git::parse_status;
     let d = temp_dir("app-commit-retain");

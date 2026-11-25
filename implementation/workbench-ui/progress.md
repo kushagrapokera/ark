@@ -485,6 +485,32 @@ five open viewers, two shells + fake agent tab):
 - Five-viewer/two-fish-terminal stress at 1440×900 measured **40,584 KiB RSS /
   30,781 KiB PSS**, below the 100 MiB budget.
 
+## Project keyword search and README preview
+
+- Made the Search activity icon functional: a debounced background worker performs
+  case-insensitive literal keyword search across project text files and shows
+  matching files, match counts, and first-line snippets. Clicking a result opens
+  that file at the matching line while keeping Search open.
+- Bounded search with no persistent index: 1 MiB/file, 50,000 files, 128 MiB total
+  scan, 100 results, 160-character snippets, a bounded directory stack, symlink
+  refusal, binary/UTF-8 refusal, cancellation, and stale-generation rejection.
+- Reduced the activity bar to Explorer, Search, and Source Control; removed the
+  Terminal/Config placeholder icons and their unused glyph variants.
+- Added a README editor action immediately left of Split, available only when the
+  active tab is a README. It toggles a streamed GitHub-style preview of the same
+  mmap-backed viewer: headings, bold, inline code, links/image alt text, lists,
+  blockquotes, fenced code, rules, and simple tables. No AST, duplicate file
+  buffer, webview, dependency, or persistent layout index is added.
+- Preview layout is viewport-only with 20,000-line and 2,000-character guards;
+  wheel/scrollbar scrolling clamps to streamed content height.
+- Verification: `cargo test` **360 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy
+  and release build clean. Live smoke confirmed three visible activity icons,
+  keyword results across README/Rust files, result opening, raw README action,
+  and formatted headings/lists/code/table rendering.
+- Five-viewer/two-fish-terminal stress at 1440×900 plus a full-project no-match
+  search measured **38,960 KiB RSS / 30,261 KiB PSS** (sampled peak RSS 39,540
+  KiB), below the 100 MiB budget.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

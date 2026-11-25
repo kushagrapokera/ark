@@ -10,7 +10,10 @@
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,6 +42,8 @@ mod icons;
 mod memory;
 mod new_item;
 mod render;
+mod readme;
+mod search;
 mod state;
 mod term;
 mod text;
@@ -56,6 +61,7 @@ use frame::{AppLayout, Frame, SplitDrag};
 use git::{FileDiff as GitFileDiff, GitStatus};
 use highlight::Highlighter;
 use new_item::{NewItemKind, NewItemPrompt};
+use readme::ReadmeState;
 use render::{Canvas, Damage, DamageRect, Theme};
 use state::BufferCache;
 use alacritty_terminal::term::TermMode;
@@ -86,6 +92,8 @@ const TREE_REFRESH_DEBOUNCE: Duration = Duration::from_millis(400);
 const FLASH_DURATION: Duration = Duration::from_millis(900);
 /// Terminal raster floor under output storms (~30fps).
 const TERM_FRAME_BUDGET: Duration = Duration::from_millis(33);
+/// Keyword search waits for a short typing pause before walking the project.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// Which surface owns the right pane. Terminal tabs keep running while
 /// hidden; the explicit mode makes config editing (M9) reachable even when a
@@ -310,6 +318,13 @@ struct App {
     file_diff: Option<(PathBuf, Arc<GitFileDiff>)>,
     /// Commit & push panel state (M8; checked-path set + message).
     commit: commit::CommitPanel,
+    /// Bounded project keyword-search state (no persistent index).
+    search: search::SearchState,
+    search_inflight: bool,
+    search_cancel: Option<Arc<AtomicBool>>,
+    search_generation: u64,
+    search_queued: Option<(String, u64)>,
+    search_debounce: Option<(String, Instant)>,
     /// Right-pane mode (M9): viewer vs hidden-terminal config editing.
     pane: PaneMode,
     /// Active workbench activity panel (M12; focus/highlight only).
@@ -320,6 +335,8 @@ struct App {
     settings: config::Config,
     /// The open config editor (one at a time; M9).
     config_edits: Option<ConfigEditor>,
+    /// Streamed formatted preview state for the active README tab.
+    readme: ReadmeState,
     /// Most recent config-open failure (rendered in the pane).
     config_error: Option<String>,
     /// Tab path that owns a config-open failure.
@@ -406,11 +423,18 @@ impl App {
             git: None,
             file_diff: None,
             commit: commit::CommitPanel::default(),
+            search: search::SearchState::default(),
+            search_inflight: false,
+            search_cancel: None,
+            search_generation: 0,
+            search_queued: None,
+            search_debounce: None,
             pane: PaneMode::Viewer,
             activity: frame::ActivityPanel::Explorer,
             layout_visibility: frame::LayoutVisibility::default(),
             settings,
             config_edits: None,
+            readme: ReadmeState::default(),
             config_error: None,
             config_error_path: None,
             new_item: None,
@@ -530,6 +554,36 @@ impl App {
                 .as_mut()
                 .expect("prompt checked above")
                 .handle_key(key, text),
+        }
+    }
+
+    fn handle_search_key(&mut self, key: &Key, text: Option<&str>) -> bool {
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                self.search.input.focused = false;
+                self.set_activity(frame::ActivityPanel::Explorer);
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                self.search_debounce = None;
+                let query = self.search.input.text.clone();
+                self.start_search(query);
+                true
+            }
+            _ => {
+                let keys = ui::TextInput::keys_from_logical_and_text(key, text);
+                let mut changed = false;
+                for edit in keys {
+                    changed |= self.search.input.handle_key(edit);
+                }
+                if changed {
+                    self.search.scroll = 0.0;
+                    self.request_search(self.search.input.text.clone());
+                    self.damage.mark_full();
+                    self.request_redraw();
+                }
+                changed
+            }
         }
     }
 
@@ -1057,6 +1111,8 @@ impl App {
                 term_focused: self.term_focused,
                 new_item: self.new_item.as_mut(),
                 icon_tooltip: None,
+                search: Some(&mut self.search),
+                readme: Some(&mut self.readme),
             },
             &layout,
             &mut self.tree,
@@ -1155,6 +1211,9 @@ impl App {
         if let Some(action) = effects.layout_action {
             self.apply_layout_action(action);
         }
+        if let Some((path, line)) = effects.search_open {
+            self.open_search_result(path, line, active_group);
+        }
         if effects.new_file {
             self.request_new_item(NewItemKind::File);
         }
@@ -1191,6 +1250,9 @@ impl App {
         if effects.toggle_split {
             self.toggle_editor_split();
         }
+        if effects.toggle_readme {
+            self.toggle_readme_preview();
+        }
         if let Some(group) = effects.close_group {
             self.close_editor_group(group);
         }
@@ -1210,6 +1272,107 @@ impl App {
         // has ended (request_redraw borrows all of self).
         if need_redraw {
             self.request_redraw();
+        }
+    }
+
+    /// Queue a project keyword search after a short typing pause.
+    fn request_search(&mut self, query: String) {
+        let query = query.trim().to_owned();
+        self.search_debounce = Some((query, Instant::now() + SEARCH_DEBOUNCE));
+    }
+
+    /// Start a due debounced search. Returns whether one was launched.
+    fn start_search_if_due(&mut self, now: Instant) -> bool {
+        let Some((query, due)) = self.search_debounce.take() else {
+            return false;
+        };
+        if now < due {
+            self.search_debounce = Some((query, due));
+            return false;
+        }
+        self.start_search(query);
+        true
+    }
+
+    fn start_search(&mut self, query: String) {
+        self.search_generation = self.search_generation.saturating_add(1);
+        let generation = self.search_generation;
+        if query.is_empty() {
+            if let Some(cancel) = self.search_cancel.take() {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            self.search_inflight = false;
+            self.search_queued = None;
+            self.search.input.text.clear();
+            self.search.input.cursor = 0;
+            self.search.clear();
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        }
+        if self.search_inflight {
+            if let Some(cancel) = &self.search_cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            self.search_queued = Some((query.clone(), generation));
+            self.search.begin(&query);
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        }
+        self.launch_search(query, generation);
+    }
+
+    fn launch_search(&mut self, query: String, generation: u64) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.search_cancel = Some(cancel.clone());
+        self.search_inflight = true;
+        self.search.begin(&query);
+        let root = self.root.clone();
+        match self.proxy.clone() {
+            Some(proxy) => {
+                let spawned = thread::Builder::new()
+                    .name("ark-keyword-search".into())
+                    .spawn(move || {
+                        let report = search::run_search(&root, &query, generation, &cancel);
+                        let _ = proxy.send_event(Wake::SearchFinished(Box::new(report)));
+                    });
+                if spawned.is_err() {
+                    self.search_inflight = false;
+                    self.search_cancel = None;
+                    self.search.running = false;
+                    self.search.status = "Search worker unavailable".into();
+                    error!("keyword search worker spawn failed");
+                }
+            }
+            None => {
+                let report = search::run_search(&self.root, &query, generation, &cancel);
+                self.apply_search_report(report);
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn apply_search_report(&mut self, report: search::SearchReport) {
+        if report.generation == self.search_generation {
+            self.search_inflight = false;
+            self.search_cancel = None;
+            if report.query == self.search.input.text {
+                self.search.apply(report);
+                self.damage.mark_full();
+                self.request_redraw();
+            }
+        } else if self.search_queued.is_some() {
+            // This is the cancelled worker that the queued query replaces.
+            // Unrelated older reports must not clear a newer active worker.
+            self.search_inflight = false;
+            self.search_cancel = None;
+        } else {
+            return;
+        }
+        if let Some((query, generation)) = self.search_queued.take() {
+            self.launch_search(query, generation);
         }
     }
 
@@ -1448,6 +1611,11 @@ impl App {
                 self.term_focused = false;
                 self.commit.message.focused = false;
             }
+            frame::ActivityPanel::Search => {
+                self.search.input.focused = true;
+                self.term_focused = false;
+                self.commit.message.focused = false;
+            }
             frame::ActivityPanel::SourceControl => {
                 self.term_focused = false;
             }
@@ -1491,6 +1659,8 @@ impl App {
 
     /// Open a viewer in a group, or focus the group that already owns it.
     fn open_viewer(&mut self, path: PathBuf, group: usize) {
+        self.readme.preview = false;
+        self.readme.scroll = 0.0;
         if group < self.editor_groups.groups.len() {
             self.editor_groups.active = group;
         }
@@ -1528,6 +1698,44 @@ impl App {
         self.term_focused = false;
         self.commit.message.focused = false;
         self.request_diff_refresh();
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    /// Open a search result and jump to its 1-based matching line while keeping
+    /// the Search sidebar active.
+    fn open_search_result(&mut self, path: PathBuf, line: usize, group: usize) {
+        let activity = self.activity;
+        if config::is_editable(&self.root, &path, &self.settings.editable) {
+            self.open_config(path);
+            self.activity = activity;
+            self.search.input.focused = false;
+            self.damage.mark_full();
+            self.request_redraw();
+            return;
+        }
+        self.open_viewer(path.clone(), group);
+        self.activity = activity;
+        self.search.input.focused = false;
+        let viewport_lines = self
+            .app_layout()
+            .map(|layout| {
+                (layout.editor_groups[group.min(layout.editor_group_count.saturating_sub(1))].body.h
+                    / viewer::LINE_H)
+                    .floor() as usize
+            })
+            .unwrap_or(1);
+        let visible: Vec<PathBuf> = self
+            .editor_groups
+            .visible_paths()
+            .into_iter()
+            .filter(|path| Some(*path) != self.config_path().as_deref())
+            .map(Path::to_path_buf)
+            .collect();
+        let pins: Vec<&Path> = visible.iter().map(PathBuf::as_path).collect();
+        if let Ok(viewer) = self.buffers.get_or_open_pinned(&path, &pins) {
+            viewer.set_offset_lines(line.saturating_sub(1), viewport_lines.max(1));
+        }
         self.damage.mark_full();
         self.request_redraw();
     }
@@ -1581,6 +1789,16 @@ impl App {
         self.request_redraw();
     }
 
+    fn toggle_readme_preview(&mut self) {
+        if !self.active_path().is_some_and(|path| readme::is_readme(&path)) {
+            return;
+        }
+        self.readme.preview = !self.readme.preview;
+        self.readme.scroll = 0.0;
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
     fn close_editor_group(&mut self, group: usize) {
         if group != 1 || !self.editor_groups.is_split() {
             return;
@@ -1625,6 +1843,8 @@ impl App {
 
     /// Select a tab in its owning group. Config paths enter the enforced editor.
     fn select_tab(&mut self, group: usize, path: PathBuf) {
+        self.readme.preview = false;
+        self.readme.scroll = 0.0;
         let Some(owner) = self.editor_groups.select(group, &path) else {
             return;
         };
@@ -1676,6 +1896,8 @@ impl App {
 
     /// Open a whitelisted config file as a tab in the active editor group.
     fn open_config(&mut self, path: PathBuf) {
+        self.readme.preview = false;
+        self.readme.scroll = 0.0;
         if let Some(old) = self.config_path() {
             for group in &mut self.editor_groups.groups {
                 if let Some(index) = group.tabs.iter().position(|tab| tab == &old) {
@@ -2008,6 +2230,9 @@ impl App {
             let at = self.last_tree_refresh.unwrap_or_else(Instant::now) + TREE_REFRESH_DEBOUNCE;
             earliest = Some(earliest.map_or(at, |d| d.min(at)));
         }
+        if let Some((_, due)) = &self.search_debounce {
+            earliest = Some(earliest.map_or(*due, |d| d.min(*due)));
+        }
         if let Some(d) = earliest {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
@@ -2084,6 +2309,7 @@ impl ApplicationHandler<Wake> for App {
                 self.request_redraw();
             }
             Wake::PtyData => self.on_pty_data(event_loop),
+            Wake::SearchFinished(report) => self.apply_search_report(*report),
             Wake::GitStatus(status) => self.apply_git_status(status),
             Wake::GitDiff { path, diff } => {
                 // Stale-diff guard: only the currently open file applies.
@@ -2103,6 +2329,10 @@ impl ApplicationHandler<Wake> for App {
             return;
         }
         let now = Instant::now();
+        self.start_search_if_due(now);
+        if self.search_debounce.is_some() {
+            self.schedule_followups(event_loop);
+        }
         // M11: return free heap pages after a quiet period (glibc only).
         if memory::should_trim(now, self.last_activity, self.last_trim) {
             let trimmed = memory::trim_heap();
@@ -2300,6 +2530,22 @@ impl ApplicationHandler<Wake> for App {
                 // Wheel scrolling applies over the whole panel under the
                 // pointer (its scrollbar track scrolls too, matching editors).
                 let (x, y) = (self.pointer.x, self.pointer.y);
+                if self.activity == frame::ActivityPanel::Search {
+                    let rect = if layout.explorer_card.w > 0.0 {
+                        layout.explorer_card
+                    } else {
+                        layout.editor_groups[self
+                            .active_group_index()
+                            .min(layout.editor_group_count.saturating_sub(1))]
+                        .body
+                    };
+                    if rect.contains(x, y) && self.search.scroll_by(dy) {
+                        let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                        self.damage.mark(damage_rect(rect, self.scale, cw, ch));
+                        self.request_redraw();
+                    }
+                    return;
+                }
                 // Source Control owns the wheel while its card is active,
                 // whether it is hosted in the sidebar or compact editor body.
                 if self.activity == frame::ActivityPanel::SourceControl {
@@ -2351,6 +2597,20 @@ impl ApplicationHandler<Wake> for App {
                         }
                     }
                 }
+                if self.readme.preview
+                    && self.active_path().is_some_and(|path| readme::is_readme(&path))
+                {
+                    let group = self
+                        .active_group_index()
+                        .min(layout.editor_group_count.saturating_sub(1));
+                    let rect = layout.editor_groups[group].body;
+                    if rect.contains(x, y) && self.readme.scroll_by(dy) {
+                        let (cw, ch) = (self.canvas.width(), self.canvas.height());
+                        self.damage.mark(damage_rect(rect, self.scale, cw, ch));
+                        self.request_redraw();
+                    }
+                    return;
+                }
                 let grid = layout.term_grid;
                 let scrolled = if layout.tree_panel.contains(x, y) {
                     route_wheel_scroll(
@@ -2396,6 +2656,16 @@ impl ApplicationHandler<Wake> for App {
                     if let winit::event::Ime::Commit(text) = ime {
                         if prompt.input.insert(&text) {
                             prompt.error = None;
+                            self.damage.mark_full();
+                            self.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                if self.activity == frame::ActivityPanel::Search && self.search.input.focused {
+                    if let winit::event::Ime::Commit(text) = ime {
+                        if self.search.input.insert(&text) {
+                            self.request_search(self.search.input.text.clone());
                             self.damage.mark_full();
                             self.request_redraw();
                         }
@@ -2484,6 +2754,13 @@ impl ApplicationHandler<Wake> for App {
                 // while a config editor is shown on the right.
                 if self.commit.message.focused {
                     if self.commit.handle_key(&event.logical_key, event.text.as_deref()) {
+                        self.damage.mark_full();
+                        self.request_redraw();
+                    }
+                    return;
+                }
+                if self.activity == frame::ActivityPanel::Search && self.search.input.focused {
+                    if self.handle_search_key(&event.logical_key, event.text.as_deref()) {
                         self.damage.mark_full();
                         self.request_redraw();
                     }

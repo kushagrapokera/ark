@@ -28,9 +28,8 @@ pub enum Icon {
     SourceControl,
     Terminal,
     Code,
+    Readme,
     Search,
-    Bug,
-    Extension,
     Split,
     Plus,
     Close,
@@ -66,9 +65,8 @@ impl Icon {
             Self::SourceControl => "Source Control",
             Self::Terminal => "Terminal",
             Self::Code => "ark",
+            Self::Readme => "Toggle README Preview",
             Self::Search => "Search",
-            Self::Bug => "Terminal",
-            Self::Extension => "Config Editor",
             Self::Split => "Split Editor",
             Self::Plus => "New Terminal",
             Self::Close => "Close",
@@ -229,42 +227,24 @@ pub fn draw(
             pb.line_to(cx - 0.08 * s, cy + 0.38 * s);
             pb.finish().expect("valid code path")
         }
+        Icon::Readme => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 0.28 * s, cy - 0.34 * s);
+            pb.line_to(cx + 0.24 * s, cy - 0.34 * s);
+            pb.line_to(cx + 0.32 * s, cy - 0.24 * s);
+            pb.line_to(cx + 0.32 * s, cy + 0.34 * s);
+            pb.line_to(cx - 0.28 * s, cy + 0.34 * s);
+            pb.close();
+            pb.move_to(cx - 0.12 * s, cy - 0.34 * s);
+            pb.line_to(cx - 0.12 * s, cy + 0.34 * s);
+            pb.finish().expect("valid readme path")
+        }
         Icon::Search => {
             let mut pb = PathBuilder::new();
             pb.push_circle(cx - 0.08 * s, cy - 0.08 * s, 0.25 * s);
             pb.move_to(cx + 0.10 * s, cy + 0.10 * s);
             pb.line_to(cx + 0.36 * s, cy + 0.36 * s);
             pb.finish().expect("valid search path")
-        }
-        Icon::Bug => {
-            let mut pb = PathBuilder::new();
-            pb.push_circle(cx, cy + 0.04 * s, 0.24 * s);
-            pb.move_to(cx, cy - 0.20 * s);
-            pb.line_to(cx, cy - 0.38 * s);
-            pb.move_to(cx - 0.24 * s, cy - 0.10 * s);
-            pb.line_to(cx - 0.40 * s, cy - 0.24 * s);
-            pb.move_to(cx + 0.24 * s, cy - 0.10 * s);
-            pb.line_to(cx + 0.40 * s, cy - 0.24 * s);
-            pb.move_to(cx - 0.24 * s, cy + 0.10 * s);
-            pb.line_to(cx - 0.40 * s, cy + 0.24 * s);
-            pb.move_to(cx + 0.24 * s, cy + 0.10 * s);
-            pb.line_to(cx + 0.40 * s, cy + 0.24 * s);
-            pb.finish().expect("valid bug path")
-        }
-        Icon::Extension => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.30 * s, cy - 0.30 * s);
-            pb.line_to(cx - 0.08 * s, cy - 0.30 * s);
-            pb.line_to(cx - 0.08 * s, cy - 0.08 * s);
-            pb.line_to(cx + 0.08 * s, cy - 0.08 * s);
-            pb.line_to(cx + 0.08 * s, cy - 0.30 * s);
-            pb.line_to(cx + 0.30 * s, cy - 0.30 * s);
-            pb.line_to(cx + 0.30 * s, cy + 0.08 * s);
-            pb.line_to(cx + 0.08 * s, cy + 0.08 * s);
-            pb.line_to(cx + 0.08 * s, cy + 0.30 * s);
-            pb.line_to(cx - 0.30 * s, cy + 0.30 * s);
-            pb.line_to(cx - 0.30 * s, cy - 0.30 * s);
-            pb.finish().expect("valid extension path")
         }
         Icon::ResizeGrip => {
             let mut pb = PathBuilder::new();
@@ -416,9 +396,8 @@ pub fn draw(
         | Icon::SourceControl
         | Icon::Terminal
         | Icon::Code
+        | Icon::Readme
         | Icon::Search
-        | Icon::Bug
-        | Icon::Extension
         | Icon::Split
         | Icon::Plus
         | Icon::Close
@@ -486,9 +465,8 @@ mod tests {
             Icon::SourceControl,
             Icon::Terminal,
             Icon::Code,
+            Icon::Readme,
             Icon::Search,
-            Icon::Bug,
-            Icon::Extension,
             Icon::Split,
             Icon::Plus,
             Icon::Close,

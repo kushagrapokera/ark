@@ -214,18 +214,35 @@ pub(super) fn draw_cards(f: &mut Frame, layout: &AppLayout) {
     }
 }
 
+pub(super) fn activity_bar_icons() -> &'static [Icon] {
+    &[Icon::File, Icon::Search, Icon::SourceControl]
+}
+
+pub(super) fn activity_item_rect(layout: &AppLayout, index: usize) -> Option<Rect> {
+    let bar = layout.activity_bar;
+    let step = if bar.h >= 360.0 {
+        40.0
+    } else if bar.h >= 220.0 {
+        32.0
+    } else {
+        28.0
+    };
+    if index >= activity_bar_icons().len() || bar.h <= 0.0 {
+        return None;
+    }
+    Some(Rect {
+        x: bar.x + 6.0,
+        y: bar.y + 8.0 + index as f64 * step,
+        w: bar.w - 12.0,
+        h: step - 4.0,
+    })
+}
+
 pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<ActivityPanel> {
     let bar = layout.activity_bar;
     if bar.w <= 0.0 || bar.h <= 0.0 {
         return None;
     }
-    let items = [
-        Icon::File,
-        Icon::Search,
-        Icon::SourceControl,
-        Icon::Bug,
-        Icon::Extension,
-    ];
     let mut clicked = None;
     let step = if bar.h >= 360.0 {
         40.0
@@ -235,19 +252,13 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
         28.0
     };
     let visible = ((bar.h - 8.0) / step).floor().max(0.0) as usize;
-    for (index, glyph) in items.into_iter().take(visible).enumerate() {
-        let rect = Rect {
-            x: bar.x + 6.0,
-            y: bar.y + 8.0 + index as f64 * step,
-            w: bar.w - 12.0,
-            h: step - 4.0,
-        };
+    for (index, glyph) in activity_bar_icons().iter().copied().take(visible).enumerate() {
+        let rect = activity_item_rect(layout, index).expect("visible activity item");
         let active = matches!(
             (index, f.activity),
             (0, ActivityPanel::Explorer)
+                | (1, ActivityPanel::Search)
                 | (2, ActivityPanel::SourceControl)
-                | (3, ActivityPanel::Terminal)
-                | (4, ActivityPanel::Config)
         );
         if active {
             f.canvas.fill_round_rect(
@@ -317,9 +328,8 @@ pub(super) fn draw_activity_bar(f: &mut Frame, layout: &AppLayout) -> Option<Act
         if f.new_item.is_none() && f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
             clicked = match index {
                 0 => Some(ActivityPanel::Explorer),
+                1 => Some(ActivityPanel::Search),
                 2 => Some(ActivityPanel::SourceControl),
-                3 => Some(ActivityPanel::Terminal),
-                4 => Some(ActivityPanel::Config),
                 _ => None,
             };
         }
@@ -572,21 +582,22 @@ pub(super) struct EditorGroupEffects {
     pub close: Option<PathBuf>,
     pub close_group: bool,
     pub toggle_split: bool,
+    pub toggle_readme: bool,
     pub focus: bool,
 }
 
-pub(super) fn editor_action_icons(width: f64, is_split: bool) -> &'static [Icon] {
+pub(super) fn editor_action_icons(width: f64, is_split: bool, readme: bool) -> Vec<Icon> {
+    let mut actions = Vec::with_capacity(3);
     if is_split {
-        if width >= 240.0 {
-            &[Icon::Close, Icon::Split]
-        } else {
-            &[Icon::Close]
-        }
-    } else if width >= 640.0 {
-        &[Icon::Split]
-    } else {
-        &[]
+        actions.push(Icon::Close);
     }
+    if readme {
+        actions.push(Icon::Readme);
+    }
+    if (is_split && width >= 240.0) || (!is_split && width >= 640.0) {
+        actions.push(Icon::Split);
+    }
+    actions
 }
 
 pub(super) fn draw_editor_group_chrome(
@@ -622,7 +633,8 @@ pub(super) fn draw_editor_group_chrome(
         );
     }
 
-    let actions = editor_action_icons(tabs.w, is_split);
+    let readme = group.active.as_deref().is_some_and(crate::readme::is_readme);
+    let actions = editor_action_icons(tabs.w, is_split, readme);
     let reserve = match actions.len() {
         3 => 76.0,
         2 => 58.0,
@@ -730,6 +742,7 @@ pub(super) fn draw_editor_group_chrome(
             if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
                 match glyph {
                     Icon::Close if is_split && index == 1 => effects.close_group = true,
+                    Icon::Readme => effects.toggle_readme = true,
                     Icon::Split => effects.toggle_split = true,
                     _ => {}
                 }

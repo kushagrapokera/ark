@@ -5,6 +5,7 @@
 use super::*;
 use crate::fs::testutil::{temp_dir, TempDir};
 use crate::new_item::{NewItemKind, NewItemPrompt};
+use crate::search;
 use crate::ui::testutil::count_color_in;
 use std::fs;
 
@@ -414,6 +415,8 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
         group_split_drag: None,
         new_item: Some(&mut prompt),
         icon_tooltip: None,
+        search: None,
+        readme: None,
     };
     let _ = draw_frame(
         &mut frame,
@@ -450,13 +453,60 @@ fn explorer_root_actions_fit_without_overlap_or_title_collision() {
 #[test]
 fn editor_strip_has_no_more_action() {
     assert_eq!(
-        chrome::editor_action_icons(700.0, true),
+        chrome::editor_action_icons(700.0, true, false),
         &[crate::icons::Icon::Close, crate::icons::Icon::Split]
     );
     assert_eq!(
-        chrome::editor_action_icons(700.0, false),
+        chrome::editor_action_icons(700.0, false, false),
         &[crate::icons::Icon::Split]
     );
+    assert_eq!(
+        chrome::editor_action_icons(700.0, false, true),
+        &[crate::icons::Icon::Readme, crate::icons::Icon::Split]
+    );
+    assert_eq!(
+        chrome::editor_action_icons(700.0, true, true),
+        &[
+            crate::icons::Icon::Close,
+            crate::icons::Icon::Readme,
+            crate::icons::Icon::Split,
+        ]
+    );
+}
+
+#[test]
+fn readme_action_is_clickable_only_for_readme_tabs() {
+    let d = temp_dir("readme-action");
+    let readme = d.path().join("README.md");
+    fs::write(&readme, "# Title\n").expect("write readme");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let (_d, mut tree) = scene_fixture("readme-action-tree");
+
+    for (path, expected) in [(readme.as_path(), true), (Path::new("/repo/main.rs"), false)] {
+        let files = vec![path.to_path_buf()];
+        let effects = draw_static_frame_with(
+            &mut canvas,
+            &mut text,
+            &theme,
+            &mut tree,
+            &layout,
+            Pointer {
+                x: layout.editor_tabs.x + layout.editor_tabs.w - 36.0,
+                y: layout.editor_tabs.y + layout.editor_tabs.h / 2.0,
+                down: false,
+                click: true,
+            },
+            &files,
+            Some(path),
+            ActivityPanel::Explorer,
+            None,
+            None,
+        );
+        assert_eq!(effects.toggle_readme, expected, "active path {path:?}");
+    }
 }
 
 #[test]
@@ -494,42 +544,11 @@ fn explorer_root_actions_report_clicks() {
 }
 
 #[test]
-fn activity_bar_omits_unused_placeholders_below_config() {
-    let (_d, mut tree) = scene_fixture("activity-placeholders");
-    let mut theme = frame_theme();
-    theme.surface = (2, 2, 2);
-    theme.text_muted = (77, 77, 77);
-    theme.git_modified = (88, 99, 111);
-    let layout = app_layout(1024.0, 768.0, 304.0);
-    let mut text = TextSystem::new();
-    let mut canvas = Canvas::new(1024, 768);
-    draw_static_frame(
-        &mut canvas,
-        &mut text,
-        &theme,
-        &mut tree,
-        &layout,
-        Pointer::default(),
-        &[],
-        None,
-    );
-    assert_eq!(
-        crate::ui::testutil::count_not_color_in(&canvas, theme.surface, 14, 252, 50, 408),
-        0,
-        "unused icons below Config are gone"
-    );
-    assert_eq!(
-        crate::ui::testutil::count_not_color_in(&canvas, theme.surface, 14, 660, 50, 732),
-        0,
-        "unused account/settings placeholders are gone"
-    );
-}
-
-#[test]
-fn short_activity_bar_keeps_config_action_reachable() {
+fn short_activity_bar_keeps_search_action_reachable() {
     let (_d, mut tree) = scene_fixture("compact-activity");
     let theme = frame_theme();
     let layout = app_layout_with_commit(400.0, 300.0, 304.0, false, true);
+    let search_icon = chrome::activity_item_rect(&layout, 1).expect("search icon");
     let mut text = TextSystem::new();
     let mut canvas = Canvas::new(400, 300);
     let effects = draw_static_frame(
@@ -539,19 +558,15 @@ fn short_activity_bar_keeps_config_action_reachable() {
         &mut tree,
         &layout,
         Pointer {
-            x: 28.0,
-            y: 190.0,
+            x: search_icon.x + search_icon.w / 2.0,
+            y: search_icon.y + search_icon.h / 2.0,
             down: false,
             click: true,
         },
         &[],
         None,
     );
-    assert_eq!(
-        effects.set_activity,
-        Some(ActivityPanel::Config),
-        "functional actions stay reachable when optional activity icons are hidden"
-    );
+    assert_eq!(effects.set_activity, Some(ActivityPanel::Search));
 }
 
 #[test]
@@ -845,6 +860,117 @@ fn title_bar_omits_agent_launcher_icons() {
 }
 
 #[test]
+fn activity_bar_has_only_explorer_search_and_source_control() {
+    assert_eq!(
+        chrome::activity_bar_icons(),
+        &[
+            crate::icons::Icon::File,
+            crate::icons::Icon::Search,
+            crate::icons::Icon::SourceControl,
+        ]
+    );
+}
+
+#[test]
+fn search_activity_icon_activates_the_search_panel() {
+    let (_d, mut tree) = scene_fixture("search-activity");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let search_icon = chrome::activity_item_rect(&layout, 1).expect("search icon");
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    let effects = draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: search_icon.x + search_icon.w / 2.0,
+            y: search_icon.y + search_icon.h / 2.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+    );
+    assert_eq!(effects.set_activity, Some(ActivityPanel::Search));
+}
+
+#[test]
+fn search_panel_focuses_input_and_opens_a_result() {
+    let (_d, mut tree) = scene_fixture("search-panel");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let panel: search::SearchLayout = search::panel_layout(layout.explorer_card);
+    let mut state = crate::search::SearchState::default();
+    state.results.push(crate::search::SearchResult {
+        path: PathBuf::from("/repo/src/main.rs"),
+        matches: 3,
+        line: 42,
+        snippet: "fn target() {}".into(),
+    });
+    state.status = "1 file · 12 scanned".into();
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+
+    let _ = draw_static_frame_with(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: panel.input.x + 10.0,
+            y: panel.input.y + panel.input.h / 2.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+        ActivityPanel::Search,
+        Some(&mut state),
+        None,
+    );
+    assert!(state.input.focused);
+
+    let effects = draw_static_frame_with(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: panel.results.x + 10.0,
+            y: panel.results.y + 10.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+        ActivityPanel::Search,
+        Some(&mut state),
+        None,
+    );
+    assert_eq!(
+        effects.search_open,
+        Some((PathBuf::from("/repo/src/main.rs"), 42))
+    );
+    assert!(!state.input.focused);
+    assert!(
+        count_color_in(
+            &canvas,
+            theme.fg,
+            panel.results.x as u32,
+            panel.results.y as u32,
+            (panel.results.x + panel.results.w) as u32,
+            (panel.results.y + 46.0) as u32,
+        ) > 0,
+        "search result text paints above the scrollbar track"
+    );
+}
+
+#[test]
 fn source_control_icon_opens_the_per_file_commit_card() {
     let status = crate::git::parse_status(
         "? two words.txt\n\
@@ -910,6 +1036,8 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 term_focused: false,
                 new_item: None,
                 icon_tooltip: None,
+            search: None,
+            readme: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -959,6 +1087,8 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1147,6 +1277,8 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         term_focused: false,
         new_item: None,
         icon_tooltip: None,
+        search: None,
+        readme: None,
         groups: Some(&groups.groups),
         active_group: 1,
         group_viewers: [Some(&mut va), Some(&mut vb)],
@@ -1506,6 +1638,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1576,6 +1710,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1728,6 +1864,8 @@ fn terminal_tabs_select_and_close_by_index() {
                 term_focused: false,
                 new_item: None,
                 icon_tooltip: None,
+            search: None,
+            readme: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -1837,6 +1975,35 @@ fn draw_static_frame(
     open_files: &[PathBuf],
     active_path: Option<&Path>,
 ) -> FrameEffects {
+    draw_static_frame_with(
+        canvas,
+        text,
+        theme,
+        tree,
+        layout,
+        pointer,
+        open_files,
+        active_path,
+        ActivityPanel::Explorer,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // one explicit test-frame context
+fn draw_static_frame_with(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    tree: &mut FileTree,
+    layout: &AppLayout,
+    pointer: Pointer,
+    open_files: &[PathBuf],
+    active_path: Option<&Path>,
+    activity: ActivityPanel,
+    search: Option<&mut crate::search::SearchState>,
+    readme: Option<&mut crate::readme::ReadmeState>,
+) -> FrameEffects {
     let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
@@ -1855,7 +2022,7 @@ fn draw_static_frame(
             root: Path::new("/repo"),
             open_files,
             active_path,
-            activity: ActivityPanel::Explorer,
+            activity,
             pointer,
             dbl_click: false,
             viewer: None,
@@ -1872,6 +2039,8 @@ fn draw_static_frame(
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search,
+            readme,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1981,6 +2150,8 @@ fn frame_scene_renders_spec_surfaces() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2087,6 +2258,8 @@ fn frame_viewer_pane_renders_over_placeholder() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2167,6 +2340,8 @@ fn frame_interactions_report_effects() {
         term_focused: false,
         new_item: None,
         icon_tooltip: None,
+        search: None,
+        readme: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2340,6 +2515,8 @@ fn frame_single_click_opens_and_viewer_scrolls() {
         term_focused: false,
         new_item: None,
         icon_tooltip: None,
+        search: None,
+        readme: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2479,6 +2656,8 @@ fn viewer_flash_paints_accent_strip() {
                 term_focused: false,
                 new_item: None,
                 icon_tooltip: None,
+            search: None,
+            readme: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2576,6 +2755,8 @@ fn frame_config_pane_renders_and_reports_save_click() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2636,6 +2817,8 @@ fn frame_config_pane_renders_and_reports_save_click() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2701,6 +2884,8 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         term_focused: false,
         new_item: None,
         icon_tooltip: None,
+        search: None,
+        readme: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2772,10 +2957,10 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         &mut viewer_scrollbar,
     );
     assert_eq!(effects.close_tab, Some((0, files[0].clone())));
-    // Activity bar: click the Config icon (fourth slot).
+    // Activity bar: click the Search icon (second slot).
     frame.pointer = Pointer {
-        x: 24.0,
-        y: 230.0,
+        x: 38.0,
+        y: 110.0,
         down: false,
         click: true,
     };
@@ -2788,7 +2973,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    assert_eq!(effects.set_activity, Some(ActivityPanel::Config));
+    assert_eq!(effects.set_activity, Some(ActivityPanel::Search));
 }
 
 #[test]
@@ -2844,6 +3029,8 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2909,6 +3096,8 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 term_focused: false,
                 new_item: None,
                 icon_tooltip: None,
+            search: None,
+            readme: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -3086,6 +3275,8 @@ fn viewer_offset_self_heals_before_hit_testing() {
             term_focused: false,
             new_item: None,
             icon_tooltip: None,
+            search: None,
+            readme: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],

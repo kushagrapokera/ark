@@ -65,6 +65,32 @@ fn next_char_boundary(s: &str, mut i: usize) -> Option<usize> {
 }
 
 impl TextInput {
+    /// Map a winit logical key/text event into editing keys. Named navigation
+    /// keys are handled before text so Backspace's `\x08` is not inserted.
+    pub fn keys_from_logical_and_text(
+        logical_key: &winit::keyboard::Key,
+        text: Option<&str>,
+    ) -> Vec<TextInputKey> {
+        use winit::keyboard::{Key, NamedKey};
+        if let Key::Named(named) = logical_key {
+            match named {
+                NamedKey::Backspace => return vec![TextInputKey::Backspace],
+                NamedKey::ArrowLeft => return vec![TextInputKey::Left],
+                NamedKey::ArrowRight => return vec![TextInputKey::Right],
+                NamedKey::Home => return vec![TextInputKey::Home],
+                NamedKey::End => return vec![TextInputKey::End],
+                _ => {}
+            }
+        }
+        text.map(|s| {
+            s.chars()
+                .filter(|c| !c.is_control())
+                .map(TextInputKey::Char)
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
     /// Byte index of the caret, floored to a char boundary and clamped into
     /// the string (defends against a caller-set mid-char index).
     fn bounded_cursor(&self) -> usize {

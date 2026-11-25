@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::ui::{TextInput, TextInputKey};
-use winit::keyboard::{Key, NamedKey};
+use crate::ui::TextInput;
+use winit::keyboard::Key;
 
 const MAX_ERROR_CHARS: usize = 160;
 
@@ -47,22 +47,10 @@ impl NewItemPrompt {
     }
 
     pub fn handle_key(&mut self, key: &Key, text: Option<&str>) -> bool {
-        let changed = match key {
-            Key::Named(NamedKey::Backspace) => self.input.handle_key(TextInputKey::Backspace),
-            Key::Named(NamedKey::ArrowLeft) => self.input.handle_key(TextInputKey::Left),
-            Key::Named(NamedKey::ArrowRight) => self.input.handle_key(TextInputKey::Right),
-            Key::Named(NamedKey::Home) => self.input.handle_key(TextInputKey::Home),
-            Key::Named(NamedKey::End) => self.input.handle_key(TextInputKey::End),
-            _ => {
-                let mut changed = false;
-                if let Some(text) = text {
-                    for ch in text.chars().filter(|ch| !ch.is_control()) {
-                        changed |= self.input.handle_key(TextInputKey::Char(ch));
-                    }
-                }
-                changed
-            }
-        };
+        let mut changed = false;
+        for edit in TextInput::keys_from_logical_and_text(key, text) {
+            changed |= self.input.handle_key(edit);
+        }
         if changed {
             self.error = None;
         }

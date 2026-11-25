@@ -169,21 +169,7 @@ fn keys_from_logical_and_text(
     logical_key: &winit::keyboard::Key,
     text: Option<&str>,
 ) -> Vec<TextInputKey> {
-    use winit::keyboard::{Key, NamedKey};
-    if let Key::Named(named) = logical_key {
-        match named {
-            NamedKey::Backspace => return vec![TextInputKey::Backspace],
-            NamedKey::ArrowLeft => return vec![TextInputKey::Left],
-            NamedKey::ArrowRight => return vec![TextInputKey::Right],
-            NamedKey::Home => return vec![TextInputKey::Home],
-            NamedKey::End => return vec![TextInputKey::End],
-            _ => {}
-        }
-    }
-    match text {
-        Some(s) => s.chars().filter(|c| !c.is_control()).map(TextInputKey::Char).collect(),
-        None => Vec::new(),
-    }
+    TextInput::keys_from_logical_and_text(logical_key, text)
 }
 
 /// Bordered content box with the fixed 12-line demo tree, shifted by the
