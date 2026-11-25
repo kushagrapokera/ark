@@ -581,6 +581,19 @@ five open viewers, two shells + fake agent tab):
   and release build clean. A live three-tab split Markdown session confirmed the
   actions no longer overlap the tabs or each other.
 
+## Caret blinking and terminal rendering fixes
+
+- Fixed the terminal caret gap by shaping terminal text with the same UI scale
+  used for cell advances and cursor geometry.
+- Fixed stale OpenCode-style background bands by clearing the full terminal
+  rectangle before painting each frame.
+- Added a shared 530 ms blinking caret for terminals, config textareas/fields,
+  search, commit messages, and new-item prompts. Input resets it to visible;
+  unfocused surfaces hide it.
+- Verification: `cargo test` **400 passed, 0 failed, 4 ignored**, 5/5 CLI; clippy
+  and release build clean. Live fish/search smoke confirmed carets blink on and
+  off, and terminal regressions cover background clearing and scaled geometry.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

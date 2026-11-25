@@ -29,6 +29,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod caret;
 mod clipboard;
 mod commit;
 mod config;
@@ -56,6 +57,7 @@ mod watch;
 #[cfg(test)]
 mod demo;
 
+use caret::CaretBlink;
 use configed::ConfigEditor;
 use editor_groups::EditorGroups;
 use frame::{AppLayout, Frame, SplitDrag};
@@ -350,6 +352,8 @@ struct App {
     new_item: Option<NewItemPrompt>,
     /// Window IME state (follows PaneMode::Config).
     ime_allowed: bool,
+    /// Shared blink clock for terminal and text-editor carets.
+    caret_blink: CaretBlink,
     /// Last input/fs/git/PTY activity (M11 idle trim gate).
     last_activity: Instant,
     /// Last successful idle heap trim (M11 min-interval gate).
@@ -445,6 +449,7 @@ impl App {
             config_error_path: None,
             new_item: None,
             ime_allowed: false,
+            caret_blink: CaretBlink::default(),
             last_activity: Instant::now(),
             last_trim: None,
             git_inflight: false,
@@ -2085,6 +2090,49 @@ impl App {
         self.request_redraw();
     }
 
+    fn reset_caret_blink(&mut self) {
+        self.caret_blink.reset(Instant::now());
+        self.apply_caret_visibility();
+    }
+
+    fn apply_caret_visibility(&mut self) {
+        let visible = self.caret_blink.visible();
+        self.search.input.caret_visible = visible;
+        self.commit.message.caret_visible = visible;
+        if let Some(prompt) = &mut self.new_item {
+            prompt.input.caret_visible = visible;
+        }
+        if let Some(editor) = &mut self.config_edits {
+            editor.set_caret_visible(visible);
+        }
+        self.terms.set_caret_visible(visible);
+    }
+
+    fn has_focused_caret(&self) -> bool {
+        (self.terms.is_open() && self.term_focused)
+            || self.search.input.focused
+            || self.commit.message.focused
+            || self.new_item.as_ref().is_some_and(|prompt| prompt.input.focused)
+            || (self.pane == PaneMode::Config && self.config_edits.is_some())
+    }
+
+    fn advance_caret_blink(&mut self, now: Instant) -> bool {
+        if !self.caret_blink.tick(now) {
+            return false;
+        }
+        if !self.has_focused_caret() {
+            self.caret_blink.stop();
+        }
+        self.apply_caret_visibility();
+        if self.caret_blink.due().is_some() {
+            self.damage.mark_full();
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Keep the window IME state in sync with the config pane (M9).
     fn sync_ime(&mut self) {
         let want = self.pane == PaneMode::Config || self.new_item.is_some();
@@ -2317,9 +2365,10 @@ impl App {
     /// Schedule wake-ups for the pending follow-ups (flash clear + debounced
     /// tree refresh).
     fn schedule_followups(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
         let mut earliest: Option<Instant> = self.flash_until;
         if self.fs_dirty {
-            let at = self.last_tree_refresh.unwrap_or_else(Instant::now) + TREE_REFRESH_DEBOUNCE;
+            let at = self.last_tree_refresh.unwrap_or(now) + TREE_REFRESH_DEBOUNCE;
             earliest = Some(earliest.map_or(at, |d| d.min(at)));
         }
         if let Some((_, due)) = &self.search_debounce {
@@ -2327,6 +2376,22 @@ impl App {
         }
         if let Some(due) = self.config_autosave_at {
             earliest = Some(earliest.map_or(due, |d| d.min(due)));
+        }
+        if let Some(due) = self.caret_blink.due() {
+            earliest = Some(earliest.map_or(due, |d| d.min(due)));
+        }
+        if self.term_paint_due {
+            if let Some(at) = self.last_render.map(|t| t + TERM_FRAME_BUDGET) {
+                earliest = Some(earliest.map_or(at, |d| d.min(at)));
+            }
+        }
+        if now.checked_duration_since(self.last_activity).is_none_or(|d| d < memory::TRIM_IDLE) {
+            let at = self.last_activity + memory::TRIM_IDLE;
+            earliest = Some(earliest.map_or(at, |d| d.min(at)));
+        }
+        if now.checked_duration_since(self.last_activity).is_some_and(|d| d < HANDLE_PULSE) {
+            let at = now + Duration::from_millis(33);
+            earliest = Some(earliest.map_or(at, |d| d.min(at)));
         }
         if let Some(d) = earliest {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
@@ -2403,7 +2468,10 @@ impl ApplicationHandler<Wake> for App {
                 self.schedule_followups(event_loop);
                 self.request_redraw();
             }
-            Wake::PtyData => self.on_pty_data(event_loop),
+            Wake::PtyData => {
+                self.on_pty_data(event_loop);
+                self.reset_caret_blink();
+            }
             Wake::SearchFinished(report) => self.apply_search_report(*report),
             Wake::GitStatus(status) => self.apply_git_status(status),
             Wake::GitDiff { path, diff } => {
@@ -2429,7 +2497,8 @@ impl ApplicationHandler<Wake> for App {
             self.schedule_followups(event_loop);
         }
         self.autosave_config_if_due(now);
-        if self.config_autosave_at.is_some() {
+        self.advance_caret_blink(now);
+        if self.config_autosave_at.is_some() || self.caret_blink.due().is_some() {
             self.schedule_followups(event_loop);
         }
         // M11: return free heap pages after a quiet period (glibc only).
@@ -2494,6 +2563,9 @@ impl ApplicationHandler<Wake> for App {
             event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_millis(33)));
             self.request_redraw();
         }
+        // Reapply the earliest deadline after all follow-ups so a later idle
+        // wake-up cannot postpone a due caret/autosave/terminal repaint.
+        self.schedule_followups(event_loop);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
@@ -2541,6 +2613,9 @@ impl ApplicationHandler<Wake> for App {
                 self.request_redraw();
             }
             WindowEvent::MouseInput { state, .. } => {
+                if state == ElementState::Pressed {
+                    self.reset_caret_blink();
+                }
                 // Terminal grid: a click focuses the pane; when the running
                 // app enables mouse reporting, press/release are encoded to
                 // the shell instead of local interaction.
@@ -2755,6 +2830,7 @@ impl ApplicationHandler<Wake> for App {
                 self.modifiers = modifiers;
             }
             WindowEvent::Ime(ime) => {
+                self.reset_caret_blink();
                 if let Some(prompt) = &mut self.new_item {
                     if let winit::event::Ime::Commit(text) = ime {
                         if prompt.input.insert(&text) {
@@ -2797,6 +2873,7 @@ impl ApplicationHandler<Wake> for App {
                 if event.state != ElementState::Pressed {
                     return;
                 }
+                self.reset_caret_blink();
                 if self.new_item.is_some() {
                     let mods = self.modifiers.state();
                     if mods.control_key()

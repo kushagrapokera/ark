@@ -93,7 +93,7 @@ impl Default for DemoState {
             split: Split { position: 380.0 },
             split_dragging: false,
             split_grab_dx: 0.0,
-            input: TextInput { text: "edit me".into(), cursor: 7, focused: false },
+            input: TextInput { text: "edit me".into(), cursor: 7, focused: false, caret_visible: true },
             scroll: Scrollbar::default(),
         }
     }

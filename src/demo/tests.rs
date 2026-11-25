@@ -45,7 +45,7 @@ fn demo_status_formats_state() {
         split: Split { position: 500.4 },
         split_dragging: false,
         split_grab_dx: 0.0,
-        input: TextInput { text: "hi".into(), cursor: 2, focused: false },
+        input: TextInput { text: "hi".into(), cursor: 2, focused: false, caret_visible: true },
         scroll: mid,
     };
     assert_eq!(

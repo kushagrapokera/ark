@@ -59,6 +59,7 @@ pub struct TextEditor {
     undo_bytes: usize,
     preedit: Option<String>,
     dirty: bool,
+    caret_visible: bool,
 }
 
 impl TextEditor {
@@ -78,6 +79,7 @@ impl TextEditor {
             undo_bytes: 0,
             preedit: None,
             dirty: false,
+            caret_visible: true,
         };
         editor.cursor = editor.text.len();
         editor
@@ -358,6 +360,14 @@ impl TextEditor {
         } else if col >= self.hscroll_col + cols {
             self.hscroll_col = col + 1 - cols;
         }
+    }
+
+    pub fn caret_visible(&self) -> bool {
+        self.caret_visible
+    }
+
+    pub fn set_caret_visible(&mut self, visible: bool) {
+        self.caret_visible = visible;
     }
 
     pub fn preedit(&self) -> Option<&str> {

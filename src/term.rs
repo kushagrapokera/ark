@@ -313,6 +313,7 @@ pub struct Terminal {
     /// SIGWINCH at release instead of one per pointer movement.
     pty_size: GridSize,
     exited: bool,
+    caret_visible: bool,
 }
 
 impl Drop for Terminal {
@@ -570,6 +571,7 @@ impl Terminal {
             pty_size: size,
             pgid,
             exited: false,
+            caret_visible: true,
         })
     }
 
@@ -669,6 +671,10 @@ impl Terminal {
         }
     }
 
+    pub fn set_caret_visible(&mut self, visible: bool) {
+        self.caret_visible = visible;
+    }
+
     /// Scroll the viewport by `lines` (positive = toward history).
     pub fn scroll_display(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
@@ -717,6 +723,7 @@ impl Terminal {
         {
             return;
         }
+        canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, theme.bg, scale);
         let content = self.term.renderable_content();
         let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
         let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
@@ -774,7 +781,7 @@ impl Terminal {
                 let bold = cell.flags.contains(Flags::BOLD);
                 let same_style = cell.fg == run_fg && bold == run_bold;
                 if !same_style && !run.is_empty() {
-                    flush_run(canvas, text, theme, scale, rect, row_y, advance, baseline_off, &run, run_start, run_fg, run_bold, run_underline);
+                    flush_run(canvas, text, theme, scale, ui_scale, rect, row_y, advance, baseline_off, &run, run_start, run_fg, run_bold, run_underline);
                     run.clear();
                     run_underline = false;
                 }
@@ -787,7 +794,7 @@ impl Terminal {
                 run.push(cell.ch);
             }
             if !run.is_empty() {
-                flush_run(canvas, text, theme, scale, rect, row_y, advance, baseline_off, &run, run_start, run_fg, run_bold, run_underline);
+                flush_run(canvas, text, theme, scale, ui_scale, rect, row_y, advance, baseline_off, &run, run_start, run_fg, run_bold, run_underline);
             }
         }
 
@@ -806,7 +813,7 @@ impl Terminal {
 
         // Cursor: block in the accent color, character in bg (focused only;
         // hidden when scrolled off-screen or the app hides it).
-        if show_cursor && content.cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden {
+        if show_cursor && self.caret_visible && content.cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden {
             if let Some(vp) = term::point_to_viewport(content.display_offset, content.cursor.point) {
                 if vp.line < rows {
                     let x = rect.x + vp.column.0 as f64 * advance;
@@ -844,6 +851,7 @@ fn flush_run(
     text: &mut TextSystem,
     _theme: &Theme,
     scale: f64,
+    ui_scale: f64,
     rect: Rect,
     row_y: f64,
     advance: f64,
@@ -854,7 +862,7 @@ fn flush_run(
     bold: bool,
     underline: bool,
 ) {
-    let font_size = (UI_FONT_SIZE as f64 * scale) as f32;
+    let font_size = (UI_FONT_SIZE as f64 * scale * ui_scale) as f32;
     let baseline = (row_y + TERM_LINE_H / 2.0) * scale + baseline_off;
     text.draw_line(
         canvas,
@@ -1294,6 +1302,12 @@ impl TerminalTabs {
         self.tabs.get_mut(self.active)
     }
 
+    pub fn set_caret_visible(&mut self, visible: bool) {
+        if let Some(term) = self.active_mut() {
+            term.set_caret_visible(visible);
+        }
+    }
+
     /// Apply a deferred visual resize to the active PTY. Background tabs are
     /// resized when they become active and the next frame is composed.
     pub fn flush_active_resize(&mut self) -> bool {
@@ -1311,6 +1325,8 @@ impl TerminalTabs {
     }
 }
 
+#[cfg(test)]
+mod render_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

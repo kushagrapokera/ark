@@ -15,7 +15,7 @@ use crate::text::{TextSystem, TextStyle, UI_FONT_SIZE};
 ///
 /// Memory discipline: text growth is capped at [`TEXT_INPUT_MAX_CHARS`]
 /// chars; inserts beyond the cap are refused (`false`).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextInput {
     /// Field content; always valid UTF-8 (`cursor` stays on char boundaries).
     pub text: String,
@@ -23,6 +23,19 @@ pub struct TextInput {
     pub cursor: usize,
     /// Whether the field has keyboard focus (only focused fields consume keys).
     pub focused: bool,
+    /// Blink phase for the focused caret; unfocused fields never paint it.
+    pub caret_visible: bool,
+}
+
+impl Default for TextInput {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            cursor: 0,
+            focused: false,
+            caret_visible: true,
+        }
+    }
 }
 
 /// Upper bound on stored text (fixed-size state rule, AGENTS.md guardrail 3).
@@ -261,7 +274,7 @@ impl TextInput {
 
         // Accent cursor column, only while focused, only when the caret sits
         // inside the visible region.
-        if self.focused {
+        if self.focused && self.caret_visible {
             // bounded_cursor is a BYTE index — count the chars BEFORE it,
             // never `take(byte_index)` on the char iterator (multi-byte
             // text would shift the caret right by one char per extra byte).

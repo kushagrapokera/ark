@@ -342,6 +342,23 @@ fn app_search_result_uses_the_enforced_editor_for_config_files() {
 }
 
 #[test]
+fn app_caret_blink_toggles_focused_inputs_and_reschedules() {
+    let d = temp_dir("app-caret-blink");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.search.input.focused = true;
+    app.reset_caret_blink();
+    let due = app.caret_blink.due().expect("blink scheduled");
+    assert!(app.search.input.caret_visible);
+
+    assert!(app.advance_caret_blink(due));
+    assert!(!app.search.input.caret_visible);
+    assert!(app.caret_blink.due().expect("next blink") > due);
+
+    app.reset_caret_blink();
+    assert!(app.search.input.caret_visible, "input resets the caret to visible");
+}
+
+#[test]
 fn app_config_autosave_waits_for_debounce_then_saves() {
     let d = temp_dir("app-config-autosave");
     let path = d.path().join("config.yaml");

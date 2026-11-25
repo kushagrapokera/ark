@@ -97,7 +97,7 @@ fn text_input_draw_cursor_when_focused() {
     // (pad + 2 × advance, in logical px).
     let mut canvas = Canvas::new(240, 100);
     canvas.fill(theme.bg);
-    let ti = TextInput { text: "ab".into(), cursor: 2, focused: true };
+    let ti = TextInput { text: "ab".into(), cursor: 2, focused: true, caret_visible: true };
     ti.draw(&mut canvas, rect, &theme, &mut text, 2.0);
     let m = text.mono_metrics(
         (UI_FONT_SIZE as f64 * 2.0) as f32,
@@ -135,7 +135,7 @@ fn text_input_draw_cursor_when_focused() {
     // would place the caret one advance right (after 'b') and find no
     // accent in this band.
     canvas.fill(theme.bg);
-    let ti_utf8 = TextInput { text: "aéb".into(), cursor: 3, focused: true };
+    let ti_utf8 = TextInput { text: "aéb".into(), cursor: 3, focused: true, caret_visible: true };
     ti_utf8.draw(&mut canvas, rect, &theme, &mut text, 2.0);
     let band_utf8 = count_color_in(
         &canvas,
@@ -154,9 +154,28 @@ fn text_input_draw_cursor_when_focused() {
         "'aéb' text ink must be present"
     );
 
+    // Blink-off phase: text remains, but the caret column disappears.
+    canvas.fill(theme.bg);
+    let hidden = TextInput {
+        text: "ab".into(),
+        cursor: 2,
+        focused: true,
+        caret_visible: false,
+    };
+    hidden.draw(&mut canvas, rect, &theme, &mut text, 2.0);
+    assert_eq!(
+        count_color_in(&canvas, theme.accent, inner_l, top, inner_r, bottom),
+        0,
+        "blink-off must hide the caret without hiding text"
+    );
+    assert!(
+        count_color_in(&canvas, theme.fg, 24, 20, 215, 88) > 0,
+        "blink-off still draws input text"
+    );
+
     // Unfocused: no accent anywhere in the rect (border is border-colored
     // and there is no cursor column), text ink and border still drawn.
-    let unfocused = TextInput { text: "ab".into(), cursor: 2, focused: false };
+    let unfocused = TextInput { text: "ab".into(), cursor: 2, focused: false, caret_visible: true };
     let mut canvas2 = Canvas::new(240, 100);
     canvas2.fill(theme.bg);
     unfocused.draw(&mut canvas2, rect, &theme, &mut text, 2.0);
@@ -283,7 +302,7 @@ fn tab_and_input_text_baseline_scales_with_dpi() {
 
     // ---- TextInput: focused, same logical rect ----
     let rect = Rect { x: 10.0, y: 10.0, w: 200.0, h: 34.0 };
-    let ti = TextInput { text: "ab".into(), cursor: 2, focused: true };
+    let ti = TextInput { text: "ab".into(), cursor: 2, focused: true, caret_visible: true };
     let mut i1 = Canvas::new(240, 60);
     i1.fill(theme.bg);
     ti.draw(&mut i1, rect, &theme, &mut text, 1.0);
@@ -318,7 +337,7 @@ fn text_input_draw_degenerates_safely() {
 
     // Empty focused field: no text ink, cursor column at the start.
     canvas.fill(theme.bg);
-    let ti = TextInput { text: String::new(), cursor: 0, focused: true };
+    let ti = TextInput { text: String::new(), cursor: 0, focused: true, caret_visible: true };
     ti.draw(&mut canvas, rect, &theme, &mut text, 1.0);
     assert_eq!(
         count_color_in(&canvas, theme.fg, 0, 0, 120, 60),

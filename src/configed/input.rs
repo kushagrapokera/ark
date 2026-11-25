@@ -3,6 +3,16 @@
 use super::{Body, ConfigEditor, ENV_KEY_CAP, ENV_VALUE_CAP};
 
 impl ConfigEditor {
+    pub fn set_caret_visible(&mut self, visible: bool) {
+        match &mut self.body {
+            Body::Env(form) => {
+                form.key.caret_visible = visible;
+                form.value.caret_visible = visible;
+            }
+            Body::Text(editor) => editor.set_caret_visible(visible),
+        }
+    }
+
     /// Insert clipboard text into the active editable surface. Text configs
     /// keep multi-line content; `.env` fields receive normalized single-line
     /// text. The Rust whitelist remains the write boundary on save.

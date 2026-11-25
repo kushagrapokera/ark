@@ -117,7 +117,11 @@ pub(super) fn draw(
         }
 
         // Caret: a 2px accent column when this line holds it and it's in view.
-        if line_idx == cursor_line && cursor_col >= hscroll && cursor_col <= hscroll + cols {
+        if t.caret_visible()
+            && line_idx == cursor_line
+            && cursor_col >= hscroll
+            && cursor_col <= hscroll + cols
+        {
             canvas.fill_rect(
                 text_x + (cursor_col - hscroll) as f64 * advance,
                 y,

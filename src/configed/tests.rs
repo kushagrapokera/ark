@@ -445,6 +445,15 @@ fn textarea_draws_ink_and_maps_clicks_to_the_caret() {
         "line-number gutter ink"
     );
 
+    e.set_caret_visible(false);
+    canvas.fill(theme.bg);
+    let _ = e.draw(&mut canvas, &mut text, &theme, 1.0, 1.0, pane(), Pointer::default(), &Highlighter::new());
+    assert_eq!(
+        crate::ui::testutil::count_color_in(&canvas, theme.accent, 0, 52, 720, 300),
+        0,
+        "textarea blink-off hides the caret"
+    );
+
     // Click line 1, column ~2 (body starts at y=52, text at x=44).
     let advance = f64::from(text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35).advance);
     let click = Pointer {
