@@ -413,6 +413,7 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
         group_split: None,
         group_split_drag: None,
         new_item: Some(&mut prompt),
+        icon_tooltip: None,
     };
     let _ = draw_frame(
         &mut frame,
@@ -448,9 +449,14 @@ fn explorer_root_actions_fit_without_overlap_or_title_collision() {
 
 #[test]
 fn editor_strip_has_no_more_action() {
-    assert!(!chrome::editor_action_icons(700.0, true).contains(&crate::icons::Icon::More));
-    assert!(!chrome::editor_action_icons(700.0, false).contains(&crate::icons::Icon::More));
-    assert!(chrome::editor_action_icons(700.0, true).contains(&crate::icons::Icon::Split));
+    assert_eq!(
+        chrome::editor_action_icons(700.0, true),
+        &[crate::icons::Icon::Close, crate::icons::Icon::Split]
+    );
+    assert_eq!(
+        chrome::editor_action_icons(700.0, false),
+        &[crate::icons::Icon::Split]
+    );
 }
 
 #[test]
@@ -681,6 +687,85 @@ fn title_bar_logo_is_larger() {
 }
 
 #[test]
+fn explorer_header_has_no_more_icon() {
+    let d = temp_dir("explorer-header-clean");
+    let mut tree = FileTree::new(d.path());
+    let mut theme = frame_theme();
+    theme.bg_elevated = (10, 20, 30);
+    theme.text_muted = (77, 77, 77);
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(
+            &canvas,
+            theme.bg_elevated,
+            layout.explorer_header.y as u32 + 2,
+            200,
+            (layout.explorer_header.x + layout.explorer_header.w - 3.0) as u32,
+            (layout.explorer_header.y + layout.explorer_header.h - 2.0) as u32,
+        ),
+        0,
+        "the Explorer header ellipsis is gone"
+    );
+}
+
+#[test]
+fn hovering_an_icon_shows_its_name() {
+    let d = temp_dir("icon-tooltip");
+    let mut tree = FileTree::new(d.path());
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.bg_elevated = (10, 20, 30);
+    theme.fg = (255, 255, 255);
+    theme.fg_dim = theme.surface_chrome;
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let action = chrome::explorer_action_rects(&layout)[0];
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: action.x + action.w / 2.0,
+            y: action.y + action.h / 2.0,
+            down: false,
+            click: false,
+        },
+        &[],
+        None,
+    );
+
+    let center_x = action.x + action.w / 2.0;
+    let tooltip_ink = crate::ui::testutil::count_not_color_in(
+        &canvas,
+        theme.bg_elevated,
+        (center_x - 32.0) as u32,
+        (action.y + action.h + 6.0) as u32,
+        (center_x + 32.0) as u32,
+        (action.y + action.h + 24.0) as u32,
+    );
+    assert!(
+        tooltip_ink > 0,
+        "hovering New File paints its tooltip name below the icon; ink={tooltip_ink}"
+    );
+}
+
+#[test]
 fn title_bar_layout_buttons_report_their_actions() {
     let (_d, mut tree) = scene_fixture("title-actions");
     let theme = frame_theme();
@@ -824,6 +909,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 terms: None,
                 term_focused: false,
                 new_item: None,
+                icon_tooltip: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -872,6 +958,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1059,6 +1146,7 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         terms: None,
         term_focused: false,
         new_item: None,
+        icon_tooltip: None,
         groups: Some(&groups.groups),
         active_group: 1,
         group_viewers: [Some(&mut va), Some(&mut vb)],
@@ -1254,6 +1342,49 @@ fn app_layout_terminal_card_reserves_the_bottom() {
 }
 
 #[test]
+fn terminal_resize_handle_uses_three_horizontal_dots() {
+    let (_d, mut tree) = scene_fixture("terminal-resize-dots");
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.text_muted = (77, 77, 77);
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+
+    let grip = terminal_resize_handle(&layout).expect("terminal grip");
+    let y = ((grip.y + grip.h / 2.0) * 1.0) as u32;
+    let x0 = (grip.x + 8.0) as u32;
+    let x1 = (grip.x + grip.w - 8.0) as u32;
+    let bg = tiny_skia::PremultipliedColorU8::from_rgba(
+        theme.surface_chrome.0,
+        theme.surface_chrome.1,
+        theme.surface_chrome.2,
+        255,
+    )
+    .expect("opaque tooltip background");
+    let mut runs = 0usize;
+    let mut in_run = false;
+    for x in x0..x1 {
+        let ink = canvas.pixmap().pixel(x, y) != Some(bg);
+        if ink && !in_run {
+            runs += 1;
+        }
+        in_run = ink;
+    }
+    assert!(runs >= 3, "three separate horizontal dots at the grip center, got {runs} runs");
+}
+
+#[test]
 fn terminal_height_is_adjustable_and_clamped() {
     let resized = app_layout_with_groups_and_terminal(
         1024.0,
@@ -1374,6 +1505,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1443,6 +1575,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1510,6 +1643,38 @@ fn terminal_grid_repaint_leaves_the_rest_of_the_canvas_untouched() {
 }
 
 #[test]
+fn terminal_action_tooltips_name_the_hovered_action() {
+    let (_d, mut tree) = scene_fixture("terminal-action-tooltips");
+    let theme = frame_theme();
+    let layout = app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    let actions = chrome::terminal_actions(&layout);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    for (rect, expected) in [
+        (actions.plus, "New Terminal"),
+        (actions.menu, "Terminal Profiles"),
+        (actions.close, "Close Terminal"),
+    ] {
+        let effects = draw_static_frame(
+            &mut canvas,
+            &mut text,
+            &theme,
+            &mut tree,
+            &layout,
+            Pointer {
+                x: rect.x + rect.w / 2.0,
+                y: rect.y + rect.h / 2.0,
+                down: false,
+                click: false,
+            },
+            &[],
+            None,
+        );
+        assert_eq!(effects.hovered_icon, Some(expected));
+    }
+}
+
+#[test]
 fn terminal_tabs_select_and_close_by_index() {
     let d = temp_dir("terminal-tabs-frame");
     let size = term::GridSize { cols: 80, rows: 24 };
@@ -1562,6 +1727,7 @@ fn terminal_tabs_select_and_close_by_index() {
                 terms: Some(terms),
                 term_focused: false,
                 new_item: None,
+                icon_tooltip: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -1705,6 +1871,7 @@ fn draw_static_frame(
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1813,6 +1980,7 @@ fn frame_scene_renders_spec_surfaces() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1918,6 +2086,7 @@ fn frame_viewer_pane_renders_over_placeholder() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1997,6 +2166,7 @@ fn frame_interactions_report_effects() {
         terms: None,
         term_focused: false,
         new_item: None,
+        icon_tooltip: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2169,6 +2339,7 @@ fn frame_single_click_opens_and_viewer_scrolls() {
         terms: None,
         term_focused: false,
         new_item: None,
+        icon_tooltip: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2307,6 +2478,7 @@ fn viewer_flash_paints_accent_strip() {
                 terms: None,
                 term_focused: false,
                 new_item: None,
+                icon_tooltip: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2403,6 +2575,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2462,6 +2635,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2526,6 +2700,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         terms: None,
         term_focused: false,
         new_item: None,
+        icon_tooltip: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2668,6 +2843,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2732,6 +2908,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 terms: None,
                 term_focused: false,
                 new_item: None,
+                icon_tooltip: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2908,6 +3085,7 @@ fn viewer_offset_self_heals_before_hit_testing() {
             terms: None,
             term_focused: false,
             new_item: None,
+            icon_tooltip: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],

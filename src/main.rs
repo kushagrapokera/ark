@@ -686,6 +686,9 @@ impl App {
         // This frame consumes any damage marked by the drag. Re-arm the
         // one-region guard so subsequent pointer movement paints again.
         self.term_drag.damage_marked = false;
+        let terminal_was_dirty = self.terminal_dirty;
+        let terminal_chrome_hovered = layout.terminal_toolbar.contains(self.pointer.x, self.pointer.y)
+            || layout.terminal_resize.contains(self.pointer.x, self.pointer.y);
         let terminal_only = self.terminal_dirty
             && self.damage.is_empty()
             && self.layout_visibility.terminal
@@ -693,6 +696,7 @@ impl App {
             && layout.term_grid.h > 0.0
             && self.terms.is_open()
             && !self.terms.menu_open
+            && !terminal_chrome_hovered
             && !self.term_drag.dragging
             && !self.pointer.click
             && !self.pending_dbl
@@ -706,6 +710,18 @@ impl App {
                 self.canvas.width(),
                 self.canvas.height(),
             ));
+        }
+        // A tooltip over terminal chrome must survive PTY repaints. Use a full
+        // scene wave there instead of clearing the grid beneath the tooltip.
+        if self.damage.is_empty()
+            && terminal_was_dirty
+            && terminal_chrome_hovered
+            && self.layout_visibility.terminal
+            && self.terms.is_open()
+            && !self.terms.menu_open
+            && !self.term_drag.dragging
+        {
+            self.damage.mark_full();
         }
         match self.damage.take(self.canvas.width(), self.canvas.height()) {
             Some(rects) => RenderWave::Scene(rects),
@@ -1040,6 +1056,7 @@ impl App {
                 terms,
                 term_focused: self.term_focused,
                 new_item: self.new_item.as_mut(),
+                icon_tooltip: None,
             },
             &layout,
             &mut self.tree,

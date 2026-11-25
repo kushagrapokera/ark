@@ -17,7 +17,7 @@ use cosmic_text::Weight;
 
 use crate::fs::{read_dir_sorted, DirListing};
 use crate::git::{Badge, GitStatus};
-use crate::icons::{self, Icon};
+use crate::icons::{self, Icon, IconTooltip};
 use crate::render::{Canvas, Theme};
 use crate::text::{TextSystem, TextStyle, TREE_FONT_SIZE};
 use crate::ui::{Pointer, Rect};
@@ -421,7 +421,17 @@ pub fn draw_tree_panel(
     pointer: Pointer,
     git: Option<&GitStatus>,
 ) {
-    draw_tree_panel_with_insertion(canvas, text, theme, scale, panel, tree, pointer, git, None);
+    let _ = draw_tree_panel_with_insertion(
+        canvas,
+        text,
+        theme,
+        scale,
+        panel,
+        tree,
+        pointer,
+        git,
+        None,
+    );
 }
 
 /// Render with a temporary virtual row inserted before `insert_before`. The
@@ -437,12 +447,12 @@ pub fn draw_tree_panel_with_insertion(
     pointer: Pointer,
     git: Option<&GitStatus>,
     insert_before: Option<usize>,
-) {
+) -> Option<IconTooltip> {
     if panel.w <= 0.0 || panel.h <= 0.0 || !scale.is_finite() || scale <= 0.0 {
-        return; // degenerate panel or scale: nothing to raster
+        return None; // degenerate panel or scale: nothing to raster
     }
     if !tree.offset.is_finite() {
-        return; // corrupted pub offset: render nothing (the next scroll/set
+        return None; // corrupted pub offset: render nothing (the next scroll/set
                 // repairs it — same discipline as ui::Scrollbar::clamp)
     }
     let rows = tree.visible_rows();
@@ -458,6 +468,7 @@ pub fn draw_tree_panel_with_insertion(
         None
     };
     let selected = tree.selected();
+    let mut tooltip = None;
     let font_size = (TREE_FONT_SIZE as f64 * scale) as f32;
     let m = text.mono_metrics(font_size, (font_size as f64 * 1.35) as f32);
     let row_w = (panel.w - TRACK_W).max(0.0);
@@ -476,28 +487,29 @@ pub fn draw_tree_panel_with_insertion(
             canvas.fill_rect(panel.x, row_y, row_w, ROW_H, theme.selection, scale);
         }
         let indent = row.depth as f64 * INDENT_PX;
-        let cy = (row_y + ROW_H / 2.0) as f32;
-        if row.is_dir {
-            let icon = if row.expanded { Icon::ChevronDown } else { Icon::ChevronRight };
-            icons::draw(
-                canvas.pixmap_mut(),
-                icon,
-                (panel.x + indent + CHEVRON_ZONE / 2.0) as f32,
-                cy,
-                ICON_SIZE as f32,
-                theme.fg,
-                scale,
-            );
+        let cy_logical = row_y + ROW_H / 2.0;
+        let cy = (cy_logical * scale) as f32;
+        let glyph = if row.is_dir {
+            if row.expanded { Icon::ChevronDown } else { Icon::ChevronRight }
         } else {
-            icons::draw(
-                canvas.pixmap_mut(),
-                Icon::File,
-                (panel.x + indent + 2.0 + ICON_SIZE / 2.0) as f32,
-                cy,
-                ICON_SIZE as f32,
-                theme.fg,
-                scale,
-            );
+            Icon::File
+        };
+        let icon_x = if row.is_dir {
+            panel.x + indent + CHEVRON_ZONE / 2.0
+        } else {
+            panel.x + indent + 2.0 + ICON_SIZE / 2.0
+        };
+        icons::draw(
+            canvas.pixmap_mut(),
+            glyph,
+            (icon_x * scale) as f32,
+            cy,
+            ICON_SIZE as f32,
+            theme.fg,
+            scale,
+        );
+        if tooltip.is_none() {
+            tooltip = glyph.hovered_tooltip(pointer, icon_x, cy_logical, ICON_SIZE);
         }
         // Baseline centers the line in the row; the metrics term is already
         // physical and must NOT be scaled again (the M2 fix-round-2 lesson).
@@ -535,6 +547,7 @@ pub fn draw_tree_panel_with_insertion(
             );
         }
     }
+    tooltip
 }
 
 /// Char-boundary-safe row-label truncation. Short names borrow the cached

@@ -344,6 +344,35 @@ fn fractional_viewport_keeps_ink_out_of_the_bottom_padding() {
     assert!(bbox.3 < bottom, "row glyphs stay above the panel edge: {bbox:?}");
 }
 
+#[test]
+fn tree_icons_report_their_hover_names() {
+    let (_d, tree) = panel_fixture("tree-icon-tooltip");
+    let theme = panel_theme();
+    let panel = Rect { x: 10.0, y: 10.0, w: 200.0, h: 66.0 };
+    let pointer = Pointer {
+        x: panel.x + CHEVRON_ZONE / 2.0,
+        y: panel.y + ROW_H / 2.0,
+        down: false,
+        click: false,
+    };
+    let mut canvas = Canvas::new(220, 90);
+    canvas.fill(theme.bg);
+    let mut text = TextSystem::new();
+    let tooltip = draw_tree_panel_with_insertion(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        panel,
+        &tree,
+        pointer,
+        None,
+        None,
+    )
+    .expect("hovered folder icon");
+    assert_eq!(tooltip.label, "Expand Folder");
+}
+
 /// Ink extent (min_x, max_x) within a horizontal pixel band.
 fn band_width(canvas: &Canvas, bg: crate::render::ColorRgb, y0: u32, y1: u32) -> (u32, u32) {
     let bbox = ink_bbox_in(canvas, bg, 0, y0, canvas.width(), y1)

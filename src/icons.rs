@@ -10,6 +10,7 @@
 //! stroke thickness on HiDPI).
 
 use crate::render::ColorRgb;
+use crate::ui::{Pointer, Rect};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 /// Bold logical stroke width used by every icon.
@@ -30,7 +31,6 @@ pub enum Icon {
     Search,
     Bug,
     Extension,
-    More,
     Split,
     Plus,
     Close,
@@ -39,9 +39,70 @@ pub enum Icon {
     NewFile,
     NewFolder,
     DragHandle,
+    ResizeGrip,
     Trash,
     PanelLeft,
     PanelBottom,
+}
+
+/// One hovered icon's accessible name and logical hit area. The frame keeps at
+/// most one of these and paints it after the scene so later chrome cannot cover it.
+#[derive(Clone, Copy, Debug)]
+pub struct IconTooltip {
+    pub label: &'static str,
+    pub anchor: Rect,
+}
+
+impl Icon {
+    /// Human-readable hover name. Names describe the action in ark's workbench,
+    /// not just the glyph shape.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ChevronRight => "Expand Folder",
+            Self::ChevronDown => "Collapse Folder",
+            Self::File => "File",
+            Self::Folder => "Folder",
+            Self::Dot => "Status",
+            Self::SourceControl => "Source Control",
+            Self::Terminal => "Terminal",
+            Self::Code => "ark",
+            Self::Search => "Search",
+            Self::Bug => "Terminal",
+            Self::Extension => "Config Editor",
+            Self::Split => "Split Editor",
+            Self::Plus => "New Terminal",
+            Self::Close => "Close",
+            Self::Refresh => "Refresh Explorer",
+            Self::Collapse => "Collapse Folders",
+            Self::NewFile => "New File",
+            Self::NewFolder => "New Folder",
+            Self::DragHandle => "Drag Handle",
+            Self::ResizeGrip => "Resize Terminal",
+            Self::Trash => "Close Terminal",
+            Self::PanelLeft => "Toggle Explorer",
+            Self::PanelBottom => "Toggle Terminal",
+        }
+    }
+
+    pub fn hovered_tooltip(
+        self,
+        pointer: Pointer,
+        cx: f64,
+        cy: f64,
+        size: f64,
+    ) -> Option<IconTooltip> {
+        let hit = size.max(18.0);
+        let anchor = Rect {
+            x: cx - hit / 2.0,
+            y: cy - hit / 2.0,
+            w: hit,
+            h: hit,
+        };
+        anchor.contains(pointer.x, pointer.y).then_some(IconTooltip {
+            label: self.name(),
+            anchor,
+        })
+    }
 }
 
 /// Stroke-based outline icon in LOGICAL space, centered on (cx, cy) with a
@@ -205,12 +266,12 @@ pub fn draw(
             pb.line_to(cx - 0.30 * s, cy - 0.30 * s);
             pb.finish().expect("valid extension path")
         }
-        Icon::More => {
+        Icon::ResizeGrip => {
             let mut pb = PathBuilder::new();
-            for dx in [-0.28, 0.0, 0.28] {
-                pb.push_circle(cx + dx * s, cy, 0.055 * s);
+            for dx in [-0.30, 0.0, 0.30] {
+                pb.push_circle(cx + dx * s, cy, 0.09 * s);
             }
-            pb.finish().expect("valid more path")
+            pb.finish().expect("valid resize grip path")
         }
         Icon::Split => {
             let mut pb = PathBuilder::new();
@@ -358,7 +419,6 @@ pub fn draw(
         | Icon::Search
         | Icon::Bug
         | Icon::Extension
-        | Icon::More
         | Icon::Split
         | Icon::Plus
         | Icon::Close
@@ -372,7 +432,7 @@ pub fn draw(
         | Icon::PanelBottom => {
             pixmap.stroke_path(&path, &paint, &stroke, transform, None);
         }
-        Icon::Folder | Icon::Dot => {
+        Icon::Folder | Icon::Dot | Icon::ResizeGrip => {
             pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
         }
     }
@@ -413,6 +473,43 @@ mod tests {
             }
         }
         any.then_some((x0, y0, x1, y1))
+    }
+
+    #[test]
+    fn every_icon_has_a_hover_name_and_hit_area() {
+        let icons = [
+            Icon::ChevronRight,
+            Icon::ChevronDown,
+            Icon::File,
+            Icon::Folder,
+            Icon::Dot,
+            Icon::SourceControl,
+            Icon::Terminal,
+            Icon::Code,
+            Icon::Search,
+            Icon::Bug,
+            Icon::Extension,
+            Icon::Split,
+            Icon::Plus,
+            Icon::Close,
+            Icon::Refresh,
+            Icon::Collapse,
+            Icon::NewFile,
+            Icon::NewFolder,
+            Icon::DragHandle,
+            Icon::ResizeGrip,
+            Icon::Trash,
+            Icon::PanelLeft,
+            Icon::PanelBottom,
+        ];
+        let inside = Pointer { x: 50.0, y: 25.0, down: false, click: false };
+        let outside = Pointer { x: 80.0, y: 25.0, down: false, click: false };
+        for icon in icons {
+            assert!(!icon.name().is_empty(), "{icon:?} needs a tooltip name");
+            let tooltip = icon.hovered_tooltip(inside, 50.0, 25.0, 14.0).expect("hovered icon");
+            assert_eq!(tooltip.label, icon.name());
+            assert!(icon.hovered_tooltip(outside, 50.0, 25.0, 14.0).is_none());
+        }
     }
 
     /// The logical-coordinate contract (see `draw`): the same logical icon

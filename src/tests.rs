@@ -720,6 +720,40 @@ fn scene_damage_takes_precedence_over_a_terminal_only_repaint() {
 }
 
 #[test]
+fn terminal_output_while_hovering_chrome_keeps_the_tooltip_layer() {
+    let d = temp_dir("app-terminal-tooltip-wave");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    app.canvas.resize(1024, 768);
+    app.layout_visibility.terminal = true;
+    app.terms.tabs.push(
+        term::Terminal::spawn_program_with(
+            d.path(),
+            Path::new("/bin/cat"),
+            "test",
+            term::GridSize::new(80, 24),
+            || {},
+        )
+        .expect("spawn test terminal"),
+    );
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, false, true);
+    app.damage.take(app.canvas.width(), app.canvas.height());
+    app.pointer.x = layout.terminal_toolbar.x + 40.0;
+    app.pointer.y = layout.terminal_toolbar.y + layout.terminal_toolbar.h / 2.0;
+    app.terminal_dirty = true;
+
+    assert_eq!(
+        app.take_render_wave(&layout),
+        RenderWave::Scene(vec![DamageRect {
+            x: 0,
+            y: 0,
+            width: 1024,
+            height: 768,
+        }]),
+        "PTY output must repaint the scene while a terminal-chrome tooltip is visible"
+    );
+}
+
+#[test]
 fn hidden_terminal_output_does_not_schedule_a_repaint() {
     let d = temp_dir("app-terminal-hidden-wave");
     let mut app = App::new(d.path().to_path_buf(), false, None, None);

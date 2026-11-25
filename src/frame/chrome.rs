@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 
 use cosmic_text::Weight;
 
-use crate::icons::{self, Icon};
+use crate::icons::{self, Icon, IconTooltip};
 use crate::render::{Canvas, ColorRgb, Theme};
 use crate::term::{terminal_menu_options, TerminalMenuAction};
 use crate::text::{TextStyle, TextSystem};
 use crate::tree::{FileTree, CHEVRON_ZONE, INDENT_PX, ROW_H, TRACK_W};
-use crate::ui::Rect;
+use crate::ui::{Pointer, Rect};
 
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, LayoutAction, CARD_RADIUS};
 
@@ -34,14 +34,70 @@ fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, 
 }
 
 fn icon(f: &mut Frame, icon: Icon, cx: f64, cy: f64, size: f64, color: ColorRgb) {
+    let size = super::ui_size(size, f.ui_scale);
     icons::draw(
         f.canvas.pixmap_mut(),
         icon,
         (cx * f.scale) as f32,
         (cy * f.scale) as f32,
-        (super::ui_size(size, f.ui_scale) * f.scale) as f32,
+        (size * f.scale) as f32,
         color,
         f.scale,
+    );
+    if let Some(tooltip) = icon.hovered_tooltip(f.pointer, cx, cy, size) {
+        f.icon_tooltip = Some(tooltip);
+    }
+}
+
+/// Paint the single hovered icon's name after all scene chrome. The tooltip
+/// flips above near the bottom edge and stays inside the window.
+pub(super) fn draw_icon_tooltip(f: &mut Frame) {
+    let Some(tooltip) = f.icon_tooltip else {
+        return;
+    };
+    let font_size = (super::ui_size(9.0, f.ui_scale) * f.scale) as f32;
+    let m = f.text.mono_metrics(font_size, font_size * 1.35);
+    let advance = f64::from(m.advance) / f.scale;
+    let text_w = tooltip.label.chars().count() as f64 * advance;
+    let width = text_w + 16.0;
+    let height = super::ui_size(22.0, f.ui_scale);
+    let window_w = f.canvas.width() as f64 / f.scale;
+    let window_h = f.canvas.height() as f64 / f.scale;
+    let max_x = (window_w - width - 4.0).max(4.0);
+    let x = (tooltip.anchor.x + tooltip.anchor.w / 2.0 - width / 2.0)
+        .clamp(4.0, max_x);
+    let below = tooltip.anchor.y + tooltip.anchor.h + 4.0;
+    let y = if below + height <= window_h - 4.0 {
+        below
+    } else {
+        (tooltip.anchor.y - height - 4.0).max(4.0)
+    };
+    f.canvas.fill_round_rect(
+        x,
+        y,
+        width,
+        height,
+        4.0,
+        f.theme.border,
+        f.scale,
+    );
+    f.canvas.fill_round_rect(
+        x + 1.0,
+        y + 1.0,
+        width - 2.0,
+        height - 2.0,
+        3.0,
+        f.theme.bg_elevated,
+        f.scale,
+    );
+    text(
+        f,
+        tooltip.label,
+        x + 8.0,
+        y + (height - super::ui_size(9.0, f.ui_scale)) / 2.0,
+        9.0,
+        f.theme.fg,
+        false,
     );
 }
 
@@ -319,14 +375,6 @@ pub(super) fn draw_explorer_chrome(f: &mut Frame, layout: &AppLayout) -> Explore
         10.0,
         f.theme.fg,
         true,
-    );
-    icon(
-        f,
-        Icon::More,
-        header.x + header.w - 16.0,
-        header.y + header.h / 2.0,
-        14.0,
-        f.theme.text_muted,
     );
     if f.activity == ActivityPanel::SourceControl {
         return effects;
@@ -634,6 +682,12 @@ pub(super) fn draw_editor_group_chrome(
             w: 16.0,
             h: 16.0,
         };
+        if close.contains(f.pointer.x, f.pointer.y) {
+            f.icon_tooltip = Some(IconTooltip {
+                label: "Close Tab",
+                anchor: close,
+            });
+        }
         f.text.draw_line(
             f.canvas,
             "\u{d7}",
@@ -705,6 +759,12 @@ pub(super) fn draw_terminal_resize_handle(f: &mut Frame, layout: &AppLayout) {
         return;
     };
     let hovered = layout.terminal_resize.contains(f.pointer.x, f.pointer.y);
+    if hovered {
+        f.icon_tooltip = Some(IconTooltip {
+            label: "Resize Terminal",
+            anchor: rect,
+        });
+    }
     f.canvas.fill_round_rect(
         rect.x,
         rect.y,
@@ -725,10 +785,10 @@ pub(super) fn draw_terminal_resize_handle(f: &mut Frame, layout: &AppLayout) {
     );
     icon(
         f,
-        Icon::DragHandle,
+        Icon::ResizeGrip,
         rect.x + rect.w / 2.0,
         rect.y + rect.h / 2.0,
-        10.0,
+        14.0,
         if hovered {
             f.theme.accent
         } else {
@@ -897,10 +957,12 @@ fn draw_terminal_tab(
     theme: &Theme,
     scale: f64,
     ui_scale: f64,
+    pointer: Pointer,
     rect: Rect,
     label: &str,
     active: bool,
     closable: bool,
+    tooltip: &mut Option<IconTooltip>,
 ) {
     if active {
         canvas.fill_rect(rect.x, rect.y, rect.w, rect.h, theme.surface_hover, scale);
@@ -919,15 +981,24 @@ fn draw_terminal_tab(
     } else {
         rect.x + 12.0
     };
+    let icon_size = super::ui_size(12.0, ui_scale);
     icons::draw(
         canvas.pixmap_mut(),
         Icon::Terminal,
         (icon_x * scale) as f32,
         ((rect.y + rect.h / 2.0) * scale) as f32,
-        (super::ui_size(12.0, ui_scale) * scale) as f32,
+        (icon_size * scale) as f32,
         if active { theme.fg } else { theme.text_muted },
         scale,
     );
+    if tooltip.is_none() {
+        *tooltip = Icon::Terminal.hovered_tooltip(
+            pointer,
+            icon_x,
+            rect.y + rect.h / 2.0,
+            icon_size,
+        );
+    }
     if !compact {
         let right = rect.x + rect.w - if closable { 22.0 } else { 8.0 };
         let max_chars = ((right - icon_x - 12.0) / 6.6).floor().max(0.0) as usize;
@@ -950,15 +1021,24 @@ fn draw_terminal_tab(
     }
     if closable && rect.w >= 44.0 {
         let close = terminal_tab_close_rect(rect);
+        let close_size = super::ui_size(10.0, ui_scale);
         icons::draw(
             canvas.pixmap_mut(),
             Icon::Close,
             ((close.x + close.w / 2.0) * scale) as f32,
             ((close.y + close.h / 2.0) * scale) as f32,
-            (super::ui_size(10.0, ui_scale) * scale) as f32,
+            (close_size * scale) as f32,
             theme.text_muted,
             scale,
         );
+        if tooltip.is_none() {
+            *tooltip = Icon::Close.hovered_tooltip(
+                pointer,
+                close.x + close.w / 2.0,
+                close.y + close.h / 2.0,
+                close_size,
+            );
+        }
     }
 }
 
@@ -982,6 +1062,7 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> Termina
     let active = f.terms.as_ref().map_or(0, |terms| terms.active);
     let menu_open = f.terms.as_ref().is_some_and(|terms| terms.menu_open);
     let tabs = terminal_tab_rects(layout, tab_count);
+    let mut tab_tooltip = None;
     if let Some(terms) = f.terms.as_ref() {
         for (index, rect) in tabs.iter().copied().enumerate() {
             if let Some(term) = terms.tabs.get(index) {
@@ -991,10 +1072,12 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> Termina
                     f.theme,
                     f.scale,
                     f.ui_scale,
+                    f.pointer,
                     rect,
                     term.label(),
                     index == active,
                     true,
+                    &mut tab_tooltip,
                 );
             }
         }
@@ -1006,13 +1089,16 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> Termina
                 f.theme,
                 f.scale,
                 f.ui_scale,
+                f.pointer,
                 rect,
                 "Terminal",
                 true,
                 false,
+                &mut tab_tooltip,
             );
         }
     }
+    f.icon_tooltip = tab_tooltip.or(f.icon_tooltip);
 
     let actions = terminal_actions(layout);
     let plus_hover = actions.plus.contains(f.pointer.x, f.pointer.y)
@@ -1041,6 +1127,11 @@ pub(super) fn draw_terminal_chrome(f: &mut Frame, layout: &AppLayout) -> Termina
             13.0,
             f.theme.text_muted,
         );
+        if glyph == Icon::ChevronDown && rect.contains(f.pointer.x, f.pointer.y) {
+            if let Some(tooltip) = f.icon_tooltip.as_mut() {
+                tooltip.label = "Terminal Profiles";
+            }
+        }
     }
 
     if f.pointer.click {

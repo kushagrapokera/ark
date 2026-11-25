@@ -11,6 +11,7 @@ use crate::configed::ConfigEditor;
 use crate::editor_groups::EditorGroup;
 use crate::git::{FileDiff, GitStatus};
 use crate::highlight::Highlighter;
+use crate::icons::IconTooltip;
 use crate::new_item::NewItemPrompt;
 use crate::render::{Canvas, ColorRgb, Theme};
 use crate::term::{self, TerminalMenuAction, TerminalTabs};
@@ -552,6 +553,12 @@ fn mix_rgb(a: ColorRgb, b: ColorRgb, t: f64) -> ColorRgb {
 
 fn draw_sidebar_handle(f: &mut Frame, rect: Rect, dragging: bool) {
     let hovered = rect.contains(f.pointer.x, f.pointer.y);
+    if hovered {
+        f.icon_tooltip = Some(IconTooltip {
+            label: "Resize Explorer",
+            anchor: rect,
+        });
+    }
     // Floating pill keeps the dots legible over both adjacent cards.
     f.canvas.fill_round_rect(
         rect.x,
@@ -796,6 +803,8 @@ pub struct Frame<'a> {
     pub term_focused: bool,
     /// Explorer New File/New Folder name prompt, when open.
     pub new_item: Option<&'a mut NewItemPrompt>,
+    /// Hovered icon collected during this frame; painted last as a tooltip.
+    pub icon_tooltip: Option<IconTooltip>,
 }
 
 /// What `draw_frame` changed this frame — the caller marks damage AFTER the
@@ -860,6 +869,9 @@ pub struct FrameEffects {
     pub group_split_moved: bool,
     /// A title-bar layout action was selected.
     pub layout_action: Option<LayoutAction>,
+    /// Accessible name of the icon under the pointer (test/inspection surface).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub hovered_icon: Option<&'static str>,
 }
 
 /// Draw the existing per-file Commit & Push panel in the active Source
@@ -957,6 +969,7 @@ pub fn draw_frame(
     _viewer_scrollbar: &mut Scrollbar,
 ) -> FrameEffects {
     let mut effects = FrameEffects::default();
+    f.icon_tooltip = None;
     if !f.scale.is_finite() || f.scale <= 0.0 {
         return effects;
     }
@@ -1113,7 +1126,7 @@ pub fn draw_frame(
         {
             effects.scrolled = true;
         }
-        tree::draw_tree_panel_with_insertion(
+        if let Some(tooltip) = tree::draw_tree_panel_with_insertion(
             f.canvas,
             f.text,
             f.theme,
@@ -1123,7 +1136,9 @@ pub fn draw_frame(
             tree_pointer,
             f.git,
             new_item_row,
-        );
+        ) {
+            f.icon_tooltip = Some(tooltip);
+        }
         if layout.tree_panel.w > tree::TRACK_W {
             let viewport = layout.tree_panel.h;
             let content = (tree.visible_count() + extra_rows) as f64 * ROW_H;
@@ -1344,6 +1359,8 @@ pub fn draw_frame(
 
     chrome::draw_new_item_prompt(f, layout, tree);
     effects.layout_action = title_fx.action;
+    effects.hovered_icon = f.icon_tooltip.map(|tooltip| tooltip.label);
+    chrome::draw_icon_tooltip(f);
     effects
 }
 

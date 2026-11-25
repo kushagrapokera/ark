@@ -468,6 +468,23 @@ five open viewers, two shells + fake agent tab):
   32,176 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
   unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
+## Icon tooltips and terminal grip
+
+- Added hover names for every workbench icon, including activity/title controls,
+  Explorer actions, tree rows, editor/terminal tabs and actions, resize handles,
+  and close controls. One bounded tooltip is painted after the scene, flips above
+  near the bottom edge, and stays inside the window.
+- Kept terminal-only repaints from erasing tooltips over terminal chrome by using
+  a scene wave while that chrome is hovered.
+- Replaced the terminal divider's stacked-line grip with three horizontal dots.
+- Removed the Explorer header ellipsis and its now-unused More icon variant.
+- Verification: `cargo test` **338 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy
+  and release build clean. Live hover smoke confirmed New File, Toggle Explorer,
+  New Terminal, Terminal Profiles, and Resize Terminal labels; the three-dot grip
+  and clean Explorer header are visible in the final screenshots.
+- Five-viewer/two-fish-terminal stress at 1440×900 measured **40,584 KiB RSS /
+  30,781 KiB PSS**, below the 100 MiB budget.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal
