@@ -23,7 +23,7 @@ use log::{error, info};
 use softbuffer::{Context, Surface};
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseScrollDelta, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{Key, NamedKey},
     window::{Window, WindowId},
@@ -67,6 +67,7 @@ use new_item::{NewItemKind, NewItemPrompt};
 use markdown::MarkdownState;
 use render::{Canvas, Damage, DamageRect, Theme};
 use state::BufferCache;
+use alacritty_terminal::index::Point;
 use alacritty_terminal::term::TermMode;
 use text::{TextSystem, UI_FONT_SIZE};
 use tree::FileTree;
@@ -235,6 +236,15 @@ struct TerminalDrag {
     damage_marked: bool,
 }
 
+/// A left-button press is held briefly so a drag can select locally without
+/// leaking press/release reports to a mouse-reporting terminal application.
+#[derive(Clone, Copy, Debug)]
+struct TerminalMousePress {
+    x: f64,
+    y: f64,
+    point: Point,
+}
+
 /// One pending present wave. PTY output normally stays terminal-only; layout,
 /// input, menus, and window changes use the normal scene path.
 #[derive(Debug, PartialEq, Eq)]
@@ -298,6 +308,8 @@ struct App {
     term_height: Option<f64>,
     /// Sticky editor/terminal divider drag latch.
     term_drag: TerminalDrag,
+    /// Pending left press in the terminal grid (click versus local drag).
+    terminal_mouse_press: Option<TerminalMousePress>,
     /// Last full-scene raster (30fps terminal budget reference).
     last_render: Option<Instant>,
     /// A terminal-area repaint was deferred past the frame budget.
@@ -421,6 +433,7 @@ impl App {
             term_focused: false,
             term_height: None,
             term_drag: TerminalDrag::default(),
+            terminal_mouse_press: None,
             last_render: None,
             term_paint_due: false,
             term_profile: std::env::var_os("ARK_TERM_PROFILE").is_some(),
@@ -907,7 +920,8 @@ impl App {
         f64::from(m.advance) / self.scale
     }
 
-    fn begin_terminal_selection(&mut self, grid: Rect, advance: f64) -> bool {
+    fn begin_terminal_mouse_press(&mut self, grid: Rect, advance: f64) -> bool {
+        self.terminal_mouse_press = None;
         let Some(point) = self
             .terms
             .active()
@@ -916,12 +930,26 @@ impl App {
             return false;
         };
         if let Some(term) = self.terms.active_mut() {
-            term.begin_selection(point);
+            term.clear_selection();
         }
+        self.terminal_mouse_press = Some(TerminalMousePress {
+            x: self.pointer.x,
+            y: self.pointer.y,
+            point,
+        });
         true
     }
 
-    fn update_terminal_selection(&mut self, grid: Rect, advance: f64) -> bool {
+    fn update_terminal_mouse_selection(&mut self, grid: Rect, advance: f64) -> bool {
+        let Some(press) = self.terminal_mouse_press else {
+            return false;
+        };
+        if !self.pointer.x.is_finite()
+            || !self.pointer.y.is_finite()
+            || (self.pointer.x - press.x).hypot(self.pointer.y - press.y) < DBL_CLICK_SLOP
+        {
+            return false;
+        }
         let Some(point) = self
             .terms
             .active()
@@ -929,18 +957,42 @@ impl App {
         else {
             return false;
         };
-        if let Some(term) = self.terms.active_mut() {
-            term.extend_selection(point);
+        let Some(term) = self.terms.active_mut() else {
+            return false;
+        };
+        if !term.is_selecting() {
+            term.begin_selection(press.point);
         }
+        term.extend_selection(point);
         true
     }
 
-    fn finish_terminal_selection(&mut self) -> bool {
-        if let Some(term) = self.terms.active_mut() {
-            if term.is_selecting() {
+    /// Finish a pending left press. Returns whether it became a local
+    /// selection. A click is delivered to the PTY only on release, and only
+    /// when both press and release remain inside the terminal grid.
+    fn finish_terminal_mouse_press(&mut self, grid: Rect, advance: f64) -> bool {
+        let Some(press) = self.terminal_mouse_press.take() else {
+            return false;
+        };
+        if self
+            .terms
+            .active()
+            .is_some_and(|term| term.is_selecting())
+        {
+            if let Some(term) = self.terms.active_mut() {
                 term.end_selection();
-                return true;
             }
+            return true;
+        }
+        if grid.contains(self.pointer.x, self.pointer.y) {
+            self.term_mouse_report_at(ElementState::Pressed, press.x, press.y, grid, advance);
+            self.term_mouse_report_at(
+                ElementState::Released,
+                self.pointer.x,
+                self.pointer.y,
+                grid,
+                advance,
+            );
         }
         false
     }
@@ -2292,21 +2344,33 @@ impl App {
         self.run_git_command("git push", git::PUSH_COMMAND);
     }
 
-    /// Encode + write a mouse report to the active terminal when the running
+    /// Encode + write a mouse report at a logical position when the running
     /// app has enabled mouse reporting. Returns whether a report was sent.
-    fn term_mouse_report(&mut self, state: ElementState) -> bool {
-        let Some((grid, advance)) = self.terminal_grid_for_new_tab() else {
-            return false;
-        };
-        if !grid.contains(self.pointer.x, self.pointer.y) {
+    fn term_mouse_report_at(
+        &mut self,
+        state: ElementState,
+        x: f64,
+        y: f64,
+        grid: Rect,
+        advance: f64,
+    ) -> bool {
+        if !grid.contains(x, y) || !(advance > 0.0 && advance.is_finite()) {
             return false;
         }
         let Some(term) = self.terms.active_mut() else {
             return false;
         };
+        if !term.mouse_reporting_enabled() {
+            return false;
+        }
         let mode = term.mode();
-        let col = ((self.pointer.x - grid.x) / advance).floor().max(0.0) as usize;
-        let row = ((self.pointer.y - grid.y) / viewer::LINE_H).floor().max(0.0) as usize;
+        let size = term.size();
+        let col = ((x - grid.x) / advance)
+            .floor()
+            .clamp(0.0, size.cols.saturating_sub(1) as f64) as usize;
+        let row = ((y - grid.y) / term::TERM_LINE_H)
+            .floor()
+            .clamp(0.0, size.rows.saturating_sub(1) as f64) as usize;
         let press = matches!(state, ElementState::Pressed);
         let Some(bytes) = term::encode_mouse_report(&mode, 0, col, row, !press) else {
             return false;
@@ -2665,10 +2729,10 @@ impl ApplicationHandler<Wake> for App {
                     }
                     return;
                 }
-                if self.terms.active().is_some_and(|term| term.is_selecting()) {
+                if self.terminal_mouse_press.is_some() {
                     if let Some(layout) = self.app_layout() {
                         let advance = self.terminal_advance(layout.ui_scale);
-                        if self.update_terminal_selection(layout.term_grid, advance) {
+                        if self.update_terminal_mouse_selection(layout.term_grid, advance) {
                             let (cw, ch) = (self.canvas.width(), self.canvas.height());
                             self.damage.mark(damage_rect(layout.term_grid, self.scale, cw, ch));
                             self.request_redraw();
@@ -2681,13 +2745,14 @@ impl ApplicationHandler<Wake> for App {
                 self.damage.mark_full();
                 self.request_redraw();
             }
-            WindowEvent::MouseInput { state, .. } => {
+            WindowEvent::MouseInput { state, button, .. } => {
                 if state == ElementState::Pressed {
                     self.reset_caret_blink();
                 }
-                // Terminal grid: a click focuses the pane; when the running
-                // app enables mouse reporting, press/release are encoded to
-                // the shell instead of local interaction.
+                // Terminal grid: left presses wait for release so a plain
+                // drag can select locally even when the app owns the mouse.
+                // A click is then reported as press+release; other buttons
+                // retain immediate mouse reporting.
                 let layout = self.app_layout();
                 let over_commit = self.activity == frame::ActivityPanel::SourceControl
                     && layout
@@ -2704,6 +2769,7 @@ impl ApplicationHandler<Wake> for App {
                     .map(|l| l.term_grid.contains(self.pointer.x, self.pointer.y))
                     .unwrap_or(false);
                 if state == ElementState::Pressed && !over_grid {
+                    self.terminal_mouse_press = None;
                     if let Some(term) = self.terms.active_mut() {
                         term.clear_selection();
                     }
@@ -2734,32 +2800,45 @@ impl ApplicationHandler<Wake> for App {
                     self.term_focused = false;
                     self.commit.message.focused = false;
                 }
-                let mut terminal_selection_handled = false;
                 if self.terms.is_open() {
-                    if state == ElementState::Released {
-                        terminal_selection_handled = self.finish_terminal_selection();
-                    } else if state == ElementState::Pressed && over_grid {
-                        let force_selection = self.modifiers.state().shift_key();
-                        let mouse_reporting = self
-                            .terms
-                            .active()
-                            .is_some_and(|term| term.mouse_reporting_enabled());
-                        if force_selection || !mouse_reporting {
+                    if button == MouseButton::Left {
+                        if state == ElementState::Pressed {
+                            self.terminal_mouse_press = None;
+                            if over_grid {
+                                if let Some(layout) = layout.as_ref() {
+                                    let advance = self.terminal_advance(layout.ui_scale);
+                                    self.begin_terminal_mouse_press(layout.term_grid, advance);
+                                }
+                            }
+                        } else {
                             if let Some(layout) = layout.as_ref() {
                                 let advance = self.terminal_advance(layout.ui_scale);
-                                terminal_selection_handled =
-                                    self.begin_terminal_selection(layout.term_grid, advance);
+                                self.finish_terminal_mouse_press(layout.term_grid, advance);
+                            } else {
+                                self.terminal_mouse_press = None;
+                                if let Some(term) = self.terms.active_mut() {
+                                    if term.is_selecting() {
+                                        term.end_selection();
+                                    }
+                                }
                             }
+                        }
+                    } else if over_grid {
+                        if let Some(layout) = layout.as_ref() {
+                            let advance = self.terminal_advance(layout.ui_scale);
+                            self.term_mouse_report_at(
+                                state,
+                                self.pointer.x,
+                                self.pointer.y,
+                                layout.term_grid,
+                                advance,
+                            );
                         }
                     }
                 }
                 if self.terms.is_open() && over_grid {
                     self.term_focused = true;
                     self.commit.message.focused = false;
-                    if !terminal_selection_handled && self.term_mouse_report(state) {
-                        self.damage.mark_full();
-                        self.request_redraw();
-                    }
                 }
                 match state {
                     ElementState::Pressed => self.pointer.down = true,

@@ -599,12 +599,15 @@ five open viewers, two shells + fake agent tab):
 - Fixed terminal row seams by snapping base/cell/selection/cursor fills outward
   to whole device pixels.
 - Added terminal text selection using alacritty's bounded grid selection:
-  drag when mouse reporting is off, Shift+drag when OpenCode-style apps own the
-  mouse, and Ctrl+Shift+C to copy. Ctrl+C remains SIGINT.
+  plain drag selects even when OpenCode-style apps own the mouse, while a
+  stationary click still reaches the app. Ctrl+Shift+C copies; Ctrl+C remains
+  SIGINT.
 - Corrected pointer-to-terminal-cell mapping for device and UI scale.
-- Verification: `cargo test` **402 passed, 0 failed, 5 ignored**, 5/5 CLI; clippy
-  and release build clean. Live Wayland copy round-trip, fish drag selection,
-  and colored-row seam smoke passed.
+- Release smoke with one fish terminal: ark RSS **26,556 kB**, PSS **19,548 kB**
+  (`/proc`; `smem` unavailable), below the 100 MB budget.
+- Verification: `cargo test` **404 passed, 0 failed, 5 ignored**, 5/5 CLI; clippy
+  and release build clean. Live Wayland selection-copy round trips, real
+  OpenCode plain-drag selection, and colored-row seam smoke passed.
 
 ## Notes
 

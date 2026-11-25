@@ -713,6 +713,7 @@ impl Terminal {
         if self.selection_dragging {
             if let Some(selection) = self.term.selection.as_mut() {
                 selection.update(point, Side::Right);
+                selection.include_all();
             }
         }
     }

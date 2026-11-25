@@ -2,7 +2,7 @@
 //! routing pins that need main.rs's private helpers.
 
 use super::*;
-use crate::fs::testutil::temp_dir;
+use crate::fs::testutil::{temp_dir, TempDir};
 use crate::new_item::NewItemKind;
 use std::fs;
 use std::thread;
@@ -339,6 +339,150 @@ fn app_search_result_uses_the_enforced_editor_for_config_files() {
     assert!(app.config_edits.is_some());
     assert_eq!(app.pane, PaneMode::Config);
     assert_eq!(app.activity, frame::ActivityPanel::Search);
+}
+
+fn app_with_terminal_mouse_capture(mouse_reporting: bool) -> (TempDir, App) {
+    let d = temp_dir("app-terminal-mouse");
+    let mouse_modes = if mouse_reporting {
+        r"\033[?1000h\033[?1006h"
+    } else {
+        ""
+    };
+    let script = format!(
+        "#!/bin/sh\nstty raw -echo\nprintf '{mouse_modes}hello world\\n'\ncat > captured.bin\n"
+    );
+    let script_path = d.path().join("capture-input");
+    fs::write(&script_path, script).expect("write capture script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))
+            .expect("make capture script executable");
+    }
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let terminal = term::Terminal::spawn_program_with(
+        d.path(),
+        &script_path,
+        "mouse capture",
+        term::GridSize::new(80, 24),
+        || {},
+    )
+    .expect("spawn capture terminal");
+    app.terms.tabs.push(terminal);
+    (d, app)
+}
+
+fn terminal_mouse_test_geometry(app: &mut App) -> (Rect, f64) {
+    let rect = Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 800.0,
+        h: 500.0,
+    };
+    let metrics = app.text.mono_metrics(UI_FONT_SIZE, UI_FONT_SIZE * 1.35);
+    (rect, f64::from(metrics.advance))
+}
+
+fn wait_for_terminal_mouse_fixture(
+    app: &mut App,
+    rect: Rect,
+    advance: f64,
+    mouse_reporting: bool,
+) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(2) {
+        app.terms.active_mut().expect("term").drain_output(64);
+        let terminal = app.terms.active_mut().expect("term");
+        let first = terminal
+            .point_at(rect, rect.x + 1.0, rect.y + 1.0, advance)
+            .expect("first cell");
+        let last = terminal
+            .point_at(rect, rect.x + advance * 19.0 + 1.0, rect.y + 1.0, advance)
+            .expect("last cell");
+        terminal.begin_selection(first);
+        terminal.extend_selection(last);
+        terminal.end_selection();
+        let ready = terminal.selection_text().as_deref() == Some("hello world")
+            && (!mouse_reporting || terminal.mouse_reporting_enabled());
+        terminal.clear_selection();
+        if ready {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("terminal mouse fixture did not become ready");
+}
+
+fn wait_for_capture_file(path: &Path, expected_len: usize) -> Vec<u8> {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(2) {
+        if let Ok(bytes) = fs::read(path) {
+            if bytes.len() >= expected_len {
+                return bytes;
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    fs::read(path).expect("read capture file")
+}
+
+#[test]
+fn terminal_plain_drag_selects_without_reaching_mouse_reporting_apps() {
+    for mouse_reporting in [false, true] {
+        let (d, mut app) = app_with_terminal_mouse_capture(mouse_reporting);
+        let (rect, advance) = terminal_mouse_test_geometry(&mut app);
+        wait_for_terminal_mouse_fixture(&mut app, rect, advance, mouse_reporting);
+        let capture = d.path().join("captured.bin");
+        wait_for_capture_file(&capture, 0);
+
+        // Start at the right and drag left: selection must anchor at the
+        // original press, not at the point where the drag threshold is crossed.
+        app.pointer.x = rect.x + advance * 8.0 + 1.0;
+        app.pointer.y = rect.y + 1.0;
+        assert!(app.begin_terminal_mouse_press(rect, advance));
+        assert!(
+            !app.update_terminal_mouse_selection(rect, advance),
+            "a press alone must remain a click candidate"
+        );
+        app.pointer.x = rect.x + advance * 2.0 + 1.0;
+        assert!(app.update_terminal_mouse_selection(rect, advance));
+        assert!(app.terms.active().expect("term").is_selecting());
+        assert!(app.finish_terminal_mouse_press(rect, advance));
+
+        let terminal = app.terms.active_mut().expect("term");
+        assert!(!terminal.is_selecting());
+        assert_eq!(terminal.selection_text().as_deref(), Some("llo wor"));
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            fs::read(&capture).expect("read capture").is_empty(),
+            "a local drag must not leak mouse reports to the app (reporting={mouse_reporting})"
+        );
+    }
+}
+
+#[test]
+fn terminal_plain_click_still_reaches_mouse_reporting_apps() {
+    let (d, mut app) = app_with_terminal_mouse_capture(true);
+    let (rect, advance) = terminal_mouse_test_geometry(&mut app);
+    wait_for_terminal_mouse_fixture(&mut app, rect, advance, true);
+    let capture = d.path().join("captured.bin");
+    while !capture.exists() {
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    app.pointer.x = rect.x + 1.0;
+    app.pointer.y = rect.y + 1.0;
+    assert!(app.begin_terminal_mouse_press(rect, advance));
+    assert!(!app.update_terminal_mouse_selection(rect, advance));
+    assert!(!app.finish_terminal_mouse_press(rect, advance));
+
+    let expected_click = b"\x1b[<0;1;1M\x1b[<0;1;1m";
+    assert_eq!(
+        wait_for_capture_file(&capture, expected_click.len()),
+        expected_click,
+        "a click is delayed until release, then delivered as press+release"
+    );
+    assert!(app.terms.active().expect("term").selection_text().is_none());
 }
 
 #[test]

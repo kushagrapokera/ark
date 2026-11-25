@@ -14,9 +14,10 @@
 - Reused alacritty's bounded grid selection model. Terminal selection stores only
   the active range inside the existing grid/scrollback; no text copy or index is
   retained until copy is requested.
-- Drag selects locally when mouse reporting is off. When an app such as OpenCode
-  enables mouse reporting, **Shift+drag** selects locally while ordinary mouse
-  input continues to reach the app.
+- A plain left-button drag selects locally whether mouse reporting is on or off.
+  The initial press is deferred until release: if the pointer stays still, the
+  click is delivered to mouse-reporting apps such as OpenCode; if it moves past
+  the drag threshold, no mouse reports are sent and the text is selected.
 - **Ctrl+Shift+C** copies the selected terminal text through the existing
   `wl-clipboard-rs` path. `Ctrl+C` remains SIGINT.
 - Pointer-to-grid mapping now includes device scale and UI scale, matching the
@@ -25,7 +26,11 @@
 ## Verification
 
 - Pixel regression for fractional row seams.
-- Selection extraction/rendering regression.
-- Live Wayland selection-to-clipboard round trip.
-- Live fish drag selection and colored-row rendering smoke.
+- Selection extraction/rendering regression, including backward drags.
+- Plain-drag routing regression with mouse reporting both on and off; verifies
+  no PTY mouse bytes leak during selection.
+- Plain-click regression; verifies mouse-reporting apps still receive press and
+  release.
+- Live Wayland selection-to-clipboard round trips.
+- Live OpenCode plain-drag selection smoke.
 - Full suite, clippy, release build.
