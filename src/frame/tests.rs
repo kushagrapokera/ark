@@ -453,25 +453,64 @@ fn explorer_root_actions_fit_without_overlap_or_title_collision() {
 #[test]
 fn editor_strip_has_no_more_action() {
     assert_eq!(
-        chrome::editor_action_icons(700.0, true, false),
-        &[crate::icons::Icon::Close, crate::icons::Icon::Split]
-    );
-    assert_eq!(
-        chrome::editor_action_icons(700.0, false, false),
+        chrome::editor_action_icons(700.0, true, false, false),
         &[crate::icons::Icon::Split]
     );
     assert_eq!(
-        chrome::editor_action_icons(700.0, false, true),
+        chrome::editor_action_icons(700.0, true, false, true),
+        &[crate::icons::Icon::Close, crate::icons::Icon::Split]
+    );
+    assert_eq!(
+        chrome::editor_action_icons(700.0, false, false, false),
+        &[crate::icons::Icon::Split]
+    );
+    assert_eq!(
+        chrome::editor_action_icons(700.0, false, true, false),
         &[crate::icons::Icon::Markdown, crate::icons::Icon::Split]
     );
     assert_eq!(
-        chrome::editor_action_icons(700.0, true, true),
+        chrome::editor_action_icons(700.0, true, true, true),
         &[
             crate::icons::Icon::Close,
             crate::icons::Icon::Markdown,
             crate::icons::Icon::Split,
         ]
     );
+}
+
+#[test]
+fn primary_split_group_does_not_draw_a_close_group_action() {
+    assert_eq!(
+        chrome::editor_action_icons(700.0, true, true, false),
+        &[crate::icons::Icon::Markdown, crate::icons::Icon::Split],
+        "only the secondary split group needs a close-group action"
+    );
+}
+
+#[test]
+fn split_markdown_actions_are_spaced_and_clear_of_tabs() {
+    let tabs = Rect { x: 312.0, y: 44.0, w: 540.0, h: 36.0 };
+    for close_group in [false, true] {
+        let actions = chrome::editor_action_icons(tabs.w, true, true, close_group);
+        let reserve = chrome::editor_action_reserve(actions.len());
+        let pane = Rect { w: tabs.w - reserve, ..tabs };
+        let tab_rects = file_tab_rects(pane, 9);
+        let action_rects = chrome::editor_action_rects(tabs, actions.len());
+
+        assert!(tab_rects.last().expect("tab").x + tab_rects.last().expect("tab").w <= pane.x + pane.w);
+        assert!(
+            pane.x + pane.w + 4.0 <= action_rects.first().expect("action").x,
+            "tabs must stop before the action hit areas"
+        );
+        assert!(
+            action_rects.windows(2).all(|pair| pair[0].x + pair[0].w + 4.0 <= pair[1].x),
+            "Markdown and Split actions need a visible gap"
+        );
+        assert!(
+            action_rects.last().expect("action").x + action_rects.last().expect("action").w
+                <= tabs.x + tabs.w
+        );
+    }
 }
 
 #[test]

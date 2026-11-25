@@ -586,9 +586,19 @@ pub(super) struct EditorGroupEffects {
     pub focus: bool,
 }
 
-pub(super) fn editor_action_icons(width: f64, is_split: bool, markdown: bool) -> Vec<Icon> {
+const EDITOR_ACTION_SLOT_W: f64 = 24.0;
+const EDITOR_ACTION_HIT_W: f64 = 20.0;
+const EDITOR_ACTION_RIGHT_PAD: f64 = 8.0;
+const EDITOR_ACTION_PANE_GAP: f64 = 6.0;
+
+pub(super) fn editor_action_icons(
+    width: f64,
+    is_split: bool,
+    markdown: bool,
+    close_group: bool,
+) -> Vec<Icon> {
     let mut actions = Vec::with_capacity(3);
-    if is_split {
+    if close_group {
         actions.push(Icon::Close);
     }
     if markdown {
@@ -598,6 +608,28 @@ pub(super) fn editor_action_icons(width: f64, is_split: bool, markdown: bool) ->
         actions.push(Icon::Split);
     }
     actions
+}
+
+pub(super) fn editor_action_reserve(count: usize) -> f64 {
+    if count == 0 {
+        0.0
+    } else {
+        count as f64 * EDITOR_ACTION_SLOT_W + EDITOR_ACTION_RIGHT_PAD + EDITOR_ACTION_PANE_GAP
+    }
+}
+
+pub(super) fn editor_action_rects(tabs: Rect, count: usize) -> Vec<Rect> {
+    let total = count as f64 * EDITOR_ACTION_SLOT_W;
+    let start = tabs.x + tabs.w - EDITOR_ACTION_RIGHT_PAD - total;
+    (0..count)
+        .map(|index| Rect {
+            x: start + index as f64 * EDITOR_ACTION_SLOT_W
+                + (EDITOR_ACTION_SLOT_W - EDITOR_ACTION_HIT_W) / 2.0,
+            y: tabs.y + (tabs.h - EDITOR_ACTION_HIT_W) / 2.0,
+            w: EDITOR_ACTION_HIT_W,
+            h: EDITOR_ACTION_HIT_W,
+        })
+        .collect()
 }
 
 pub(super) fn draw_editor_group_chrome(
@@ -634,13 +666,9 @@ pub(super) fn draw_editor_group_chrome(
     }
 
     let markdown = group.active.as_deref().is_some_and(crate::markdown::is_markdown);
-    let actions = editor_action_icons(tabs.w, is_split, markdown);
-    let reserve = match actions.len() {
-        3 => 76.0,
-        2 => 58.0,
-        1 => 38.0,
-        _ => 0.0,
-    };
+    let close_group = is_split && index == 1;
+    let actions = editor_action_icons(tabs.w, is_split, markdown, close_group);
+    let reserve = editor_action_reserve(actions.len());
     let tab_pane = Rect {
         x: tabs.x,
         y: tabs.y,
@@ -722,26 +750,13 @@ pub(super) fn draw_editor_group_chrome(
     }
 
     if !actions.is_empty() {
-        let first = tabs.x + tabs.w - 18.0 - (actions.len() - 1) as f64 * 18.0;
-        for (action_index, glyph) in actions.iter().enumerate() {
-            let cx = first + action_index as f64 * 18.0;
-            icon(
-                f,
-                *glyph,
-                cx,
-                tabs.y + tabs.h / 2.0,
-                14.0,
-                f.theme.text_muted,
-            );
-            let rect = Rect {
-                x: cx - 9.0,
-                y: tabs.y + (tabs.h - 18.0) / 2.0,
-                w: 18.0,
-                h: 18.0,
-            };
+        for (glyph, rect) in actions.iter().copied().zip(editor_action_rects(tabs, actions.len())) {
+            let cx = rect.x + rect.w / 2.0;
+            let cy = rect.y + rect.h / 2.0;
+            icon(f, glyph, cx, cy, 14.0, f.theme.text_muted);
             if f.pointer.click && rect.contains(f.pointer.x, f.pointer.y) {
                 match glyph {
-                    Icon::Close if is_split && index == 1 => effects.close_group = true,
+                    Icon::Close if close_group => effects.close_group = true,
                     Icon::Markdown => effects.toggle_markdown = true,
                     Icon::Split => effects.toggle_split = true,
                     _ => {}
@@ -1288,10 +1303,7 @@ pub(super) fn draw_terminal_placeholder(f: &mut Frame, layout: &AppLayout) {
 /// Width reserved for the editor actions that are visible at this width.
 #[cfg(test)]
 pub(super) fn tab_strip(layout: &AppLayout) -> Rect {
-    let reserve = match editor_action_count(layout.editor_tabs.w) {
-        1 => 38.0,
-        _ => 0.0,
-    };
+    let reserve = editor_action_reserve(editor_action_count(layout.editor_tabs.w));
     Rect {
         x: layout.editor_tabs.x,
         y: layout.editor_tabs.y,

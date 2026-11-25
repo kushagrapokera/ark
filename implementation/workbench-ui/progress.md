@@ -571,6 +571,16 @@ five open viewers, two shells + fake agent tab):
   and release build clean. Wide and narrow live previews confirmed code stays
   inside its box and bold/inline-code/table hierarchy is visually distinct.
 
+## Editor action overlap fix
+
+- Removed the inert close-group button from the primary split editor; only the
+  secondary group now shows it.
+- Markdown and Split actions now use dedicated 24 px slots with a guaranteed gap
+  from the tab strip and from each other.
+- Verification: `cargo test` **393 passed, 0 failed, 4 ignored**, 5/5 CLI; clippy
+  and release build clean. A live three-tab split Markdown session confirmed the
+  actions no longer overlap the tabs or each other.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal
