@@ -452,6 +452,22 @@ five open viewers, two shells + fake agent tab):
   and release build clean. Live 1024×768 and 1440×900 screenshots confirmed the
   clean title bar, larger logo, and retained right-side layout controls.
 
+## Bottom status bar removed
+
+- Removed the entire bottom status bar: branch/remote/sync/error/warning icons,
+  cursor and encoding labels, formatter state, and the status-bar layout/damage
+  path. Status-only icon variants and formatting helpers were removed with it.
+- Reclaimed the former 24 px status strip for the workbench. At 1024×768 the
+  cards now extend to y=760, leaving only the normal 8 px window padding.
+- Prevented fractional bottom tree rows from drawing glyph descenders into that
+  padding; a regression pins an ink-free bottom edge at compact and wide sizes.
+- Verification: `cargo test` **331 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy
+  and release build clean. Live 1024×768 and 1440×900 screenshots confirmed no
+  bottom bar with the terminal both hidden and open.
+- Five-viewer/two-fish-terminal stress at 1440×900 measured **40,424 KiB RSS /
+  32,176 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
+  unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

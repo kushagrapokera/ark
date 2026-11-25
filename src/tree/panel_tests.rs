@@ -315,6 +315,35 @@ fn viewport_only_rendering() {
     );
 }
 
+#[test]
+fn fractional_viewport_keeps_ink_out_of_the_bottom_padding() {
+    let (_d, tree) = wide_fixture("viewport-fractional");
+    let theme = panel_theme();
+    let panel = Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 200.0,
+        h: 3.0 * ROW_H + 5.0,
+    };
+    let mut canvas = Canvas::new(220, 100);
+    canvas.fill(theme.bg);
+    let mut text = TextSystem::new();
+    draw_tree_panel(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        panel,
+        &tree,
+        Pointer::default(),
+        None,
+    );
+
+    let bottom = (panel.y + panel.h) as u32;
+    let bbox = ink_bbox_in(&canvas, theme.bg, 0, 0, 220, 100).expect("tree ink");
+    assert!(bbox.3 < bottom, "row glyphs stay above the panel edge: {bbox:?}");
+}
+
 /// Ink extent (min_x, max_x) within a horizontal pixel band.
 fn band_width(canvas: &Canvas, bg: crate::render::ColorRgb, y0: u32, y1: u32) -> (u32, u32) {
     let bbox = ink_bbox_in(canvas, bg, 0, y0, canvas.width(), y1)

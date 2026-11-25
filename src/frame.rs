@@ -35,7 +35,6 @@ const TERM_MIN_H: f64 = 120.0;
 const TERM_EDITOR_MIN_H: f64 = 160.0;
 const TERM_HANDLE_W: f64 = 36.0;
 const TERM_HANDLE_H: f64 = 12.0;
-const STATUS_H: f64 = 24.0;
 const CARD_RADIUS: f64 = 6.0;
 /// Base bump for chrome text/icons before window-size scaling.
 const UI_SIZE_SCALE: f64 = 1.15;
@@ -93,7 +92,7 @@ pub struct AppLayout {
     pub title_bar: Rect,
     /// Window-size text/icon scale, separate from device pixel ratio.
     pub ui_scale: f64,
-    /// Padded card area between title bar and status bar.
+    /// Padded card area between the title bar and bottom window edge.
     pub workbench: Rect,
     /// Far-left activity card.
     pub activity_bar: Rect,
@@ -125,8 +124,6 @@ pub struct AppLayout {
     pub terminal_resize: Rect,
     pub terminal_toolbar: Rect,
     pub term_grid: Rect,
-    /// Damage envelope of the status line.
-    pub status: Rect,
 }
 
 #[allow(dead_code)] // test/layout compatibility surface; the App uses the commit variant
@@ -223,9 +220,9 @@ pub fn app_layout_with_visibility(
     let pad = if narrow { 4.0 } else { PAD };
     let gap = if narrow { 4.0 } else { GAP };
     let activity_w = if narrow { 40.0 } else { ACTIVITY_W };
-    let status_y = (h - STATUS_H).max(TITLE_H);
     let work_y = TITLE_H + pad;
-    let work_h = (status_y - work_y - pad).max(0.0);
+    let work_bottom = (h - pad).max(work_y);
+    let work_h = (work_bottom - work_y).max(0.0);
 
     let activity = Rect {
         x: pad,
@@ -458,12 +455,6 @@ pub fn app_layout_with_visibility(
         terminal_resize,
         terminal_toolbar,
         term_grid,
-        status: Rect {
-            x: 0.0,
-            y: status_y,
-            w,
-            h: STATUS_H,
-        },
     }
 }
 
@@ -812,8 +803,8 @@ pub struct Frame<'a> {
 /// next present).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameEffects {
-    /// Tree offset moved (scrollbar drag or collapse-clamp): panel + status
-    /// rect damage only.
+    /// Tree offset moved (scrollbar drag or collapse-clamp): panel rect
+    /// damage only.
     pub scrolled: bool,
     /// Tree state changed (expand/collapse or selection): full damage.
     pub tree_changed: bool,
@@ -1353,104 +1344,7 @@ pub fn draw_frame(
 
     chrome::draw_new_item_prompt(f, layout, tree);
     effects.layout_action = title_fx.action;
-
-    chrome::draw_status_bar(f, layout);
     effects
-}
-
-/// The live status line. Without an open viewer (M3 format):
-/// `visible N · expanded M · selected <name|none> · scroll <pct>%`.
-/// With one open: `visible N · expanded M · scroll <pct>% · <file> <L>
-/// lines[ · truncated] · sel <K chars|none>`. A tree listing failure
-/// replaces the whole line (the tree's error surface).
-/// Terminal status segment: `term <shell> <k>/<n>[ · exited]` while tabs
-/// are open; `None` otherwise.
-#[cfg_attr(not(test), allow(dead_code))] // retained status detail for tests/future inspector
-fn terms_status(terms: Option<&TerminalTabs>) -> Option<String> {
-    let terms = terms?;
-    if !terms.is_open() {
-        return None;
-    }
-    let exited = terms.active().map(|t| t.exited()).unwrap_or(false);
-    let exit = if exited { " · exited" } else { "" };
-    let shell = terms.active().map(|t| t.label()).unwrap_or("?");
-    Some(format!(
-        "term {shell} {}/{n}{exit}",
-        terms.active + 1,
-        n = terms.tabs.len()
-    ))
-}
-
-#[cfg_attr(not(test), allow(dead_code))] // retained status detail for tests/future inspector
-fn frame_status(
-    tree: &FileTree,
-    viewer: Option<&Viewer>,
-    config: Option<&ConfigEditor>,
-    terms: Option<&TerminalTabs>,
-    git: Option<&GitStatus>,
-    viewport: f64,
-) -> String {
-    if let Some(err) = &tree.last_error {
-        return err.clone();
-    }
-    let pct = {
-        let max = tree.visible_count() as f64 * ROW_H - viewport;
-        if max > 0.0 {
-            (tree.offset / max * 100.0).round().clamp(0.0, 100.0)
-        } else {
-            0.0
-        }
-    };
-    let head = format!(
-        "visible {} · expanded {}",
-        tree.visible_count(),
-        tree.expanded_dir_count()
-    );
-    // Git tail (all modes): changed-entry count, or the not-a-repo note.
-    let git_tail = match git {
-        Some(g) => format!(" · git {}", g.changed_count()),
-        None => " · no git".to_string(),
-    };
-    // With terminals open the viewer segment is replaced by the terminal one.
-    if terms_status(terms).is_some() {
-        return format!(
-            "{head} · scroll {pct:.0}% · {}{git_tail}",
-            terms_status(terms).expect("checked above")
-        );
-    }
-    if let Some(c) = config {
-        let state = if c.is_dirty() { " · modified" } else { "" };
-        return format!(
-            "{head} · scroll {pct:.0}% · config {}{state}{git_tail}",
-            c.display_name()
-        );
-    }
-    match viewer {
-        None => {
-            let selected = tree
-                .selected()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "none".into());
-            format!("{head} · selected {selected} · scroll {pct:.0}%{git_tail}")
-        }
-        Some(v) => {
-            let name = v
-                .path()
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let trunc = if v.truncated() { " · truncated" } else { "" };
-            let sel = match v.selection_len() {
-                0 => "none".to_string(),
-                n => format!("{n} chars"),
-            };
-            format!(
-                "{head} · scroll {pct:.0}% · {name} {} lines{trunc} · sel {sel}{git_tail}",
-                v.line_count()
-            )
-        }
-    }
 }
 
 /// Placeholder text (or the open-failure message when the last attempt errored).

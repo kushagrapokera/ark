@@ -1,6 +1,6 @@
 //! Frame tests (impl + tests together would pass the ~400-line module
-//! guidance): layout pins, status-line formats, scene ink, interaction
-//! effects, and the M4 viewer-pane wiring.
+//! guidance): layout pins, scene ink, interaction effects, and the M4
+//! viewer-pane wiring.
 
 use super::*;
 use crate::fs::testutil::{temp_dir, TempDir};
@@ -28,7 +28,7 @@ fn app_layout_matches_card_design() {
             x: 8.0,
             y: 44.0,
             w: 1008.0,
-            h: 692.0
+            h: 716.0
         }
     );
     assert_eq!(
@@ -37,7 +37,7 @@ fn app_layout_matches_card_design() {
             x: 8.0,
             y: 44.0,
             w: 48.0,
-            h: 692.0
+            h: 716.0
         }
     );
     assert_eq!(
@@ -46,7 +46,7 @@ fn app_layout_matches_card_design() {
             x: 64.0,
             y: 44.0,
             w: 240.0,
-            h: 692.0
+            h: 716.0
         }
     );
     assert_eq!(
@@ -55,7 +55,7 @@ fn app_layout_matches_card_design() {
             x: 72.0,
             y: 108.0,
             w: 224.0,
-            h: 620.0
+            h: 644.0
         }
     );
     assert_eq!(
@@ -64,7 +64,7 @@ fn app_layout_matches_card_design() {
             x: 288.0,
             y: 108.0,
             w: 8.0,
-            h: 620.0
+            h: 644.0
         }
     );
     assert_eq!(
@@ -73,7 +73,7 @@ fn app_layout_matches_card_design() {
             x: 312.0,
             y: 44.0,
             w: 704.0,
-            h: 692.0
+            h: 716.0
         }
     );
     assert_eq!(
@@ -100,14 +100,14 @@ fn app_layout_matches_card_design() {
             x: 320.0,
             y: 104.0,
             w: 688.0,
-            h: 624.0
+            h: 648.0
         }
     );
     assert_eq!(
         l.term_dock,
         Rect {
             x: 312.0,
-            y: 736.0,
+            y: 760.0,
             w: 704.0,
             h: 0.0
         }
@@ -118,28 +118,70 @@ fn app_layout_matches_card_design() {
             x: 304.0,
             y: 44.0,
             w: 8.0,
-            h: 692.0
+            h: 716.0
         }
     );
-    assert_eq!(
-        l.status,
-        Rect {
-            x: 0.0,
-            y: 744.0,
-            w: 1024.0,
-            h: 24.0
-        }
-    );
-
     // Degenerate window sizes never produce negative extents.
     let tiny = app_layout(400.0, 300.0, 160.0);
     assert!(tiny.tree_panel.w >= 0.0 && tiny.tree_panel.h >= 0.0);
-    assert!(tiny.viewer_pane.w >= 0.0 && tiny.status.y >= 0.0);
+    assert!(tiny.viewer_pane.w >= 0.0 && tiny.workbench.h >= 0.0);
     assert_eq!(
         app_layout(1024.0, 768.0, 8.0).explorer_card.w,
         160.0,
         "minimum explorer width"
     );
+}
+
+#[test]
+fn workbench_reclaims_the_former_status_bar_space() {
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    assert_eq!(layout.workbench.y + layout.workbench.h, 760.0);
+    assert_eq!(layout.activity_bar.h, 716.0);
+    assert_eq!(layout.explorer_card.h, 716.0);
+    assert_eq!(layout.editor_card.h, 716.0);
+}
+
+#[test]
+fn bottom_edge_has_no_status_bar() {
+    for (w, h) in [(1024.0, 768.0), (480.0, 640.0), (400.0, 300.0)] {
+        let (_d, mut tree) = scene_fixture("bottom-no-status");
+        let mut theme = frame_theme();
+        theme.surface_chrome = (1, 1, 1);
+        let layout = app_layout_with_commit(w, h, 304.0, false, false);
+        let mut text = TextSystem::new();
+        let mut canvas = Canvas::new(w as u32, h as u32);
+        draw_static_frame(
+            &mut canvas,
+            &mut text,
+            &theme,
+            &mut tree,
+            &layout,
+            Pointer::default(),
+            &[],
+            None,
+        );
+        let bottom = (layout.workbench.y + layout.workbench.h).ceil() as u32;
+        assert_eq!(
+            crate::ui::testutil::count_not_color_in(
+                &canvas,
+                theme.surface_chrome,
+                0,
+                bottom,
+                w as u32,
+                h as u32,
+            ),
+            0,
+            "the former status-bar strip is empty at {w}×{h}; ink={:?}",
+            crate::ui::testutil::ink_bbox_in(
+                &canvas,
+                theme.surface_chrome,
+                0,
+                bottom,
+                w as u32,
+                h as u32,
+            )
+        );
+    }
 }
 
 #[test]
@@ -185,7 +227,6 @@ fn responsive_layout_prioritizes_editor_on_small_windows() {
         minimum.viewer_pane,
         minimum.term_dock,
         minimum.term_grid,
-        minimum.status,
     ] {
         assert!(rect.w >= 0.0 && rect.h >= 0.0, "degenerate rect: {rect:?}");
     }
@@ -719,50 +760,6 @@ fn title_bar_omits_agent_launcher_icons() {
 }
 
 #[test]
-fn compact_status_bar_drops_optional_items_before_the_left_cluster() {
-    let (_d, mut tree) = scene_fixture("compact-status");
-    let mut theme = frame_theme();
-    theme.surface_chrome = (1, 1, 1);
-    theme.text_muted = (77, 77, 77);
-    let layout = app_layout_with_commit(400.0, 300.0, 304.0, false, true);
-    let mut text = TextSystem::new();
-    let mut canvas = Canvas::new(400, 300);
-    draw_static_frame(
-        &mut canvas,
-        &mut text,
-        &theme,
-        &mut tree,
-        &layout,
-        Pointer::default(),
-        &[],
-        None,
-    );
-    assert_eq!(
-        crate::ui::testutil::count_not_color_in(
-            &canvas,
-            theme.surface_chrome,
-            180,
-            layout.status.y as u32 + 1,
-            240,
-            layout.status.y as u32 + 23,
-        ),
-        0,
-        "right-aligned status items leave a gap after the branch controls"
-    );
-    assert!(
-        crate::ui::testutil::count_not_color_in(
-            &canvas,
-            theme.surface_chrome,
-            300,
-            layout.status.y as u32 + 1,
-            400,
-            layout.status.y as u32 + 23,
-        ) > 0,
-        "essential status items remain visible"
-    );
-}
-
-#[test]
 fn source_control_icon_opens_the_per_file_commit_card() {
     let status = crate::git::parse_status(
         "? two words.txt\n\
@@ -777,12 +774,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
     for (w, h) in [(1024.0, 768.0), (480.0, 640.0)] {
         let layout = app_layout_with_commit(w, h, 304.0, false, true);
         let body = if w >= 760.0 {
-            Rect {
-                x: 65.0,
-                y: 81.0,
-                w: 238.0,
-                h: 654.0,
-            }
+            source_control_panel(&layout).expect("sidebar source control panel")
         } else {
             layout.viewer_pane
         };
@@ -964,7 +956,7 @@ fn split_group_layout_divides_the_editor_card_with_a_gap() {
                 x: 320.0,
                 y: 104.0,
                 w: 332.0,
-                h: 624.0
+                h: 648.0
             },
         }
     );
@@ -983,7 +975,7 @@ fn split_group_layout_divides_the_editor_card_with_a_gap() {
             x: 676.0,
             y: 104.0,
             w: 332.0,
-            h: 624.0
+            h: 648.0
         }
     );
     assert_eq!(
@@ -992,7 +984,7 @@ fn split_group_layout_divides_the_editor_card_with_a_gap() {
             x: 660.0,
             y: 44.0,
             w: 8.0,
-            h: 692.0
+            h: 716.0
         }
     );
 }
@@ -1189,7 +1181,7 @@ fn source_control_panel_uses_the_sidebar_or_compact_editor_body() {
             x: 65.0,
             y: 80.0,
             w: 238.0,
-            h: 655.0
+            h: 679.0
         })
     );
     assert_eq!(
@@ -1198,7 +1190,7 @@ fn source_control_panel_uses_the_sidebar_or_compact_editor_body() {
             x: 72.0,
             y: 108.0,
             w: 224.0,
-            h: 620.0
+            h: 644.0
         }
     );
     assert_eq!(
@@ -1207,7 +1199,7 @@ fn source_control_panel_uses_the_sidebar_or_compact_editor_body() {
             x: 320.0,
             y: 104.0,
             w: 688.0,
-            h: 624.0
+            h: 648.0
         }
     );
 
@@ -1222,7 +1214,7 @@ fn app_layout_terminal_card_reserves_the_bottom() {
         l.term_dock,
         Rect {
             x: 312.0,
-            y: 512.0,
+            y: 536.0,
             w: 704.0,
             h: 224.0
         }
@@ -1231,7 +1223,7 @@ fn app_layout_terminal_card_reserves_the_bottom() {
         l.terminal_toolbar,
         Rect {
             x: 312.0,
-            y: 512.0,
+            y: 536.0,
             w: 704.0,
             h: 36.0
         }
@@ -1240,7 +1232,7 @@ fn app_layout_terminal_card_reserves_the_bottom() {
         l.term_grid,
         Rect {
             x: 320.0,
-            y: 548.0,
+            y: 572.0,
             w: 688.0,
             h: 180.0
         }
@@ -1251,14 +1243,14 @@ fn app_layout_terminal_card_reserves_the_bottom() {
             x: 320.0,
             y: 104.0,
             w: 688.0,
-            h: 392.0
+            h: 416.0
         }
     );
     // Tiny windows use the compact terminal fraction and smaller headers.
     let tiny = app_layout_with_commit(400.0, 300.0, 160.0, false, true);
-    assert!((tiny.term_dock.h - 81.2).abs() < 1e-9, "35% of 232px");
-    assert!((tiny.viewer_pane.h - 90.8).abs() < 1e-9);
-    assert!((tiny.term_grid.h - 47.2).abs() < 1e-9);
+    assert!((tiny.term_dock.h - 89.6).abs() < 1e-9, "35% of 256px");
+    assert!((tiny.viewer_pane.h - 106.4).abs() < 1e-9);
+    assert!((tiny.term_grid.h - 55.6).abs() < 1e-9);
 }
 
 #[test]
@@ -1274,13 +1266,13 @@ fn terminal_height_is_adjustable_and_clamped() {
         Some(320.0),
     );
     assert_eq!(resized.term_dock.h, 320.0);
-    assert_eq!(resized.term_dock.y, 416.0);
-    assert_eq!(resized.viewer_pane.h, 296.0);
+    assert_eq!(resized.term_dock.y, 440.0);
+    assert_eq!(resized.viewer_pane.h, 320.0);
     assert_eq!(
         resized.terminal_resize,
         Rect {
             x: 312.0,
-            y: 408.0,
+            y: 432.0,
             w: 704.0,
             h: 8.0,
         }
@@ -1413,8 +1405,8 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
         ) > 0,
         "terminal + glyph paints above its hit-area background"
     );
-    assert!(count_color_in(&canvas, theme.border_subtle, 312, 512, 1016, 736) > 1000);
-    assert!(count_color_in(&canvas, theme.text_dim, 320, 548, 900, 620) > 0);
+    assert!(count_color_in(&canvas, theme.border_subtle, 312, 536, 1016, 760) > 1000);
+    assert!(count_color_in(&canvas, theme.text_dim, 320, 572, 900, 644) > 0);
 
     let effects = {
         let mut frame = Frame {
@@ -1655,98 +1647,6 @@ fn terminal_tabs_select_and_close_by_index() {
     assert_eq!(effects.close_terminal, Some(0));
 }
 
-// ---- status line ----
-
-#[test]
-fn frame_status_formats_tree_state() {
-    let d = temp_dir("status");
-    fs::create_dir_all(d.path().join("A")).expect("create A");
-    fs::File::create(d.path().join("b.txt")).expect("create b.txt");
-    let mut tree = FileTree::new(d.path());
-    assert_eq!(
-        frame_status(&tree, None, None, None, None, 66.0),
-        "visible 2 · expanded 0 · selected none · scroll 0% · no git"
-    );
-
-    // Expanding an EMPTY dir changes the expansion count, not the rows;
-    // content (44px) still fits the 66px viewport → 0%.
-    tree.toggle(&tree.root.join("A"), true);
-    assert_eq!(
-        frame_status(&tree, None, None, None, None, 66.0),
-        "visible 2 · expanded 1 · selected none · scroll 0% · no git"
-    );
-
-    // Overflow: 10 files (220px) in a 3-row viewport (66px) → max offset
-    // 154; scrolling to the clamp reads 100%. A tree selection shows when
-    // no viewer is open.
-    let d2 = temp_dir("status-scroll");
-    for i in 0..10 {
-        fs::File::create(d2.path().join(format!("f{i}.txt"))).expect("create");
-    }
-    let mut big = FileTree::new(d2.path());
-    assert!(
-        big.scroll_by(1000.0, 66.0),
-        "10 rows in a 3-row viewport overflows"
-    );
-    assert_eq!(big.offset, 154.0, "clamped to the max offset");
-    assert!(
-        frame_status(&big, None, None, None, None, 66.0).contains("scroll 100% · no git"),
-        "max offset → 100%"
-    );
-    big.select(&big.root.join("f3.txt"));
-    assert!(
-        frame_status(&big, None, None, None, None, 66.0).contains("selected f3.txt"),
-        "{}",
-        frame_status(&big, None, None, None, None, 66.0)
-    );
-
-    // A listing failure replaces the status line (error surface).
-    let missing = temp_dir("status-missing");
-    let gone = missing.path().join("gone");
-    let err_tree = FileTree::new(&gone);
-    assert!(
-        frame_status(&err_tree, None, None, None, None, 66.0).contains("cannot list"),
-        "error surfaces"
-    );
-}
-
-#[test]
-fn frame_status_formats_viewer_state() {
-    let d = temp_dir("status-viewer");
-    let p = d.path().join("sample.txt");
-    fs::write(&p, "alpha\nbeta\ngamma\n").expect("write");
-    let tree = FileTree::new(d.path());
-    let viewer = Viewer::open(&p).expect("opens");
-
-    // Viewer segment: name, line count, no selection → none.
-    assert_eq!(
-        frame_status(&tree, Some(&viewer), None, None, None, 632.0),
-        "visible 1 · expanded 0 · scroll 0% · sample.txt 3 lines · sel none · no git"
-    );
-
-    // A selection reports its char count.
-    let mut v = viewer;
-    v.select_at(0, 0);
-    v.extend_select(0, 5);
-    assert!(
-        frame_status(&tree, Some(&v), None, None, None, 632.0).contains("sel 5 chars"),
-        "{}",
-        frame_status(&tree, Some(&v), None, None, None, 632.0)
-    );
-
-    // A truncated view carries the flag.
-    let big = d.path().join("big.txt");
-    fs::write(&big, "x\n".repeat(100)).expect("write");
-    let trunc = Viewer::open_with_cap(&big, 50).expect("opens");
-    assert!(trunc.truncated());
-    assert!(
-        frame_status(&tree, Some(&trunc), None, None, None, 632.0)
-            .contains("big.txt 25 lines · truncated"),
-        "{}",
-        frame_status(&tree, Some(&trunc), None, None, None, 632.0)
-    );
-}
-
 // ---- scene composition + interactions ----
 
 fn scene_fixture(label: &str) -> (TempDir, FileTree) {
@@ -1934,17 +1834,17 @@ fn frame_scene_renders_spec_surfaces() {
     );
     assert_eq!(effects.opened, None);
 
-    // Title bar, card chrome, tree and status surfaces.
+    // Title bar, card chrome, and tree surfaces.
     assert!(
         count_color_in(&canvas, theme.accent, 0, 0, 40, 36) > 0,
         "title icon"
     );
     assert!(
-        count_color_in(&canvas, theme.border_subtle, 64, 44, 304, 736) > 1000,
+        count_color_in(&canvas, theme.border_subtle, 64, 44, 304, 760) > 1000,
         "explorer card border"
     );
     assert!(
-        count_color_in(&canvas, theme.border_subtle, 312, 44, 1016, 736) > 1000,
+        count_color_in(&canvas, theme.border_subtle, 312, 44, 1016, 760) > 1000,
         "editor card border"
     );
     assert!(
@@ -1952,29 +1852,21 @@ fn frame_scene_renders_spec_surfaces() {
         "tree row ink"
     );
     assert!(
-        count_color_in(&canvas, theme.bg_elevated, 288, 108, 296, 672) > 100,
+        count_color_in(&canvas, theme.bg_elevated, 288, 108, 296, 752) > 100,
         "track"
     );
     assert!(
-        count_color_in(&canvas, theme.fg_dim, 288, 108, 296, 672) > 100,
+        count_color_in(&canvas, theme.fg_dim, 288, 108, 296, 752) > 100,
         "thumb"
     );
     assert!(
-        count_color_in(&canvas, theme.fg_dim, 320, 104, 1008, 728) > 0,
+        count_color_in(&canvas, theme.fg_dim, 320, 104, 1008, 752) > 0,
         "placeholder text"
     );
     assert_eq!(
-        count_color_in(&canvas, theme.border, 320, 104, 1008, 728),
+        count_color_in(&canvas, theme.border, 320, 104, 1008, 752),
         0,
         "placeholder has no inner grey box"
-    );
-    assert!(
-        count_color_in(&canvas, theme.accent, 0, 744, 32, 768) > 500,
-        "status remote block"
-    );
-    assert!(
-        count_color_in(&canvas, theme.text_muted, 32, 744, 1024, 768) > 0,
-        "status ink"
     );
 }
 
@@ -2532,12 +2424,6 @@ fn frame_config_pane_renders_and_reports_save_click() {
         count_color_in(&canvas, theme.fg, 320, 104, 1008, 300) > 0,
         "config ink"
     );
-    assert!(
-        frame_status(&tree, None, Some(&editor), None, None, layout.viewer_pane.h)
-            .contains("config config.yaml"),
-        "{}",
-        frame_status(&tree, None, Some(&editor), None, None, layout.viewer_pane.h)
-    );
 
     // Header Save button (panel right edge) reports the effect.
     let save_click = Pointer {
@@ -2747,7 +2633,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         handle,
         Rect {
             x: 274.0,
-            y: 373.0,
+            y: 385.0,
             w: 20.0,
             h: 34.0
         }
@@ -2799,7 +2685,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
         &mut scrollbar,
         &mut viewer_scrollbar,
     );
-    let dots = crate::ui::testutil::ink_bbox_in(frame.canvas, theme.surface, 274, 373, 294, 407)
+    let dots = crate::ui::testutil::ink_bbox_in(frame.canvas, theme.surface, 274, 385, 294, 419)
         .expect("three-dot handle ink");
     assert!(
         dots.2 - dots.0 >= 3 && dots.3 - dots.1 >= 15,

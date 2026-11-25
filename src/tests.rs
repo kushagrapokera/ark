@@ -70,7 +70,7 @@ fn viewer_wheel_marks_pane_damage_only() {
     let p = d.path().join("lines.txt");
     fs::write(&p, (0..40).map(|i| format!("line {i}\n")).collect::<String>()).expect("write");
     let mut viewer = Viewer::open(&p).expect("opens");
-    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, true, true); // editor body 624×392
+    let layout = frame::app_layout_with_commit(1024.0, 768.0, 304.0, true, true); // editor body 688×416
     let canvas = Canvas::new(1024, 768);
     let mut damage = Damage::new(64);
     damage.take(canvas.width(), canvas.height()); // consume the initial full wave
@@ -81,12 +81,12 @@ fn viewer_wheel_marks_pane_damage_only() {
     let rects = damage.take(canvas.width(), canvas.height()).expect("scroll damage");
     assert_eq!(rects, vec![damage_rect(layout.viewer_pane, 1.0, 1024, 768)]);
 
-    // Notch to the clamp (40 lines − 18 viewport = 22), then one more notch
+    // Notch to the clamp (40 lines − 19 viewport = 21), then one more notch
     // moves nothing → no damage at all.
     while route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage) {
         let _ = damage.take(canvas.width(), canvas.height());
     }
-    assert_eq!(viewer.offset_lines(), 22, "max offset = line_count − viewport_lines");
+    assert_eq!(viewer.offset_lines(), 21, "max offset = line_count − viewport_lines");
     assert!(!route_wheel_viewer(&mut viewer, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
     assert!(damage.take(canvas.width(), canvas.height()).is_none(), "clamped: nothing pending");
 }
@@ -116,25 +116,19 @@ fn wheel_scroll_marks_panel_damage_only() {
         fs::File::create(d.path().join(format!("f{i:02}.txt"))).expect("create file");
     }
     let mut tree = FileTree::new(d.path());
-    let layout = frame::app_layout(1024.0, 768.0, 304.0); // tree viewport 620px
+    let layout = frame::app_layout(1024.0, 768.0, 304.0); // tree viewport 644px
     let canvas = Canvas::new(1024, 768);
     let mut damage = Damage::new(64);
     damage.take(canvas.width(), canvas.height()); // consume the initial full wave
 
-    // First notch scrolls → exactly two rects, matching the layout.
+    // First notch scrolls → exactly one panel rect, matching the layout.
     assert!(route_wheel_scroll(&mut tree, WHEEL_PX, &layout, 1.0, &canvas, &mut damage));
     assert_eq!(tree.offset, WHEEL_PX);
     let rects = damage.take(canvas.width(), canvas.height()).expect("scroll damage");
-    assert_eq!(
-        rects,
-        vec![
-            damage_rect(layout.tree_panel, 1.0, 1024, 768),
-            damage_rect(layout.status, 1.0, 1024, 768),
-        ]
-    );
+    assert_eq!(rects, vec![damage_rect(layout.tree_panel, 1.0, 1024, 768)]);
 
     // Notch to the max offset through the router: every moving notch marks
-    // the same two rects.
+    // the same panel rect.
     while route_wheel_scroll(&mut tree, WHEEL_PX, &layout, 1.0, &canvas, &mut damage) {
         let _ = damage.take(canvas.width(), canvas.height());
     }
@@ -151,7 +145,7 @@ fn wheel_scroll_marks_panel_damage_only() {
         "clamped: nothing pending"
     );
 
-    // Scale 2 doubles the rect and clamps to the canvas (620×2 extends past
+    // Scale 2 doubles the rect and clamps to the canvas (644×2 extends past
     // 768), never yielding out-of-bounds damage.
     assert_eq!(
         damage_rect(layout.tree_panel, 2.0, 1024, 768),
@@ -762,7 +756,7 @@ fn app_terminal_divider_drag_resizes_and_clamps_the_dock() {
     app.resize_terminal_to(10_000.0, &layout);
     assert_eq!(app.term_height, Some(120.0));
     app.resize_terminal_to(-1_000.0, &layout);
-    assert_eq!(app.term_height, Some(524.0));
+    assert_eq!(app.term_height, Some(548.0));
 }
 
 #[test]

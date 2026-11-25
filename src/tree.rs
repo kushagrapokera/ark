@@ -464,8 +464,10 @@ pub fn draw_tree_panel_with_insertion(
     for (i, row) in rows.iter().enumerate().skip(first).take(band_rows) {
         let display_index = i + usize::from(insert_before.is_some_and(|at| i >= at));
         let row_y = panel.y + display_index as f64 * ROW_H - tree.offset;
-        if row_y + ROW_H <= panel.y || row_y >= panel.y + panel.h {
-            continue; // straddler outside the vertical span
+        // Do not draw a bottom-straddling row: its glyph descenders can spill
+        // into the card/window padding even when the row background is clipped.
+        if row_y + ROW_H <= panel.y || row_y + ROW_H > panel.y + panel.h {
+            continue;
         }
         if hovered == Some(row.path) {
             canvas.fill_rect(panel.x, row_y, row_w, ROW_H, theme.bg_elevated, scale);

@@ -131,7 +131,7 @@ fn damage_rect(rect: Rect, scale: f64, canvas_w: u32, canvas_h: u32) -> DamageRe
 }
 
 /// M3 damage contract for tree scrolls (wheel): scroll the tree and mark
-/// ONLY the panel + status rects — header, split and viewer pane are
+/// ONLY the panel rect — header, split, viewer, and window edges are
 /// untouched by scrolling. Returns whether anything was damaged.
 fn route_wheel_scroll(
     tree: &mut FileTree,
@@ -146,7 +146,6 @@ fn route_wheel_scroll(
     }
     let (cw, ch) = (canvas.width(), canvas.height());
     damage.mark(damage_rect(layout.tree_panel, scale, cw, ch));
-    damage.mark(damage_rect(layout.status, scale, cw, ch));
     true
 }
 
@@ -1063,7 +1062,6 @@ impl App {
         if effects.scrolled {
             let (cw, ch) = (self.canvas.width(), self.canvas.height());
             self.damage.mark(damage_rect(layout.tree_panel, self.scale, cw, ch));
-            self.damage.mark(damage_rect(layout.status, self.scale, cw, ch));
         }
         if effects.viewer_scrolled {
             let (cw, ch) = (self.canvas.width(), self.canvas.height());

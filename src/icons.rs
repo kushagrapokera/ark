@@ -40,13 +40,6 @@ pub enum Icon {
     NewFolder,
     DragHandle,
     Trash,
-    Bell,
-    Check,
-    Sync,
-    Warning,
-    Remote,
-    Zoom,
-    Asterisk,
     PanelLeft,
     PanelBottom,
 }
@@ -175,17 +168,11 @@ pub fn draw(
             pb.line_to(cx - 0.08 * s, cy + 0.38 * s);
             pb.finish().expect("valid code path")
         }
-        Icon::Search | Icon::Zoom => {
+        Icon::Search => {
             let mut pb = PathBuilder::new();
             pb.push_circle(cx - 0.08 * s, cy - 0.08 * s, 0.25 * s);
             pb.move_to(cx + 0.10 * s, cy + 0.10 * s);
             pb.line_to(cx + 0.36 * s, cy + 0.36 * s);
-            if matches!(icon, Icon::Zoom) {
-                pb.move_to(cx - 0.08 * s, cy - 0.30 * s);
-                pb.line_to(cx - 0.08 * s, cy + 0.14 * s);
-                pb.move_to(cx - 0.30 * s, cy - 0.08 * s);
-                pb.line_to(cx + 0.14 * s, cy - 0.08 * s);
-            }
             pb.finish().expect("valid search path")
         }
         Icon::Bug => {
@@ -252,7 +239,7 @@ pub fn draw(
             pb.line_to(cx - 0.28 * s, cy + 0.28 * s);
             pb.finish().expect("valid close path")
         }
-        Icon::Refresh | Icon::Sync => {
+        Icon::Refresh => {
             let mut pb = PathBuilder::new();
             pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
             pb.cubic_to(
@@ -271,18 +258,9 @@ pub fn draw(
                 cx + 0.18 * s,
                 cy + 0.30 * s,
             );
-            if matches!(icon, Icon::Sync) {
-                pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
-                pb.line_to(cx + 0.30 * s, cy - 0.02 * s);
-                pb.line_to(cx + 0.08 * s, cy - 0.12 * s);
-                pb.move_to(cx - 0.30 * s, cy + 0.24 * s);
-                pb.line_to(cx - 0.30 * s, cy + 0.02 * s);
-                pb.line_to(cx - 0.08 * s, cy + 0.12 * s);
-            } else {
-                pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
-                pb.line_to(cx + 0.08 * s, cy - 0.24 * s);
-                pb.line_to(cx + 0.16 * s, cy - 0.42 * s);
-            }
+            pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
+            pb.line_to(cx + 0.08 * s, cy - 0.24 * s);
+            pb.line_to(cx + 0.16 * s, cy - 0.42 * s);
             pb.finish().expect("valid refresh path")
         }
         Icon::Collapse => {
@@ -318,71 +296,6 @@ pub fn draw(
             pb.move_to(cx, cy + 0.12 * s);
             pb.line_to(cx + 0.20 * s, cy + 0.12 * s);
             pb.finish().expect("valid new path")
-        }
-        Icon::Bell => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.28 * s, cy + 0.18 * s);
-            pb.cubic_to(
-                cx - 0.22 * s,
-                cy + 0.02 * s,
-                cx - 0.20 * s,
-                cy - 0.28 * s,
-                cx,
-                cy - 0.28 * s,
-            );
-            pb.cubic_to(
-                cx + 0.20 * s,
-                cy - 0.28 * s,
-                cx + 0.22 * s,
-                cy + 0.02 * s,
-                cx + 0.28 * s,
-                cy + 0.18 * s,
-            );
-            pb.close();
-            pb.move_to(cx - 0.10 * s, cy + 0.34 * s);
-            pb.line_to(cx + 0.10 * s, cy + 0.34 * s);
-            pb.finish().expect("valid bell path")
-        }
-        Icon::Check => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.30 * s, cy);
-            pb.line_to(cx - 0.08 * s, cy + 0.22 * s);
-            pb.line_to(cx + 0.32 * s, cy - 0.24 * s);
-            pb.finish().expect("valid check path")
-        }
-        Icon::Warning => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx, cy - 0.36 * s);
-            pb.line_to(cx + 0.36 * s, cy + 0.30 * s);
-            pb.line_to(cx - 0.36 * s, cy + 0.30 * s);
-            pb.close();
-            pb.move_to(cx, cy - 0.12 * s);
-            pb.line_to(cx, cy + 0.08 * s);
-            pb.push_circle(cx, cy + 0.20 * s, 0.025 * s);
-            pb.finish().expect("valid warning path")
-        }
-        Icon::Remote => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 0.36 * s, cy - 0.28 * s);
-            pb.line_to(cx + 0.36 * s, cy - 0.28 * s);
-            pb.line_to(cx + 0.36 * s, cy + 0.20 * s);
-            pb.line_to(cx - 0.36 * s, cy + 0.20 * s);
-            pb.close();
-            pb.move_to(cx - 0.18 * s, cy + 0.36 * s);
-            pb.line_to(cx + 0.18 * s, cy + 0.36 * s);
-            pb.move_to(cx, cy + 0.20 * s);
-            pb.line_to(cx, cy + 0.36 * s);
-            pb.finish().expect("valid remote path")
-        }
-        Icon::Asterisk => {
-            let mut pb = PathBuilder::new();
-            for index in 0..6 {
-                let angle = index as f32 * std::f32::consts::PI / 3.0;
-                let (dx, dy) = (angle.cos(), angle.sin());
-                pb.move_to(cx - dx * 0.34 * s, cy - dy * 0.34 * s);
-                pb.line_to(cx + dx * 0.34 * s, cy + dy * 0.34 * s);
-            }
-            pb.finish().expect("valid asterisk path")
         }
         Icon::PanelLeft | Icon::PanelBottom => {
             let mut pb = PathBuilder::new();
@@ -455,13 +368,6 @@ pub fn draw(
         | Icon::NewFolder
         | Icon::DragHandle
         | Icon::Trash
-        | Icon::Bell
-        | Icon::Check
-        | Icon::Sync
-        | Icon::Warning
-        | Icon::Remote
-        | Icon::Zoom
-        | Icon::Asterisk
         | Icon::PanelLeft
         | Icon::PanelBottom => {
             pixmap.stroke_path(&path, &paint, &stroke, transform, None);
