@@ -581,6 +581,65 @@ fn title_bar_has_no_update_or_search_field() {
 }
 
 #[test]
+fn title_bar_removes_menus_and_navigation() {
+    let (_d, mut tree) = scene_fixture("title-no-menus");
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.text_muted = (77, 77, 77);
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+
+    assert_eq!(
+        crate::ui::testutil::count_not_color_in(&canvas, theme.surface_chrome, 40, 0, 900, 36),
+        0,
+        "File/Edit/Selection/View/Go, More, Back, and Forward are gone"
+    );
+}
+
+#[test]
+fn title_bar_logo_is_larger() {
+    let (_d, mut tree) = scene_fixture("title-logo-size");
+    let mut theme = frame_theme();
+    theme.surface_chrome = (1, 1, 1);
+    theme.accent = (200, 220, 255);
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut text = TextSystem::new();
+    let mut canvas = Canvas::new(1024, 768);
+    draw_static_frame(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer::default(),
+        &[],
+        None,
+    );
+
+    let (x0, y0, x1, y1) = crate::ui::testutil::ink_bbox_in(
+        &canvas,
+        theme.surface_chrome,
+        0,
+        0,
+        40,
+        36,
+    )
+    .expect("logo ink");
+    assert!(x1 - x0 >= 22 && y1 - y0 >= 20, "larger logo bbox: {:?}", (x0, y0, x1, y1));
+}
+
+#[test]
 fn title_bar_layout_buttons_report_their_actions() {
     let (_d, mut tree) = scene_fixture("title-actions");
     let theme = frame_theme();

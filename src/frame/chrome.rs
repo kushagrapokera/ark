@@ -107,24 +107,7 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffec
     let bar = layout.title_bar;
     f.canvas
         .fill_rect(bar.x, bar.y, bar.w, bar.h, f.theme.surface_chrome, f.scale);
-    icon(f, Icon::Code, 20.0, 18.0, 16.0, f.theme.accent);
-
-    if bar.w >= 1024.0 {
-        let menus = ["File", "Edit", "Selection", "View", "Go"];
-        let mut x = 44.0;
-        let size_scale = super::ui_size(1.0, f.ui_scale);
-        for label in menus {
-            text(f, label, x, 9.0, 11.0, f.theme.text_muted, false);
-            x += match label {
-                "Selection" => 66.0,
-                "File" | "Edit" | "View" => 42.0,
-                _ => 30.0,
-            } * size_scale;
-        }
-        icon(f, Icon::More, x + 4.0 * size_scale, 18.0, 14.0, f.theme.text_muted);
-        icon(f, Icon::ChevronLeft, x + 42.0 * size_scale, 18.0, 14.0, f.theme.text_muted);
-        icon(f, Icon::ChevronRight, x + 64.0 * size_scale, 18.0, 14.0, f.theme.text_muted);
-    }
+    icon(f, Icon::Code, 20.0, 18.0, 24.0, f.theme.accent);
 
     let actions = title_bar_actions(layout);
     for (glyph, rect, active) in [

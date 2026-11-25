@@ -49,7 +49,6 @@ pub enum Icon {
     Asterisk,
     PanelLeft,
     PanelBottom,
-    ChevronLeft,
 }
 
 /// Stroke-based outline icon in LOGICAL space, centered on (cx, cy) with a
@@ -434,20 +433,12 @@ pub fn draw(
             pb.line_to(cx + 0.24 * s, cy - 0.20 * s);
             pb.finish().expect("valid trash path")
         }
-        Icon::ChevronLeft => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx + 0.2 * s, cy - 0.3 * s);
-            pb.line_to(cx - 0.2 * s, cy);
-            pb.line_to(cx + 0.2 * s, cy + 0.3 * s);
-            pb.finish().expect("valid chevron left path")
-        }
     };
 
     match icon {
         Icon::File
         | Icon::ChevronRight
         | Icon::ChevronDown
-        | Icon::ChevronLeft
         | Icon::SourceControl
         | Icon::Terminal
         | Icon::Code

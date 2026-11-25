@@ -439,6 +439,19 @@ five open viewers, two shells + fake agent tab):
   55,582 KiB PSS**, below the 100 MiB budget. `smem` and `/usr/bin/time` are
   unavailable, so `/proc` status and `smaps_rollup` supplied the measurements.
 
+## Simplified title bar
+
+- Removed the File, Edit, Selection, View, Go, More, Back, and Forward controls
+  from the top bar. Only the ark logo and the Explorer/Terminal layout controls
+  remain.
+- Increased the logo from 16 px to 24 px; it continues to scale with the window
+  UI scale and stays within the 36 px title bar.
+- Removed the now-unused left-chevron icon. Explorer, Terminal, and editor-strip
+  More controls are unchanged.
+- Verification: `cargo test` **331 passed, 0 failed, 3 ignored**, 5/5 CLI; clippy
+  and release build clean. Live 1024×768 and 1440×900 screenshots confirmed the
+  clean title bar, larger logo, and retained right-side layout controls.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal
