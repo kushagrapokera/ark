@@ -6,13 +6,13 @@ use crate::render::{Canvas, Theme};
 use crate::text::{MonoMetrics, TextSystem};
 use crate::ui::Rect;
 
+use super::code;
 use super::paint::{draw_text, draw_wrapped};
 use super::parse::{wrap_spans, BlockKind, InlineSpan};
 use super::table;
 
 const BLOCK_GAP: f64 = 12.0;
 const LIST_GAP: f64 = 4.0;
-const CODE_PAD: f64 = 12.0;
 
 pub(super) struct BlockPainter<'a> {
     pub canvas: &'a mut Canvas,
@@ -39,7 +39,7 @@ impl BlockPainter<'_> {
                 spans,
             } => self.list(*ordered, *task, spans, top),
             BlockKind::Quote(spans) => self.quote(spans, top),
-            BlockKind::Code(lines) => self.code(lines, top),
+            BlockKind::Code(lines) => code::draw(self, lines, top) + BLOCK_GAP,
             BlockKind::Rule => self.rule(top),
             BlockKind::Table {
                 headers,
@@ -295,44 +295,6 @@ impl BlockPainter<'_> {
             );
         }
         height
-    }
-
-    fn code(&mut self, lines: &[String], top: f64) -> f64 {
-        let height = lines.len() as f64 * self.base_line_h + 2.0 * CODE_PAD;
-        if top + height < self.view_top || top > self.view_bottom {
-            return height;
-        }
-        let y0 = top.max(self.view_top);
-        let y1 = (top + height).min(self.view_bottom);
-        self.canvas.fill_round_rect(
-            self.content.x,
-            y0,
-            self.content.w,
-            (y1 - y0).max(0.0),
-            5.0,
-            self.theme.bg_elevated,
-            self.scale,
-        );
-        for (row, line) in lines.iter().enumerate() {
-            let line_y = top + CODE_PAD + row as f64 * self.base_line_h;
-            if line_y < self.view_top || line_y + self.base_line_h > self.view_bottom {
-                continue;
-            }
-            draw_text(
-                self.canvas,
-                self.text,
-                line,
-                self.content.x + CODE_PAD,
-                line_y,
-                self.base_line_h,
-                self.base_font,
-                self.base_metrics,
-                self.scale,
-                self.theme.fg,
-                Weight::NORMAL,
-            );
-        }
-        height + BLOCK_GAP
     }
 
     fn rule(&mut self, top: f64) -> f64 {

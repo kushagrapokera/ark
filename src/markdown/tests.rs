@@ -19,6 +19,7 @@ fn formatted_blocks_paint_heading_inline_code_and_fenced_code_styles() {
     let mut theme = Theme::DARK_PLUS;
     theme.bg = (0, 0, 0);
     theme.bg_elevated = (10, 20, 30);
+    theme.surface_hover = (10, 20, 30);
     theme.fg = (255, 255, 255);
     let mut canvas = Canvas::new(600, 300);
     canvas.fill(theme.bg);
@@ -53,6 +54,49 @@ fn formatted_blocks_paint_heading_inline_code_and_fenced_code_styles() {
     assert!(
         crate::ui::testutil::count_color_in(&canvas, theme.bg_elevated, 10, 150, 590, 230) > 500,
         "fenced code paints a full-width raised block"
+    );
+}
+
+#[test]
+fn inline_code_uses_a_raised_bordered_chip() {
+    let d = temp_dir("markdown-inline-chip");
+    let path = d.path().join("guide.md");
+    fs::write(&path, "Use `finalVerdict()` here.\n").expect("write");
+    let viewer = Viewer::open(&path).expect("viewer");
+    let mut theme = Theme::DARK_PLUS;
+    theme.bg = (0, 0, 0);
+    theme.surface_hover = (10, 20, 30);
+    theme.border = (40, 50, 60);
+    theme.fg = (255, 255, 255);
+    let mut canvas = Canvas::new(600, 300);
+    canvas.fill(theme.bg);
+    let mut text = TextSystem::new();
+    let mut state = MarkdownState::default();
+    let rect = Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 580.0,
+        h: 280.0,
+    };
+
+    let _ = draw_markdown_preview(
+        &mut canvas,
+        &mut text,
+        &theme,
+        1.0,
+        1.0,
+        rect,
+        &viewer,
+        &mut state,
+    );
+
+    assert!(
+        crate::ui::testutil::count_color_in(&canvas, theme.surface_hover, 10, 10, 590, 120) > 20,
+        "inline code has a distinct raised background"
+    );
+    assert!(
+        crate::ui::testutil::count_color_in(&canvas, theme.border, 10, 10, 590, 120) > 10,
+        "inline code has a visible chip boundary"
     );
 }
 

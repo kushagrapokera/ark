@@ -560,6 +560,17 @@ five open viewers, two shells + fake agent tab):
   and release build clean. Live YAML and `.env` edits saved without keyboard
   commands, and the header transitioned from “saves automatically” to “saved”.
 
+## Markdown overflow and inline hierarchy polish
+
+- Fixed fenced-code overflow by hard-wrapping long lines inside the padded block.
+  Wrapped rows are painted viewport-only and capped at 4,096 rows with a clear
+  truncation notice.
+- Inline code now renders as a raised, bordered chip, including inside tables;
+  bold text, links, task lists, and table headers retain their distinct styles.
+- Verification: `cargo test` **391 passed, 0 failed, 4 ignored**, 5/5 CLI; clippy
+  and release build clean. Wide and narrow live previews confirmed code stays
+  inside its box and bold/inline-code/table hierarchy is visually distinct.
+
 ## Notes
 
 - `PaneMode::Terminals` was removed: terminal tabs now only set terminal

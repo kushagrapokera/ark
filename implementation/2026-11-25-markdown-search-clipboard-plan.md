@@ -92,3 +92,17 @@ Files: `src/clipboard.rs` (new), `src/viewer.rs`, `src/main.rs`,
   active; record numbers below 100 MiB.
 - [x] Update `implementation/workbench-ui/progress.md`, install the matching
   release binary, verify hashes, and commit without pushing.
+
+## 6. Markdown overflow and inline hierarchy polish
+
+Files: `src/markdown/code.rs`, `src/markdown/blocks.rs`, `src/markdown/paint.rs`,
+`src/markdown/tests.rs`.
+
+- [x] Add a failing narrow-viewport regression proving long fenced-code lines
+  paint outside the block.
+- [x] Hard-wrap code lines inside the padded block with viewport-only painting
+  and a 4,096 wrapped-row cap.
+- [x] Add a failing inline-code styling regression, then render raised bordered
+  chips using the existing surface/border theme tokens.
+- [x] Re-run Markdown tests, full suite, clippy, release build, and wide/narrow
+  live preview smoke.

@@ -5,11 +5,14 @@
 use std::path::Path;
 
 mod blocks;
+mod code;
 mod paint;
 mod parse;
 mod render;
 mod table;
 
+#[cfg(test)]
+mod code_tests;
 #[cfg(test)]
 mod parse_tests;
 #[cfg(test)]

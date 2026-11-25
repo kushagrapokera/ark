@@ -86,12 +86,34 @@ pub(super) fn draw_inline_line(
             color
         };
         if span.kind == InlineKind::Code {
+            let chip_w = shown.chars().count() as f64 * advance;
+            let chip_y = y + 1.0;
+            let chip_h = (line_h - 2.0).max(1.0);
+            canvas.fill_round_rect(
+                cursor,
+                chip_y,
+                chip_w,
+                chip_h,
+                3.0,
+                theme.surface_hover,
+                scale,
+            );
+            canvas.fill_rect(cursor, chip_y, chip_w, 1.0, theme.border, scale);
             canvas.fill_rect(
                 cursor,
-                y + 2.0,
-                shown.chars().count() as f64 * advance,
-                (line_h - 4.0).max(1.0),
-                theme.bg_elevated,
+                chip_y + chip_h - 1.0,
+                chip_w,
+                1.0,
+                theme.border,
+                scale,
+            );
+            canvas.fill_rect(cursor, chip_y, 1.0, chip_h, theme.border, scale);
+            canvas.fill_rect(
+                cursor + chip_w - 1.0,
+                chip_y,
+                1.0,
+                chip_h,
+                theme.border,
                 scale,
             );
         }

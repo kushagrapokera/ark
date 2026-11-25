@@ -50,8 +50,9 @@ Visual changes:
 - typography scale and spacing for H1–H6, with rules under H1/H2;
 - paragraph spacing and soft-line joining;
 - bold, strikethrough, inline code, and link styling;
+- raised, bordered inline-code chips that also work inside tables;
 - task-list checkboxes and completed-item styling;
-- padded, bordered fenced-code blocks;
+- padded fenced-code blocks with bounded, viewport-only hard wrapping;
 - padded blockquotes and list markers;
 - tables with wrapped cells, content-derived row heights, header fill, and grid
   lines;
