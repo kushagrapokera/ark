@@ -89,14 +89,30 @@ jobs:
         run: |
           VERSION=${RELEASE_TAG#v}
           DIST="$RUNNER_TEMP/ark-release"
+          ASSETS=(
+            "$DIST/ark-$VERSION-linux-x86_64.tar.gz"
+            "$DIST/ark-$VERSION-linux-x86_64.tar.gz.sig"
+            "$DIST/ark-installer.sh"
+            "$DIST/ark-installer.sh.sig"
+            "$DIST/SHA256SUMS"
+            "$DIST/SHA256SUMS.sig"
+            "$DIST/latest.json"
+            "$DIST/latest.json.sig"
+          )
+          for asset in "${ASSETS[@]}"; do
+            [ -f "$asset" ] || {
+              echo "release asset missing: $asset" >&2
+              exit 1
+            }
+          done
           if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
             [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true" ] || {
               echo "refusing to replace a published release" >&2
               exit 1
             }
-            gh release upload "$RELEASE_TAG" "$DIST"/* --clobber
+            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" "$DIST"/* --draft --title "ark $VERSION" --generate-notes
+            gh release create "$RELEASE_TAG" "${ASSETS[@]}" --draft --title "ark $VERSION" --generate-notes
           fi
           gh release edit "$RELEASE_TAG" --draft=true
       - name: Verify published assets
