@@ -13,11 +13,15 @@ use crate::render::ColorRgb;
 use crate::ui::{Pointer, Rect};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
+mod file;
+pub use file::{draw as draw_file, FileKind};
+
 /// Bold logical stroke width used by every icon.
 pub const ICON_STROKE_WIDTH: f32 = 2.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
+    #[allow(dead_code)] // frozen M2 demo/test surface; production folders use file icons
     ChevronRight,
     ChevronDown,
     File,
@@ -51,6 +55,28 @@ pub enum Icon {
 pub struct IconTooltip {
     pub label: &'static str,
     pub anchor: Rect,
+}
+
+impl IconTooltip {
+    /// Return the tooltip when `pointer` is inside the icon's logical hit area.
+    pub fn hovered(
+        label: &'static str,
+        pointer: Pointer,
+        cx: f64,
+        cy: f64,
+        size: f64,
+    ) -> Option<Self> {
+        let hit = size.max(18.0);
+        let anchor = Rect {
+            x: cx - hit / 2.0,
+            y: cy - hit / 2.0,
+            w: hit,
+            h: hit,
+        };
+        anchor
+            .contains(pointer.x, pointer.y)
+            .then_some(Self { label, anchor })
+    }
 }
 
 impl Icon {
@@ -91,17 +117,7 @@ impl Icon {
         cy: f64,
         size: f64,
     ) -> Option<IconTooltip> {
-        let hit = size.max(18.0);
-        let anchor = Rect {
-            x: cx - hit / 2.0,
-            y: cy - hit / 2.0,
-            w: hit,
-            h: hit,
-        };
-        anchor.contains(pointer.x, pointer.y).then_some(IconTooltip {
-            label: self.name(),
-            anchor,
-        })
+        IconTooltip::hovered(self.name(), pointer, cx, cy, size)
     }
 }
 

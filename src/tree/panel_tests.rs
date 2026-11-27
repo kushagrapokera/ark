@@ -13,7 +13,7 @@ use std::fs;
 
 /// Fixture: root containing `A/` (containing `C/` and `a.txt`) and `b.txt`,
 /// expanded state controlled by the caller. Rows: [A, C, a.txt, b.txt].
-fn panel_fixture(label: &str) -> (TempDir, FileTree) {
+pub(super) fn panel_fixture(label: &str) -> (TempDir, FileTree) {
     let d = temp_dir(label);
     fs::create_dir_all(d.path().join("A/C")).expect("create A/C");
     fs::File::create(d.path().join("A/a.txt")).expect("create A/a.txt");
@@ -27,7 +27,7 @@ const PANEL: Rect = Rect { x: 10.0, y: 10.0, w: 200.0, h: 88.0 };
 
 /// Theme with only the row-ink tokens distinct: fg paints icons/names,
 /// bg_elevated the hover bg, selection the selected bg.
-fn panel_theme() -> Theme {
+pub(super) fn panel_theme() -> Theme {
     let bg = (0, 0, 0);
     Theme {
         bg,
@@ -381,12 +381,27 @@ fn band_width(canvas: &Canvas, bg: crate::render::ColorRgb, y0: u32, y1: u32) ->
     (bbox.0, bbox.2)
 }
 
+fn region_bytes(canvas: &Canvas, x0: u32, y0: u32, x1: u32, y1: u32) -> Vec<u8> {
+    let width = canvas.width() as usize;
+    let (pixels, _) = canvas.pixmap().data().as_chunks::<4>();
+    let mut bytes = Vec::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            bytes.extend_from_slice(&pixels[y as usize * width + x as usize]);
+        }
+    }
+    bytes
+}
+
 // ---- draw_tree_panel: row visuals ----
 
 #[test]
 fn row_visuals_pin_colors() {
     let (_d, mut tree) = panel_fixture("visuals");
-    let theme = panel_theme();
+    let mut theme = panel_theme();
+    theme.accent = theme.fg;
+    theme.fg_dim = theme.fg;
+    theme.text_muted = theme.fg;
     let a = tree.root.join("A");
     let b = tree.root.join("b.txt");
     let mut text = TextSystem::new();
@@ -397,24 +412,13 @@ fn row_visuals_pin_colors() {
         draw_tree_panel(canvas, text, &theme, 1.0, PANEL, tree, pointer, None);
     };
 
-    // Collapsed dir: chevron ink in the depth-0 chevron cell.
+    // Collapsed and expanded folders use distinct procedural glyphs.
     draw(&mut canvas, &mut text, &tree, Pointer::default());
-    let w_right = ink_bbox_in(&canvas, theme.bg, 10, 10, 27, 32).expect("collapsed chevron ink");
-
-    // Expanded dir: ChevronDown is a wider glyph than ChevronRight.
+    let closed = region_bytes(&canvas, 10, 10, 27, 32);
     tree.toggle(&a, true);
     draw(&mut canvas, &mut text, &tree, Pointer::default());
-    let w_down = ink_bbox_in(&canvas, theme.bg, 10, 10, 27, 32).expect("expanded chevron ink");
-    // Robust glyph discriminator (AA edges round tightly): ChevronDown is
-    // wider than tall, ChevronRight taller than wide.
-    assert!(
-        w_down.2 - w_down.0 > w_down.3 - w_down.1,
-        "ChevronDown ({w_down:?}) must be wider than tall"
-    );
-    assert!(
-        w_right.3 - w_right.1 > w_right.2 - w_right.0,
-        "ChevronRight ({w_right:?}) must be taller than wide"
-    );
+    let open = region_bytes(&canvas, 10, 10, 27, 32);
+    assert_ne!(closed, open, "folder expansion changes the glyph");
 
     // File row: collapse A again → rows [A, b.txt], the file at row 1
     // (y [32, 54)) with its File icon ink at indent+2.

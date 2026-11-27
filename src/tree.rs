@@ -17,7 +17,7 @@ use cosmic_text::Weight;
 
 use crate::fs::{read_dir_sorted, DirListing};
 use crate::git::{Badge, GitStatus};
-use crate::icons::{self, Icon, IconTooltip};
+use crate::icons::{draw_file, FileKind, IconTooltip};
 use crate::render::{Canvas, Theme};
 use crate::text::{TextSystem, TextStyle, TREE_FONT_SIZE};
 use crate::ui::{Pointer, Rect};
@@ -405,10 +405,10 @@ pub fn handle_pointer(tree: &mut FileTree, panel: Rect, pointer: Pointer) -> Tre
 
 /// Render the visible rows of `tree` into `panel` (LOGICAL px, rastered at
 /// `scale`). Viewport-only: only the rows the scroll offset exposes are
-/// drawn. Per row: depth-indented chevron (dirs; ChevronDown when expanded)
-/// or File icon, name text at indent+20 — text may cross the panel's right
-/// edge and is left unclipped (no horizontal scroll in M3). Hovered rows
-/// paint `bg_elevated`, selected rows `selection` (selection wins).
+/// drawn. Per row: a procedural folder/file glyph, name text at indent+20 —
+/// text may cross the panel's right edge and is left unclipped (no horizontal
+/// scroll in M3). Hovered rows paint `bg_elevated`, selected rows `selection`
+/// (selection wins).
 #[allow(clippy::too_many_arguments)] // git snapshot joins raster borrows; bundling would obscure the call
 #[cfg(test)]
 pub fn draw_tree_panel(
@@ -488,28 +488,33 @@ pub fn draw_tree_panel_with_insertion(
         }
         let indent = row.depth as f64 * INDENT_PX;
         let cy_logical = row_y + ROW_H / 2.0;
-        let cy = (cy_logical * scale) as f32;
-        let glyph = if row.is_dir {
-            if row.expanded { Icon::ChevronDown } else { Icon::ChevronRight }
-        } else {
-            Icon::File
-        };
+        let kind = FileKind::from_path(row.path, row.is_dir);
         let icon_x = if row.is_dir {
             panel.x + indent + CHEVRON_ZONE / 2.0
         } else {
             panel.x + indent + 2.0 + ICON_SIZE / 2.0
         };
-        icons::draw(
+        draw_file(
             canvas.pixmap_mut(),
-            glyph,
-            (icon_x * scale) as f32,
-            cy,
+            kind,
+            icon_x as f32,
+            cy_logical as f32,
             ICON_SIZE as f32,
-            theme.fg,
+            kind.color(theme),
             scale,
+            row.expanded,
         );
         if tooltip.is_none() {
-            tooltip = glyph.hovered_tooltip(pointer, icon_x, cy_logical, ICON_SIZE);
+            let label = if row.is_dir {
+                if row.expanded {
+                    "Collapse Folder"
+                } else {
+                    "Expand Folder"
+                }
+            } else {
+                kind.tooltip()
+            };
+            tooltip = IconTooltip::hovered(label, pointer, icon_x, cy_logical, ICON_SIZE);
         }
         // Baseline centers the line in the row; the metrics term is already
         // physical and must NOT be scaled again (the M2 fix-round-2 lesson).
@@ -580,5 +585,7 @@ pub(crate) fn badge_glyph(b: Badge, theme: &Theme) -> (&'static str, crate::rend
 // impl + all tests together would pass the ~400-line guidance.
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod panel_icon_tests;
 #[cfg(test)]
 mod panel_tests;
