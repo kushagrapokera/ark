@@ -6,3 +6,6 @@ implementation/*/.sdd/*
 
 # Rust build artifacts
 /target
+
+# Local secrets
+.env
