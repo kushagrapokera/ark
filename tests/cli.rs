@@ -13,7 +13,7 @@ fn version_flag_prints_version() {
     let out = ark().arg("--version").output().expect("spawn ark --version");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(stdout.trim(), "ark 0.1.0");
+    assert_eq!(stdout.trim(), format!("ark {}", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]

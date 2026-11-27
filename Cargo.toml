@@ -1,9 +1,14 @@
 [package]
 name = "ark"
-version = "0.1.0"
+version = "0.1.0-beta"
 edition = "2021"
 description = "ark — ultra-lightweight agent-first code editor"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/kushagrapokera/ark"
+authors = ["Kushagra Pokera"]
+keywords = ["editor", "terminal", "agent", "linux"]
+categories = ["development-tools", "text-editors"]
 
 [dependencies]
 # CLI entry point (`ark [PATH]`)
