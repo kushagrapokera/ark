@@ -4,6 +4,9 @@ use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke,
 use super::super::ICON_STROKE_WIDTH;
 use super::FileKind;
 
+/// Minimum stroke for symbols drawn inside the larger file outline.
+pub(super) const SYMBOL_STROKE_WIDTH: f32 = 2.0;
+
 /// Draw one glyph directly into the framebuffer. `cx`, `cy`, and `size` are
 /// logical pixels; `scale` is applied exactly once by the transform. Paths are
 /// short-lived draw scratch: nothing is cached between frames or retained per
@@ -122,7 +125,7 @@ fn draw_rust(
         teeth.move_to(cx + cos * 0.29 * size, cy + sin * 0.29 * size);
         teeth.line_to(cx + cos * 0.39 * size, cy + sin * 0.39 * size);
     }
-    stroke_path(pixmap, teeth, color, 1.8, transform);
+    stroke_path(pixmap, teeth, color, SYMBOL_STROKE_WIDTH, transform);
 }
 
 fn draw_script_badge(
@@ -149,7 +152,7 @@ fn draw_script_badge(
     badge.line_to(left, top + 0.08 * size);
     badge.quad_to(left, top, left + 0.08 * size, top);
     badge.close();
-    stroke_path(pixmap, badge, color, 1.7, transform);
+    stroke_path(pixmap, badge, color, SYMBOL_STROKE_WIDTH, transform);
     let mut letters = PathBuilder::new();
     if kind == FileKind::JavaScript {
         letters.move_to(cx - 0.15 * size, cy - 0.16 * size);
@@ -168,7 +171,7 @@ fn draw_script_badge(
         letters.move_to(cx + 0.03 * size, cy - 0.02 * size);
         letters.line_to(cx + 0.15 * size, cy - 0.02 * size);
     }
-    stroke_path(pixmap, letters, color, 1.8, transform);
+    stroke_path(pixmap, letters, color, SYMBOL_STROKE_WIDTH, transform);
 }
 
 fn draw_symbol(
@@ -185,7 +188,7 @@ fn draw_symbol(
         FileKind::Python => {
             path.push_circle(cx - 0.09 * size, cy - 0.05 * size, 0.12 * size);
             path.push_circle(cx + 0.09 * size, cy + 0.05 * size, 0.12 * size);
-            stroke_path(pixmap, path, color, 1.6, transform);
+            stroke_path(pixmap, path, color, SYMBOL_STROKE_WIDTH, transform);
             return;
         }
         FileKind::Html => {
@@ -263,7 +266,7 @@ fn draw_symbol(
                 path.move_to(cx - 0.18 * size, cy + offset * size);
                 path.line_to(cx + 0.18 * size, cy + offset * size);
                 let node = if index % 2 == 0 { -0.08 } else { 0.08 };
-                path.push_circle(cx + node * size, cy + offset * size, 0.035 * size);
+                path.push_circle(cx + node * size, cy + offset * size, 0.05 * size);
             }
         }
         FileKind::Text | FileKind::Generic => {
@@ -284,7 +287,7 @@ fn draw_symbol(
             path.line_to(cx + 0.22 * size, cy);
         }
         FileKind::Image => {
-            path.push_circle(cx + 0.13 * size, cy - 0.13 * size, 0.05 * size);
+            path.push_circle(cx + 0.13 * size, cy - 0.13 * size, 0.065 * size);
             path.move_to(cx - 0.23 * size, cy + 0.18 * size);
             path.line_to(cx - 0.06 * size, cy - 0.04 * size);
             path.line_to(cx + 0.04 * size, cy + 0.08 * size);
@@ -306,7 +309,7 @@ fn draw_symbol(
         }
         FileKind::Folder | FileKind::Rust | FileKind::JavaScript | FileKind::TypeScript => return,
     }
-    stroke_path(pixmap, path, color, 1.6, transform);
+    stroke_path(pixmap, path, color, SYMBOL_STROKE_WIDTH, transform);
 }
 
 fn document_path(cx: f32, cy: f32, size: f32) -> PathBuilder {

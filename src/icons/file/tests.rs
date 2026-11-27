@@ -96,6 +96,16 @@ fn every_file_kind_draws_visible_procedural_ink() {
 }
 
 #[test]
+fn symbol_strokes_are_bold_enough_for_small_tree_icons() {
+    const {
+        assert!(
+            super::draw::SYMBOL_STROKE_WIDTH >= 2.0,
+            "small language/config symbols need at least a 2px logical stroke"
+        );
+    }
+}
+
+#[test]
 fn specialized_glyphs_are_distinct_from_the_generic_document() {
     let generic = rendered(FileKind::Generic);
     let specialized = [

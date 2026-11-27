@@ -79,6 +79,26 @@ fn folder_rows_use_folder_glyph_color() {
 }
 
 #[test]
+fn tree_icons_are_large_without_touching_labels() {
+    const {
+        assert!(ICON_SIZE >= 18.0, "tree icons need at least 18 logical px");
+        assert!(
+            ICON_SIZE + 2.0 <= ROW_H,
+            "icons must retain vertical breathing room"
+        );
+    }
+
+    // The shield is the widest stroked file glyph; its right edge must stay
+    // clear of the existing label origin at indent+20.
+    let widest_symbol_right =
+        2.0 + ICON_SIZE / 2.0 + 0.4 * ICON_SIZE + f64::from(crate::icons::ICON_STROKE_WIDTH) / 2.0;
+    assert!(
+        widest_symbol_right <= 20.0,
+        "larger icons would collide with row labels: {widest_symbol_right}"
+    );
+}
+
+#[test]
 fn tree_icon_positions_scale_exactly_once() {
     let (_d, tree) = panel_fixture("tree-icon-hidpi");
     let mut theme = panel_theme();

@@ -28,8 +28,8 @@ pub const ROW_H: f64 = 22.0;
 pub const INDENT_PX: f64 = 16.0;
 /// Width of the clickable chevron zone at a row's indent (dirs only).
 pub const CHEVRON_ZONE: f64 = 16.0;
-/// Nominal icon box edge (chevron and file icons).
-pub const ICON_SIZE: f64 = 16.0;
+/// Nominal folder/file icon box edge in logical pixels.
+pub const ICON_SIZE: f64 = 18.0;
 /// Width of the scrollbar track occupying the panel's right edge; rows
 /// (backgrounds and hit testing) stay left of it.
 pub const TRACK_W: f64 = 8.0;
