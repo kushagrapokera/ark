@@ -71,8 +71,8 @@ Phase 0–5 implementation is complete: packaging, curl bootstrap, updater
 helper, update UI, signed release automation, and the supplied 256×256 icon.
 Remaining release work:
 
-- Public publication approval and the exact public curl-command check.
 - Ubuntu 24.04 and Fedora Workstation clean-system verification.
+- Optional release announcement.
 
 ---
 
@@ -689,8 +689,12 @@ main ark binary does not link updater networking or archive code.
   download recovered the embedded public key, matched fingerprint
   `5b62a8f3193b075ecc1ab8f556b7549dbf350ffe3a9e2f4b6cfa5f27c2425602`, and
   passed `verify-release.sh` signed mode.
-- The release remains a draft; public publication and the exact public curl
-  command are pending explicit approval.
+- The release is published at
+  `https://github.com/kushagrapokera/ark/releases/tag/v0.1.0-beta`.
+- The exact public `curl ... | sh` command installed `ark 0.1.0-beta` into a
+  clean HOME without Cargo; icon, updater, and first-frame smoke passed.
+- The installed updater verified the public signed manifest and reported
+  `event: up-to-date` for `0.1.0-beta`.
 
 ---
 
@@ -834,8 +838,8 @@ The curl bootstrap still trusts the installer host/TLS. Publish immutable versio
 - [x] Tag `vX.Y.Z`.
 - [x] Push tag when publication is authorized.
 - [x] Verify GitHub Release assets.
-- [ ] Test the exact public curl command.
-- [ ] Publish release notes.
+- [x] Test the exact public curl command.
+- [x] Publish release notes.
 - [ ] Announce release.
 
 ---
