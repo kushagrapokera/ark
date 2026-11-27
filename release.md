@@ -71,8 +71,7 @@ Phase 0–5 implementation is complete: packaging, curl bootstrap, updater
 helper, update UI, signed release automation, and the supplied 256×256 icon.
 Remaining release work:
 
-- Configure the `ARK_SIGNING_PRIVATE_KEY` GitHub Secret.
-- Authorize a test tag to produce and verify a draft GitHub Release.
+- Verify the draft GitHub Release assets.
 - Ubuntu 24.04 and Fedora Workstation clean-system verification.
 
 ---
@@ -642,7 +641,7 @@ main ark binary does not link updater networking or archive code.
 - [x] Generate tarball and `SHA256SUMS`.
 - [x] Generate and sign `latest.json`.
 - [x] Sign installer and release archive.
-- [ ] Store the private signing key in the `ARK_SIGNING_PRIVATE_KEY` GitHub Secret _(owner action)_.
+- [x] Store the private signing key in the `ARK_SIGNING_PRIVATE_KEY` GitHub Secret.
 - [x] Derive and embed only the public key in the release updater binary.
 - [x] Upload all assets to a draft GitHub Release.
 - [x] Download and verify published assets after upload.
@@ -657,9 +656,10 @@ main ark binary does not link updater networking or archive code.
 
 ### Required GitHub configuration
 
-- Add an unencrypted Ed25519 private key PEM as the `ARK_SIGNING_PRIVATE_KEY`
-  repository secret. The workflow derives the public key at build time; no
-  private key is committed or uploaded.
+- The `ARK_SIGNING_PRIVATE_KEY` repository secret is configured. The workflow
+  derives the public key at build time; no private key is committed or uploaded.
+- Release signing public-key SHA-256 fingerprint:
+  `5b62a8f3193b075ecc1ab8f556b7549dbf350ffe3a9e2f4b6cfa5f27c2425602`.
 - Optionally set the `ARK_MINIMUM_VERSION` repository variable. It defaults to
   `0.1.0-beta`.
 - The real 256×256 PNG is installed at `assets/icons/ark.png`; the workflow
@@ -683,8 +683,8 @@ main ark binary does not link updater networking or archive code.
   packaged and signed them, and passed signed verification. The test private key
   was removed and never placed in the repository or release directory.
 - No new Cargo dependencies were added.
-- A real tag-triggered draft release was not created: the signing secret and
-  publication authorization remain owner actions.
+- The `v0.1.0-beta` tag was pushed and the draft-release workflow started.
+- A real tag-triggered draft release asset verification is in progress.
 
 ---
 
@@ -817,16 +817,16 @@ The curl bootstrap still trusts the installer host/TLS. Publish immutable versio
 
 # Release-day checklist
 
-- [ ] Update `Cargo.toml` version.
-- [ ] Update `CHANGELOG.md`.
-- [ ] Run full test/lint/build gate.
-- [ ] Build and verify tarball.
-- [ ] Test curl installer on a clean HOME.
-- [ ] Test update from the previous release.
-- [ ] Record RSS/PSS.
-- [ ] Commit release changes.
-- [ ] Tag `vX.Y.Z`.
-- [ ] Push tag when publication is authorized.
+- [x] Update `Cargo.toml` version.
+- [x] Update `CHANGELOG.md`.
+- [x] Run full test/lint/build gate.
+- [x] Build and verify tarball.
+- [x] Test curl installer on a clean HOME.
+- [x] Test update from the previous release.
+- [x] Record RSS/PSS.
+- [x] Commit release changes.
+- [x] Tag `vX.Y.Z`.
+- [x] Push tag when publication is authorized.
 - [ ] Verify GitHub Release assets.
 - [ ] Test the exact public curl command.
 - [ ] Publish release notes.
