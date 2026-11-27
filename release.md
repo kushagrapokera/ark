@@ -67,11 +67,10 @@ The first release targets **Linux x86_64**, user-local installation, and GitHub 
 
 ## Current release blockers
 
-Phase 0 is complete except for the user-provided icon. Remaining release work:
+Phase 0 is complete except for the user-provided icon. Phase 1 packaging and
+versioned installation are complete. Remaining release work:
 
-- Application icon.
-- Source desktop entry and release packaging scripts.
-- Prebuilt release artifact.
+- User-provided 256×256 icon.
 - Curl bootstrap installer.
 - Updater helper and update UI.
 - CI/release workflow.
@@ -368,25 +367,26 @@ Validation rules:
 - `packaging/uninstall.sh`
 - `packaging/build-release.sh`
 - `packaging/verify-release.sh`
+- `tests/installer.sh`
 
 ### Tasks
 
-- [ ] Create desktop entry with `Exec=ark %f`, `Icon=ark`, and `StartupWMClass=ark`.
-- [ ] Implement POSIX `install-release.sh` using `#!/bin/sh` and `set -eu`.
-- [ ] Detect unsupported operating systems and architectures.
-- [ ] Smoke-test bundled `ark --version`.
-- [ ] Stage installation under the XDG data directory.
-- [ ] Install into `versions/<version>`.
-- [ ] Atomically update `current`.
-- [ ] Create `~/.local/bin/ark` symlink.
-- [ ] Install desktop entry with absolute `Exec`.
-- [ ] Install icon.
-- [ ] Write `install.json`.
-- [ ] Preserve the previous version.
-- [ ] Print PATH instructions when necessary.
-- [ ] Implement uninstall with optional state/cache cleanup.
-- [ ] Implement tarball builder.
-- [ ] Implement release verifier.
+- [x] Create desktop entry with `Exec=ark %f`, `Icon=ark`, and `StartupWMClass=ark`.
+- [x] Implement POSIX `install-release.sh` using `#!/bin/sh` and `set -eu`.
+- [x] Detect unsupported operating systems and architectures.
+- [x] Smoke-test bundled `ark --version`.
+- [x] Stage installation under the XDG data directory.
+- [x] Install into `versions/<version>`.
+- [x] Atomically update `current`.
+- [x] Create `~/.local/bin/ark` symlink.
+- [x] Install desktop entry with absolute `Exec`.
+- [x] Install icon when present; real icon asset remains pending.
+- [x] Write `install.json`.
+- [x] Preserve the previous version.
+- [x] Print PATH instructions when necessary.
+- [x] Implement uninstall with optional state/cache cleanup.
+- [x] Implement tarball builder.
+- [x] Implement release verifier.
 
 ### Acceptance
 
@@ -396,6 +396,21 @@ Validation rules:
 - Reinstall replaces the same version safely.
 - Failed smoke test leaves `current` unchanged.
 - Uninstall removes ark-created files without touching project files.
+
+### Evidence — 2026-11-27
+
+- `tests/installer.sh`: passed, including reinstall, upgrade retention, broken
+  bundle rejection, unsupported architecture, checksum corruption, and purge.
+- `sh -n packaging/*.sh tests/installer.sh`: passed.
+- `desktop-file-validate packaging/ark.desktop`: passed.
+- Built and verified a real `0.1.0-beta` x86_64 tarball.
+- Installed the tarball into a temporary HOME and ran `ark --version`.
+- Ran the installed binary with `ARK_SMOKE=1`; first frame presented successfully.
+- Uninstalled the smoke install successfully.
+- `cargo test`: 404 passed, 0 failed, 5 ignored; 5/5 CLI tests passed.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `cargo build --release`: succeeded.
+- `shellcheck` was not installed on this machine.
 
 ---
 

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ark
+GenericName=Code Editor
+Comment=Ultra-lightweight agent-first code editor
+Exec=ark %f
+Icon=ark
+Terminal=false
+Categories=Utility;TextEditor;
+StartupNotify=true
+StartupWMClass=ark
