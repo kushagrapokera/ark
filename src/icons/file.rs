@@ -3,7 +3,14 @@ use std::path::Path;
 use crate::render::{ColorRgb, Theme};
 
 mod draw;
-pub use draw::draw;
+pub use draw::draw_with_palette as draw;
+
+/// Two-color procedural icon palette. Both values are existing theme tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilePalette {
+    pub main: ColorRgb,
+    pub glyph: ColorRgb,
+}
 
 /// Procedural explorer glyphs. Classification borrows the path and returns a
 /// Copy enum: no per-file strings, maps, bitmap assets, or retained icon cache.
@@ -138,6 +145,44 @@ impl FileKind {
             Self::Generic => theme.text_muted,
         }
     }
+
+    /// Pick a high-contrast theme token for the badge's foreground.
+    pub fn palette(self, theme: &Theme) -> FilePalette {
+        let main = self.color(theme);
+        // The blue accent is the only dark badge in either bundled theme;
+        // every other badge color is light enough for the window background.
+        let glyph = if self == Self::Css {
+            theme.on_accent
+        } else {
+            theme.bg
+        };
+        FilePalette { main, glyph }
+    }
+}
+
+#[cfg(test)]
+fn contrast_ratio(left: ColorRgb, right: ColorRgb) -> f64 {
+    let left = relative_luminance(left);
+    let right = relative_luminance(right);
+    let (bright, dim) = if left > right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    (bright + 0.05) / (dim + 0.05)
+}
+
+#[cfg(test)]
+fn relative_luminance(color: ColorRgb) -> f64 {
+    let channel = |value: u8| {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.0) + 0.7152 * channel(color.1) + 0.0722 * channel(color.2)
 }
 
 #[cfg(test)]

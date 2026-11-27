@@ -500,7 +500,7 @@ pub fn draw_tree_panel_with_insertion(
             icon_x as f32,
             cy_logical as f32,
             ICON_SIZE as f32,
-            kind.color(theme),
+            kind.palette(theme),
             scale,
             row.expanded,
         );

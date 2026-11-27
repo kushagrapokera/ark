@@ -1,52 +1,37 @@
 use crate::render::ColorRgb;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-use super::super::ICON_STROKE_WIDTH;
 use super::FileKind;
+use super::FilePalette;
 
-/// Minimum stroke for symbols drawn inside the larger file outline.
+mod lettering;
+
+/// Bold logical stroke used for badge letters and pictograms.
 pub(super) const SYMBOL_STROKE_WIDTH: f32 = 2.0;
 
-/// Draw one glyph directly into the framebuffer. `cx`, `cy`, and `size` are
-/// logical pixels; `scale` is applied exactly once by the transform. Paths are
-/// short-lived draw scratch: nothing is cached between frames or retained per
-/// tree row.
+/// Draw one high-contrast Explorer badge directly into the framebuffer.
+/// Coordinates and size are logical; the effective scale is applied once.
 #[allow(clippy::too_many_arguments)]
-pub fn draw(
+pub fn draw_with_palette(
     pixmap: &mut Pixmap,
     kind: FileKind,
     cx: f32,
     cy: f32,
     size: f32,
-    color: ColorRgb,
+    palette: FilePalette,
     scale: f64,
     expanded: bool,
 ) {
-    if !(size > 0.0 && scale > 0.0) {
+    if !(size > 0.0 && scale.is_finite() && scale > 0.0) {
         return;
     }
     let transform = Transform::from_scale(scale as f32, scale as f32);
-    match kind {
-        FileKind::Folder => draw_folder(pixmap, cx, cy, size, color, expanded, transform),
-        _ => {
-            if matches!(kind, FileKind::Html | FileKind::Css) {
-                draw_shield(pixmap, cx, cy, size, color, transform);
-            } else if matches!(kind, FileKind::Rust) {
-                draw_rust(pixmap, cx, cy, size, color, transform);
-            } else if matches!(kind, FileKind::JavaScript | FileKind::TypeScript) {
-                draw_script_badge(pixmap, cx, cy, size, color, transform, kind);
-            } else {
-                stroke_path(
-                    pixmap,
-                    document_path(cx, cy, size),
-                    color,
-                    ICON_STROKE_WIDTH,
-                    transform,
-                );
-            }
-            draw_symbol(pixmap, kind, cx, cy, size, color, transform);
-        }
+    if kind == FileKind::Folder {
+        draw_folder(pixmap, cx, cy, size, palette.main, expanded, transform);
+        return;
     }
+    draw_badge(pixmap, kind, cx, cy, size, palette.main, transform);
+    draw_mark(pixmap, kind, cx, cy, size, palette.glyph, transform);
 }
 
 fn draw_folder(
@@ -88,8 +73,9 @@ fn draw_folder(
     fill_path(pixmap, path, color, transform);
 }
 
-fn draw_shield(
+fn draw_badge(
     pixmap: &mut Pixmap,
+    kind: FileKind,
     cx: f32,
     cy: f32,
     size: f32,
@@ -97,84 +83,33 @@ fn draw_shield(
     transform: Transform,
 ) {
     let mut path = PathBuilder::new();
-    path.move_to(cx, cy - 0.40 * size);
-    path.line_to(cx + 0.34 * size, cy - 0.26 * size);
-    path.line_to(cx + 0.29 * size, cy + 0.16 * size);
-    path.quad_to(cx, cy + 0.42 * size, cx - 0.29 * size, cy + 0.16 * size);
-    path.line_to(cx - 0.34 * size, cy - 0.26 * size);
-    path.close();
-    stroke_path(pixmap, path, color, ICON_STROKE_WIDTH, transform);
-}
-
-fn draw_rust(
-    pixmap: &mut Pixmap,
-    cx: f32,
-    cy: f32,
-    size: f32,
-    color: ColorRgb,
-    transform: Transform,
-) {
-    let mut gear = PathBuilder::new();
-    gear.push_circle(cx, cy, 0.24 * size);
-    stroke_path(pixmap, gear, color, ICON_STROKE_WIDTH, transform);
-    let mut teeth = PathBuilder::new();
-    for index in 0..8 {
-        let angle = std::f32::consts::TAU * index as f32 / 8.0;
-        let sin = angle.sin();
-        let cos = angle.cos();
-        teeth.move_to(cx + cos * 0.29 * size, cy + sin * 0.29 * size);
-        teeth.line_to(cx + cos * 0.39 * size, cy + sin * 0.39 * size);
-    }
-    stroke_path(pixmap, teeth, color, SYMBOL_STROKE_WIDTH, transform);
-}
-
-fn draw_script_badge(
-    pixmap: &mut Pixmap,
-    cx: f32,
-    cy: f32,
-    size: f32,
-    color: ColorRgb,
-    transform: Transform,
-    kind: FileKind,
-) {
-    let mut badge = PathBuilder::new();
-    let left = cx - 0.34 * size;
-    let right = cx + 0.34 * size;
-    let top = cy - 0.34 * size;
-    let bottom = cy + 0.34 * size;
-    badge.move_to(left + 0.08 * size, top);
-    badge.line_to(right - 0.08 * size, top);
-    badge.quad_to(right, top, right, top + 0.08 * size);
-    badge.line_to(right, bottom - 0.08 * size);
-    badge.quad_to(right, bottom, right - 0.08 * size, bottom);
-    badge.line_to(left + 0.08 * size, bottom);
-    badge.quad_to(left, bottom, left, bottom - 0.08 * size);
-    badge.line_to(left, top + 0.08 * size);
-    badge.quad_to(left, top, left + 0.08 * size, top);
-    badge.close();
-    stroke_path(pixmap, badge, color, SYMBOL_STROKE_WIDTH, transform);
-    let mut letters = PathBuilder::new();
-    if kind == FileKind::JavaScript {
-        letters.move_to(cx - 0.15 * size, cy - 0.16 * size);
-        letters.line_to(cx - 0.20 * size, cy + 0.18 * size);
-        letters.move_to(cx + 0.04 * size, cy - 0.18 * size);
-        letters.line_to(cx + 0.17 * size, cy - 0.12 * size);
-        letters.line_to(cx + 0.17 * size, cy + 0.02 * size);
-        letters.line_to(cx + 0.02 * size, cy + 0.02 * size);
-        letters.line_to(cx + 0.18 * size, cy + 0.18 * size);
+    if matches!(kind, FileKind::Html | FileKind::Css) {
+        path.move_to(cx, cy - 0.42 * size);
+        path.line_to(cx + 0.37 * size, cy - 0.27 * size);
+        path.line_to(cx + 0.31 * size, cy + 0.17 * size);
+        path.quad_to(cx, cy + 0.44 * size, cx - 0.31 * size, cy + 0.17 * size);
+        path.line_to(cx - 0.37 * size, cy - 0.27 * size);
     } else {
-        letters.move_to(cx - 0.20 * size, cy - 0.17 * size);
-        letters.line_to(cx - 0.20 * size, cy + 0.18 * size);
-        letters.move_to(cx - 0.20 * size, cy - 0.17 * size);
-        letters.line_to(cx + 0.02 * size, cy - 0.17 * size);
-        letters.line_to(cx + 0.18 * size, cy + 0.18 * size);
-        letters.move_to(cx + 0.03 * size, cy - 0.02 * size);
-        letters.line_to(cx + 0.15 * size, cy - 0.02 * size);
+        let left = cx - 0.42 * size;
+        let right = cx + 0.42 * size;
+        let top = cy - 0.42 * size;
+        let bottom = cy + 0.42 * size;
+        let radius = 0.12 * size;
+        path.move_to(left + radius, top);
+        path.line_to(right - radius, top);
+        path.quad_to(right, top, right, top + radius);
+        path.line_to(right, bottom - radius);
+        path.quad_to(right, bottom, right - radius, bottom);
+        path.line_to(left + radius, bottom);
+        path.quad_to(left, bottom, left, bottom - radius);
+        path.line_to(left, top + radius);
+        path.quad_to(left, top, left + radius, top);
     }
-    stroke_path(pixmap, letters, color, SYMBOL_STROKE_WIDTH, transform);
+    path.close();
+    fill_path(pixmap, path, color, transform);
 }
 
-fn draw_symbol(
+fn draw_mark(
     pixmap: &mut Pixmap,
     kind: FileKind,
     cx: f32,
@@ -183,152 +118,104 @@ fn draw_symbol(
     color: ColorRgb,
     transform: Transform,
 ) {
-    let mut path = PathBuilder::new();
-    match kind {
-        FileKind::Python => {
-            path.push_circle(cx - 0.09 * size, cy - 0.05 * size, 0.12 * size);
-            path.push_circle(cx + 0.09 * size, cy + 0.05 * size, 0.12 * size);
-            stroke_path(pixmap, path, color, SYMBOL_STROKE_WIDTH, transform);
+    let label = match kind {
+        FileKind::Rust => Some("R"),
+        FileKind::Python => Some("PY"),
+        FileKind::Html => Some("<>"),
+        FileKind::Css => Some("#"),
+        FileKind::JavaScript => Some("JS"),
+        FileKind::TypeScript => Some("TS"),
+        FileKind::Json => Some("{}"),
+        FileKind::Markdown => Some("MD"),
+        FileKind::Env => Some(">_"),
+        FileKind::Toml => Some("T"),
+        FileKind::Yaml => Some("Y"),
+        FileKind::Text => Some("TXT"),
+        FileKind::Csv => Some("CSV"),
+        FileKind::Image => {
+            draw_image(pixmap, cx, cy, size, color, transform);
             return;
         }
-        FileKind::Html => {
-            path.move_to(cx - 0.14 * size, cy - 0.13 * size);
-            path.line_to(cx + 0.13 * size, cy - 0.13 * size);
-            path.move_to(cx - 0.15 * size, cy - 0.13 * size);
-            path.line_to(cx - 0.04 * size, cy + 0.02 * size);
-            path.line_to(cx - 0.15 * size, cy + 0.16 * size);
-            path.move_to(cx + 0.15 * size, cy - 0.13 * size);
-            path.line_to(cx + 0.04 * size, cy + 0.02 * size);
-            path.line_to(cx + 0.15 * size, cy + 0.16 * size);
-        }
-        FileKind::Css => {
-            for offset in [-0.12, 0.02, 0.16] {
-                path.move_to(cx - 0.16 * size, cy + offset * size);
-                path.line_to(cx + 0.16 * size, cy + offset * size);
-            }
-        }
-        FileKind::Json => {
-            path.move_to(cx - 0.12 * size, cy - 0.18 * size);
-            path.cubic_to(
-                cx - 0.26 * size,
-                cy - 0.18 * size,
-                cx - 0.22 * size,
-                cy,
-                cx - 0.12 * size,
-                cy,
-            );
-            path.cubic_to(
-                cx - 0.24 * size,
-                cy,
-                cx - 0.24 * size,
-                cy + 0.20 * size,
-                cx - 0.10 * size,
-                cy + 0.20 * size,
-            );
-            path.move_to(cx + 0.12 * size, cy - 0.18 * size);
-            path.cubic_to(
-                cx + 0.26 * size,
-                cy - 0.18 * size,
-                cx + 0.22 * size,
-                cy,
-                cx + 0.12 * size,
-                cy,
-            );
-            path.cubic_to(
-                cx + 0.24 * size,
-                cy,
-                cx + 0.24 * size,
-                cy + 0.20 * size,
-                cx + 0.10 * size,
-                cy + 0.20 * size,
-            );
-        }
-        FileKind::Markdown => {
-            path.move_to(cx - 0.17 * size, cy + 0.10 * size);
-            path.line_to(cx - 0.17 * size, cy - 0.12 * size);
-            path.line_to(cx - 0.06 * size, cy - 0.02 * size);
-            path.line_to(cx + 0.05 * size, cy - 0.12 * size);
-            path.line_to(cx + 0.05 * size, cy + 0.10 * size);
-            path.move_to(cx + 0.17 * size, cy - 0.16 * size);
-            path.line_to(cx + 0.17 * size, cy + 0.08 * size);
-            path.line_to(cx + 0.10 * size, cy + 0.01 * size);
-            path.line_to(cx + 0.17 * size, cy + 0.08 * size);
-        }
-        FileKind::Env => {
-            path.move_to(cx - 0.20 * size, cy - 0.15 * size);
-            path.line_to(cx - 0.10 * size, cy - 0.04 * size);
-            path.line_to(cx - 0.20 * size, cy + 0.07 * size);
-            path.move_to(cx - 0.02 * size, cy + 0.10 * size);
-            path.line_to(cx + 0.18 * size, cy + 0.10 * size);
-        }
-        FileKind::Toml | FileKind::Yaml => {
-            for (index, offset) in [-0.13, 0.02, 0.17].into_iter().enumerate() {
-                path.move_to(cx - 0.18 * size, cy + offset * size);
-                path.line_to(cx + 0.18 * size, cy + offset * size);
-                let node = if index % 2 == 0 { -0.08 } else { 0.08 };
-                path.push_circle(cx + node * size, cy + offset * size, 0.05 * size);
-            }
-        }
-        FileKind::Text | FileKind::Generic => {
-            for offset in [-0.12, 0.02, 0.16] {
-                path.move_to(cx - 0.17 * size, cy + offset * size);
-                path.line_to(cx + 0.17 * size, cy + offset * size);
-            }
-        }
-        FileKind::Csv => {
-            path.move_to(cx - 0.22 * size, cy - 0.20 * size);
-            path.line_to(cx + 0.22 * size, cy - 0.20 * size);
-            path.line_to(cx + 0.22 * size, cy + 0.20 * size);
-            path.line_to(cx - 0.22 * size, cy + 0.20 * size);
-            path.close();
-            path.move_to(cx, cy - 0.20 * size);
-            path.line_to(cx, cy + 0.20 * size);
-            path.move_to(cx - 0.22 * size, cy);
-            path.line_to(cx + 0.22 * size, cy);
-        }
-        FileKind::Image => {
-            path.push_circle(cx + 0.13 * size, cy - 0.13 * size, 0.065 * size);
-            path.move_to(cx - 0.23 * size, cy + 0.18 * size);
-            path.line_to(cx - 0.06 * size, cy - 0.04 * size);
-            path.line_to(cx + 0.04 * size, cy + 0.08 * size);
-            path.line_to(cx + 0.13 * size, cy - 0.01 * size);
-            path.line_to(cx + 0.24 * size, cy + 0.18 * size);
-            path.close();
-        }
         FileKind::Archive => {
-            path.move_to(cx - 0.23 * size, cy - 0.08 * size);
-            path.line_to(cx + 0.23 * size, cy - 0.08 * size);
-            path.line_to(cx + 0.23 * size, cy + 0.22 * size);
-            path.line_to(cx - 0.23 * size, cy + 0.22 * size);
-            path.close();
-            path.move_to(cx - 0.23 * size, cy - 0.08 * size);
-            path.line_to(cx, cy + 0.04 * size);
-            path.line_to(cx + 0.23 * size, cy - 0.08 * size);
-            path.move_to(cx, cy + 0.04 * size);
-            path.line_to(cx, cy + 0.22 * size);
+            draw_archive(pixmap, cx, cy, size, color, transform);
+            return;
         }
-        FileKind::Folder | FileKind::Rust | FileKind::JavaScript | FileKind::TypeScript => return,
+        FileKind::Generic => {
+            draw_generic(pixmap, cx, cy, size, color, transform);
+            return;
+        }
+        FileKind::Folder => return,
+    };
+    if let Some(label) = label {
+        lettering::draw_label(pixmap, label, cx, cy, size, color, transform);
+    }
+    if kind == FileKind::Json {
+        let mut dot = PathBuilder::new();
+        dot.push_circle(cx, cy, 0.045 * size);
+        fill_path(pixmap, dot, color, transform);
+    }
+}
+
+fn draw_generic(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    color: ColorRgb,
+    transform: Transform,
+) {
+    let mut path = PathBuilder::new();
+    for offset in [-0.18, 0.0, 0.18] {
+        path.move_to(cx - 0.23 * size, cy + offset * size);
+        path.line_to(cx + 0.23 * size, cy + offset * size);
     }
     stroke_path(pixmap, path, color, SYMBOL_STROKE_WIDTH, transform);
 }
 
-fn document_path(cx: f32, cy: f32, size: f32) -> PathBuilder {
-    let left = cx - 0.27 * size;
-    let right = cx + 0.27 * size;
-    let top = cy - 0.38 * size;
-    let bottom = cy + 0.38 * size;
-    let fold = 0.16 * size;
+fn draw_image(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    color: ColorRgb,
+    transform: Transform,
+) {
+    let mut sun = PathBuilder::new();
+    sun.push_circle(cx + 0.17 * size, cy - 0.17 * size, 0.065 * size);
+    fill_path(pixmap, sun, color, transform);
+
+    let mut mountain = PathBuilder::new();
+    mountain.move_to(cx - 0.27 * size, cy + 0.22 * size);
+    mountain.line_to(cx - 0.07 * size, cy - 0.03 * size);
+    mountain.line_to(cx + 0.04 * size, cy + 0.12 * size);
+    mountain.line_to(cx + 0.15 * size, cy - 0.01 * size);
+    mountain.line_to(cx + 0.28 * size, cy + 0.22 * size);
+    mountain.close();
+    stroke_path(pixmap, mountain, color, SYMBOL_STROKE_WIDTH, transform);
+}
+
+fn draw_archive(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    color: ColorRgb,
+    transform: Transform,
+) {
     let mut path = PathBuilder::new();
-    path.move_to(left, top);
-    path.line_to(right - fold, top);
-    path.line_to(right, top + fold);
-    path.line_to(right, bottom);
-    path.line_to(left, bottom);
+    path.move_to(cx - 0.25 * size, cy - 0.12 * size);
+    path.line_to(cx + 0.25 * size, cy - 0.12 * size);
+    path.line_to(cx + 0.25 * size, cy + 0.27 * size);
+    path.line_to(cx - 0.25 * size, cy + 0.27 * size);
     path.close();
-    path.move_to(right - fold, top);
-    path.line_to(right - fold, top + fold);
-    path.line_to(right, top + fold);
-    path
+    path.move_to(cx - 0.25 * size, cy - 0.12 * size);
+    path.line_to(cx, cy - 0.02 * size);
+    path.line_to(cx + 0.25 * size, cy - 0.12 * size);
+    path.move_to(cx, cy - 0.02 * size);
+    path.line_to(cx, cy + 0.27 * size);
+    path.move_to(cx - 0.08 * size, cy - 0.02 * size);
+    path.line_to(cx + 0.08 * size, cy - 0.02 * size);
+    stroke_path(pixmap, path, color, SYMBOL_STROKE_WIDTH, transform);
 }
 
 fn stroke_path(

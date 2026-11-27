@@ -88,10 +88,9 @@ fn tree_icons_are_large_without_touching_labels() {
         );
     }
 
-    // The shield is the widest stroked file glyph; its right edge must stay
+    // The filled badge is the widest file glyph; its right edge must stay
     // clear of the existing label origin at indent+20.
-    let widest_symbol_right =
-        2.0 + ICON_SIZE / 2.0 + 0.4 * ICON_SIZE + f64::from(crate::icons::ICON_STROKE_WIDTH) / 2.0;
+    let widest_symbol_right = 2.0 + ICON_SIZE / 2.0 + 0.42 * ICON_SIZE;
     assert!(
         widest_symbol_right <= 20.0,
         "larger icons would collide with row labels: {widest_symbol_right}"

@@ -58,12 +58,27 @@ fn rendered(kind: FileKind) -> Pixmap {
         kind,
         16.0,
         16.0,
-        24.0,
-        (255, 255, 255),
+        18.0,
+        FilePalette {
+            main: (32, 96, 192),
+            glyph: (255, 255, 255),
+        },
         1.0,
         false,
     );
     pixmap
+}
+
+fn count_color(pixmap: &Pixmap, color: crate::render::ColorRgb) -> usize {
+    let (pixels, _) = pixmap.data().as_chunks::<4>();
+    pixels
+        .iter()
+        .filter(|pixel| pixel[0] == color.0 && pixel[1] == color.1 && pixel[2] == color.2)
+        .count()
+}
+
+fn assert_distinct(left: &Pixmap, right: &Pixmap, message: &str) {
+    assert!(left.data() != right.data(), "{message}");
 }
 
 #[test]
@@ -106,6 +121,67 @@ fn symbol_strokes_are_bold_enough_for_small_tree_icons() {
 }
 
 #[test]
+fn language_badges_render_contrasting_marks() {
+    let main = (32, 96, 192);
+    let glyph = (255, 255, 255);
+    for kind in [
+        FileKind::Rust,
+        FileKind::Python,
+        FileKind::Html,
+        FileKind::Css,
+        FileKind::JavaScript,
+        FileKind::TypeScript,
+        FileKind::Json,
+        FileKind::Markdown,
+        FileKind::Env,
+        FileKind::Toml,
+        FileKind::Yaml,
+        FileKind::Text,
+        FileKind::Csv,
+    ] {
+        let pixmap = rendered(kind);
+        assert!(
+            count_color(&pixmap, main) > 20,
+            "{kind:?} needs a filled badge"
+        );
+        assert!(
+            count_color(&pixmap, glyph) > 5,
+            "{kind:?} needs a visible contrasting mark"
+        );
+    }
+}
+
+#[test]
+fn palette_foregrounds_are_high_contrast_in_bundled_themes() {
+    for theme in [crate::render::Theme::DARK, crate::render::Theme::DARK_PLUS] {
+        for kind in [
+            FileKind::Rust,
+            FileKind::Python,
+            FileKind::Html,
+            FileKind::Css,
+            FileKind::JavaScript,
+            FileKind::TypeScript,
+            FileKind::Json,
+            FileKind::Markdown,
+            FileKind::Env,
+            FileKind::Toml,
+            FileKind::Yaml,
+            FileKind::Text,
+            FileKind::Csv,
+            FileKind::Image,
+            FileKind::Archive,
+            FileKind::Generic,
+        ] {
+            let palette = kind.palette(&theme);
+            assert!(
+                super::contrast_ratio(palette.main, palette.glyph) >= 4.5,
+                "{kind:?} needs a readable foreground"
+            );
+        }
+    }
+}
+
+#[test]
 fn specialized_glyphs_are_distinct_from_the_generic_document() {
     let generic = rendered(FileKind::Generic);
     let specialized = [
@@ -125,20 +201,25 @@ fn specialized_glyphs_are_distinct_from_the_generic_document() {
         FileKind::Archive,
     ];
     for kind in specialized {
-        assert_ne!(
-            rendered(kind).data(),
-            generic.data(),
-            "{kind:?} must not use the generic document glyph"
+        assert_distinct(
+            &rendered(kind),
+            &generic,
+            &format!("{kind:?} must not use the generic document glyph"),
         );
     }
-    assert_ne!(
-        rendered(FileKind::Html).data(),
-        rendered(FileKind::Css).data(),
-        "HTML and CSS need distinct symbols"
+    assert_distinct(
+        &rendered(FileKind::Html),
+        &rendered(FileKind::Css),
+        "HTML and CSS need distinct symbols",
     );
-    assert_ne!(
-        rendered(FileKind::JavaScript).data(),
-        rendered(FileKind::TypeScript).data(),
-        "JavaScript and TypeScript need distinct symbols"
+    assert_distinct(
+        &rendered(FileKind::JavaScript),
+        &rendered(FileKind::TypeScript),
+        "JavaScript and TypeScript need distinct symbols",
+    );
+    assert_distinct(
+        &rendered(FileKind::Toml),
+        &rendered(FileKind::Yaml),
+        "TOML and YAML need distinct symbols",
     );
 }
