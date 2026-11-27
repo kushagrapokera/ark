@@ -50,12 +50,14 @@ esac
 if [ "${ARK_SKIP_BUILD:-0}" != "1" ]; then
     need cargo
     cargo build --release --locked --bin ark
+    cargo build --release --locked --bin ark-updater --features updater
 fi
 
 BINARY=${ARK_BINARY:-$ROOT/target/release/ark}
 ICON=${ARK_ICON:-$ROOT/assets/icons/ark.png}
 UPDATER=${ARK_UPDATER:-$ROOT/target/release/ark-updater}
-[ -x "$BINARY" ] || die "release binary not found: $BINARY"
+[ -x "$BINARY" ] || die "release binary not found: $BINARY (set ARK_BINARY to override)"
+[ -x "$UPDATER" ] || die "release updater not found: $UPDATER (set ARK_UPDATER to override)"
 [ -f "$ICON" ] || die "release icon not found: $ICON (set ARK_ICON to override)"
 
 OUTPUT_DIR=${ARK_OUTPUT_DIR:-$ROOT/target/release}
@@ -70,11 +72,8 @@ rm -f "$ARCHIVE" "$OUTPUT_DIR/SHA256SUMS"
 mkdir -p "$RELEASE_DIR/icons"
 
 cp "$BINARY" "$RELEASE_DIR/ark"
-chmod 755 "$RELEASE_DIR/ark"
-if [ -f "$UPDATER" ]; then
-    cp "$UPDATER" "$RELEASE_DIR/ark-updater"
-    chmod 755 "$RELEASE_DIR/ark-updater"
-fi
+cp "$UPDATER" "$RELEASE_DIR/ark-updater"
+chmod 755 "$RELEASE_DIR/ark" "$RELEASE_DIR/ark-updater"
 cp "$ROOT/packaging/ark.desktop" "$RELEASE_DIR/ark.desktop"
 cp "$ROOT/packaging/install-release.sh" "$RELEASE_DIR/install-release.sh"
 cp "$ROOT/packaging/uninstall.sh" "$RELEASE_DIR/uninstall.sh"

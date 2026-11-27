@@ -67,14 +67,12 @@ The first release targets **Linux x86_64**, user-local installation, and GitHub 
 
 ## Current release blockers
 
-Phase 0 is complete except for the user-provided icon. Phase 1 packaging and
-versioned installation are complete. Phase 2 bootstrap generation is complete;
-public upload remains pending. Remaining release work:
+Phase 0 is complete except for the user-provided icon. Phases 1–3 are complete:
+packaging, curl bootstrap, and the updater helper. Remaining release work:
 
 - User-provided 256×256 icon.
-- GitHub release upload workflow.
-- Updater helper and update UI.
-- Release signing and manifest.
+- Phase 4 update UI.
+- Phase 5 signing and GitHub release workflow.
 
 ---
 
@@ -469,51 +467,56 @@ Validation rules:
 ### Files
 
 - `src/update.rs`
-- `src/bin/ark-updater.rs`
+- `src/update/archive.rs`
+- `src/update/error.rs`
+- `src/update/install.rs`
+- `src/update/json.rs`
+- `src/update/layout.rs`
+- `src/update/manifest.rs`
+- `src/update/tests.rs`
+- `src/update/version.rs`
+- `src/lib.rs`
+- `src/bin/ark-updater/main.rs`
+- `src/bin/ark-updater/archive.rs`
+- `src/bin/ark-updater/download.rs`
+- `src/bin/ark-updater/install.rs`
+- `src/bin/ark-updater/state.rs`
 - `Cargo.toml`
-- `tests/update.rs`
+- `packaging/build-release.sh`
+- `packaging/verify-release.sh`
+- `tests/installer.sh`
+- `tests/curl-installer.sh`
+- `tests/update.sh`
 
 ### Dependency gate
 
-Do not add dependencies until approved. Candidate helper-only stack:
+No new Cargo dependencies were added. The helper uses the same Linux system
+tools as the installer (`curl`/`wget`, `tar`, `sha256sum`) plus OpenSSL for
+Ed25519 verification. The shared model includes a bounded, dependency-free
+JSON parser.
 
-- `self_update` lower-level utilities, or `ureq` + `rustls`;
-- `tar` + `flate2`;
-- `sha2`;
-- `zipsign-api` or another approved signature verifier;
-- `serde_json`;
-- `tempfile`.
-
-Use optional Cargo features so a normal ark build does not link updater dependencies:
-
-```toml
-[features]
-updater = []
-
-[[bin]]
-name = "ark-updater"
-path = "src/bin/ark-updater.rs"
-required-features = ["updater"]
-```
+The updater target is feature-gated so normal ark builds remain unchanged. The
+main ark binary does not link updater networking or archive code.
 
 ### Tasks
 
-- [ ] Add pure version parsing/comparison tests first.
-- [ ] Add target selection tests.
-- [ ] Add XDG path resolution tests.
-- [ ] Add manifest validation tests.
-- [ ] Add archive path-safety tests.
-- [ ] Implement `ark-updater check`.
-- [ ] Implement `ark-updater stage`.
-- [ ] Implement `ark-updater apply`.
-- [ ] Implement `ark-updater rollback`.
-- [ ] Enforce download-size and disk-space limits.
-- [ ] Verify signature and checksum before extraction.
-- [ ] Extract into a same-filesystem staging directory.
-- [ ] Smoke-test staged binaries.
-- [ ] Switch `current` atomically.
-- [ ] Retain previous version.
-- [ ] Clean stale download/cache files with a bounded retention policy.
+- [x] Add pure version parsing/comparison tests first.
+- [x] Add target selection tests.
+- [x] Add XDG path resolution tests.
+- [x] Add manifest validation tests.
+- [x] Add archive path-safety tests.
+- [x] Implement `ark-updater check`.
+- [x] Implement `ark-updater stage`.
+- [x] Implement `ark-updater apply`.
+- [x] Implement `ark-updater rollback`.
+- [x] Enforce download-size and disk-space limits.
+- [x] Verify signature and checksum before extraction.
+- [x] Extract into a same-filesystem staging directory.
+- [x] Smoke-test staged binaries.
+- [x] Switch `current` atomically.
+- [x] Retain previous version.
+- [x] Require `ark-updater` in release tarballs and verify its `--version`.
+- [x] Clean stale download/cache files with a bounded retention policy.
 
 ### Acceptance
 
@@ -521,7 +524,31 @@ required-features = ["updater"]
 - A local HTTP release can be checked, staged, applied, and rolled back.
 - Failed verification never changes `current`.
 - Interrupted downloads leave the installed version untouched.
+- Release tarballs include an executable `ark-updater`.
 - Main ark binary builds without updater features.
+
+### Evidence — 2026-11-27
+
+- Nine shared updater unit tests passed.
+- `tests/installer.sh`: passed, including rejection of a release bundle without
+  `ark-updater` and verification of both packaged executables.
+- `tests/curl-installer.sh`: passed with the helper included in the tarball.
+- `tests/update.sh` passed with both curl and wget: local HTTP check, stage,
+  apply, rollback, apply-time downgrade rejection, outside-staging rejection,
+  apply/rollback metadata-write recovery, repeated rollback retention, invalid
+  signature, invalid checksum, size mismatch, oversized download, traversal
+  archive, downgrade check, and failed download.
+- `cargo test`: 413 unit tests passed, 0 failed, 5 ignored; 5/5 CLI tests
+  passed. `cargo test --all-features --all-targets` also passed.
+- `cargo clippy --all-targets --all-features -- -D warnings`: clean.
+- `cargo build --release --locked --bin ark`: succeeded without updater features.
+- `cargo build --release --locked --bin ark-updater --features updater`:
+  succeeded.
+- Built and verified a real `0.1.0-beta` tarball, installed it into a temporary
+  HOME, and ran both `ark --version` and `ark-updater --version`.
+- First-frame `ARK_SMOKE=1` run exited successfully with 23,548 KiB maximum RSS
+  (Python `resource.getrusage`); GNU `time` and `smem` were unavailable.
+- No new Cargo dependencies were added.
 
 ---
 

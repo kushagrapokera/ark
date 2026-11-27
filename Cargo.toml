@@ -54,6 +54,14 @@ alacritty_terminal = "0.26"
 # transitive deps).
 libc = "0.2"
 
+[features]
+updater = []
+
+[[bin]]
+name = "ark-updater"
+path = "src/bin/ark-updater/main.rs"
+required-features = ["updater"]
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

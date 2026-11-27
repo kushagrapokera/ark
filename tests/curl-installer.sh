@@ -34,6 +34,15 @@ fi
 exit 0
 EOF
 chmod 755 "$FIXTURE_BIN"
+cat > "$TMP/ark-updater" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+    echo "ark-updater 0.1.0-beta"
+    exit 0
+fi
+exit 0
+EOF
+chmod 755 "$TMP/ark-updater"
 printf 'fixture icon\n' > "$TMP/ark.png"
 
 DIST="$TMP/dist"
@@ -41,6 +50,7 @@ env \
     ARK_VERSION=0.1.0-beta \
     ARK_ARCH=x86_64 \
     ARK_BINARY="$FIXTURE_BIN" \
+    ARK_UPDATER="$TMP/ark-updater" \
     ARK_ICON="$TMP/ark.png" \
     ARK_SKIP_BUILD=1 \
     ARK_OUTPUT_DIR="$DIST" \

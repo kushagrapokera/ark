@@ -34,6 +34,15 @@ fi
 exit 0
 EOF
     chmod 755 "$FIXTURE/ark"
+    cat > "$FIXTURE/ark-updater" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = "--version" ]; then
+    echo "ark-updater 0.1.0-beta"
+    exit 0
+fi
+exit 0
+EOF
+    chmod 755 "$FIXTURE/ark-updater"
     cp "$ROOT/packaging/ark.desktop" "$FIXTURE/ark.desktop"
     cp "$ROOT/packaging/install-release.sh" "$FIXTURE/install-release.sh"
     cp "$ROOT/packaging/uninstall.sh" "$FIXTURE/uninstall.sh"
@@ -127,11 +136,24 @@ if run_installer ARK_ARCH=riscv64 "$FIXTURE/install-release.sh" > "$TMP/arch.out
     fail "unsupported architecture was accepted"
 fi
 
+if env \
+    ARK_VERSION=0.1.0-beta \
+    ARK_ARCH=x86_64 \
+    ARK_BINARY="$FIXTURE/ark" \
+    ARK_UPDATER="$TMP/missing-ark-updater" \
+    ARK_ICON="$FIXTURE/icons/ark.png" \
+    ARK_SKIP_BUILD=1 \
+    ARK_OUTPUT_DIR="$TMP/missing-updater-dist" \
+    sh "$ROOT/packaging/build-release.sh" > "$TMP/missing-updater-build.out" 2>&1; then
+    fail "release without ark-updater was built"
+fi
+
 DIST="$TMP/dist"
 env \
     ARK_VERSION=0.1.0-beta \
     ARK_ARCH=x86_64 \
     ARK_BINARY="$FIXTURE/ark" \
+    ARK_UPDATER="$FIXTURE/ark-updater" \
     ARK_ICON="$FIXTURE/icons/ark.png" \
     ARK_SKIP_BUILD=1 \
     ARK_OUTPUT_DIR="$DIST" \

@@ -54,6 +54,7 @@ set -- "$TMP/extract"/*
 RELEASE_DIR=$1
 [ -d "$RELEASE_DIR" ] || die "release directory missing"
 [ -x "$RELEASE_DIR/ark" ] || die "release ark executable missing"
+[ -x "$RELEASE_DIR/ark-updater" ] || die "release ark-updater executable missing"
 [ -f "$RELEASE_DIR/ark.desktop" ] || die "release desktop entry missing"
 [ -f "$RELEASE_DIR/icons/ark.png" ] || die "release icon missing"
 [ -f "$RELEASE_DIR/install-release.sh" ] || die "release installer missing"
@@ -63,6 +64,11 @@ VERSION_OUTPUT=$("$RELEASE_DIR/ark" --version 2> /dev/null) || die "release ark 
 case "$VERSION_OUTPUT" in
     ark\ *) ;;
     *) die "unexpected --version output: $VERSION_OUTPUT" ;;
+esac
+UPDATER_VERSION_OUTPUT=$("$RELEASE_DIR/ark-updater" --version 2> /dev/null) || die "release ark-updater failed --version"
+case "$UPDATER_VERSION_OUTPUT" in
+    ark-updater\ *) ;;
+    *) die "unexpected ark-updater --version output: $UPDATER_VERSION_OUTPUT" ;;
 esac
 
 printf 'Verified: %s (%s)\n' "$BASE" "$VERSION_OUTPUT"
