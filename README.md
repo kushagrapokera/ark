@@ -63,6 +63,12 @@ The existing source installer is also available:
 ./install.sh --user
 ```
 
+To reinstall an existing `target/release/ark` without rebuilding:
+
+```bash
+ARK_SKIP_BUILD=1 ./install.sh --user
+```
+
 > KDE's archiver may be installed as `/usr/bin/ark`. A user-local install in
 > `~/.local/bin` or `~/.cargo/bin` shadows it when that directory appears first
 > on `PATH`.

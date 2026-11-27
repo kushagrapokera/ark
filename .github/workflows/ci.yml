@@ -35,12 +35,17 @@ jobs:
           cargo build --release --locked --bin ark-updater --features updater
       - name: Shell validation
         run: |
-          sh -n packaging/*.sh tests/*.sh
-          shellcheck packaging/*.sh
+          bash -n install.sh
+          for script in packaging/*.sh tests/*.sh; do
+            sh -n "$script"
+          done
+          shellcheck install.sh tests/source-installer.sh packaging/*.sh
       - name: Desktop entry validation
         run: desktop-file-validate packaging/ark.desktop
       - name: Installer integration
         run: TMPDIR=${RUNNER_TEMP} sh tests/installer.sh
+      - name: Source installer integration
+        run: TMPDIR=${RUNNER_TEMP} sh tests/source-installer.sh
       - name: Curl bootstrap integration
         run: TMPDIR=${RUNNER_TEMP} sh tests/curl-installer.sh
       - name: Updater integration (curl)
