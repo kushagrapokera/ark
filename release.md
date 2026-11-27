@@ -71,7 +71,7 @@ Phase 0–5 implementation is complete: packaging, curl bootstrap, updater
 helper, update UI, signed release automation, and the supplied 256×256 icon.
 Remaining release work:
 
-- Verify the draft GitHub Release assets.
+- Public publication approval and the exact public curl-command check.
 - Ubuntu 24.04 and Fedora Workstation clean-system verification.
 
 ---
@@ -683,8 +683,14 @@ main ark binary does not link updater networking or archive code.
   packaged and signed them, and passed signed verification. The test private key
   was removed and never placed in the repository or release directory.
 - No new Cargo dependencies were added.
-- The `v0.1.0-beta` tag was pushed and the draft-release workflow started.
-- A real tag-triggered draft release asset verification is in progress.
+- The `v0.1.0-beta` tag produced a complete draft GitHub Release with eight
+  signed/checksummed assets.
+- The release workflow passed post-upload verification. An independent local
+  download recovered the embedded public key, matched fingerprint
+  `5b62a8f3193b075ecc1ab8f556b7549dbf350ffe3a9e2f4b6cfa5f27c2425602`, and
+  passed `verify-release.sh` signed mode.
+- The release remains a draft; public publication and the exact public curl
+  command are pending explicit approval.
 
 ---
 
@@ -827,7 +833,7 @@ The curl bootstrap still trusts the installer host/TLS. Publish immutable versio
 - [x] Commit release changes.
 - [x] Tag `vX.Y.Z`.
 - [x] Push tag when publication is authorized.
-- [ ] Verify GitHub Release assets.
+- [x] Verify GitHub Release assets.
 - [ ] Test the exact public curl command.
 - [ ] Publish release notes.
 - [ ] Announce release.
