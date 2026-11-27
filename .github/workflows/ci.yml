@@ -51,5 +51,7 @@ jobs:
         run: TMPDIR=${RUNNER_TEMP} sh tests/signing.sh
       - name: Embedded update key integration
         run: TMPDIR=${RUNNER_TEMP} sh tests/embedded-key.sh
+      - name: Installed update smoke
+        run: TMPDIR=${RUNNER_TEMP} sh tests/update-smoke.sh
       - name: Diff validation
         run: git diff --check

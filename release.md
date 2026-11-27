@@ -67,14 +67,13 @@ The first release targets **Linux x86_64**, user-local installation, and GitHub 
 
 ## Current release blockers
 
-Phase 0 is complete except for the user-provided icon. Phases 1–5 implementation
-is complete: packaging, curl bootstrap, updater helper, update UI, and signed
-release automation. Remaining release work:
+Phase 0–5 implementation is complete: packaging, curl bootstrap, updater
+helper, update UI, signed release automation, and the supplied 256×256 icon.
+Remaining release work:
 
-- User-provided 256×256 icon.
 - Configure the `ARK_SIGNING_PRIVATE_KEY` GitHub Secret.
 - Authorize a test tag to produce and verify a draft GitHub Release.
-- Phase 6 end-to-end clean-system verification.
+- Ubuntu 24.04 and Fedora Workstation clean-system verification.
 
 ---
 
@@ -335,7 +334,7 @@ Validation rules:
 - [x] Add README with install, run, update, uninstall, requirements, shortcuts, and known limitations.
 - [x] Add MIT license text.
 - [x] Add changelog with `0.1.0-beta` section.
-- [ ] Add 256×256 PNG icon _(user will provide)_.
+- [x] Add 256×256 PNG icon.
 - [x] Add Cargo metadata: readme, license, repository, authors, keywords, categories.
 - [x] Create GitHub repository and configure `origin`.
 - [x] Keep the `ark` command name; document the KDE `/usr/bin/ark` conflict.
@@ -344,7 +343,7 @@ Validation rules:
 
 - `cargo metadata --no-deps --format-version 1` includes release metadata.
 - README commands match actual behavior.
-- Icon is a valid PNG _(pending user-provided icon)_.
+- Icon is a valid 256×256 PNG.
 - `cargo test` still passes.
 
 ### Evidence — 2026-11-27
@@ -663,8 +662,8 @@ main ark binary does not link updater networking or archive code.
   private key is committed or uploaded.
 - Optionally set the `ARK_MINIMUM_VERSION` repository variable. It defaults to
   `0.1.0-beta`.
-- Add the real 256×256 PNG at `assets/icons/ark.png`. The workflow rejects a
-  missing or incorrectly sized icon.
+- The real 256×256 PNG is installed at `assets/icons/ark.png`; the workflow
+  rejects a missing or incorrectly sized icon.
 - Push a `v<VERSION>` tag matching `Cargo.toml` only when draft publication is
   authorized.
 
@@ -684,8 +683,8 @@ main ark binary does not link updater networking or archive code.
   packaged and signed them, and passed signed verification. The test private key
   was removed and never placed in the repository or release directory.
 - No new Cargo dependencies were added.
-- A real tag-triggered draft release was not created: the icon, signing secret,
-  and publication authorization remain owner actions.
+- A real tag-triggered draft release was not created: the signing secret and
+  publication authorization remain owner actions.
 
 ---
 
@@ -693,44 +692,65 @@ main ark binary does not link updater networking or archive code.
 
 ### Automated tests
 
-- [ ] `cargo test`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo build --release --locked --bin ark`
-- [ ] `cargo build --release --locked --bin ark-updater --features updater`
-- [ ] `tests/installer.sh`
-- [ ] `tests/update-smoke.sh`
-- [ ] `shellcheck packaging/*.sh` when available
-- [ ] `desktop-file-validate packaging/ark.desktop` when available
-- [ ] `git diff --check`
+- [x] `cargo test`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [x] `cargo build --release --locked --bin ark`
+- [x] `cargo build --release --locked --bin ark-updater --features updater`
+- [x] `tests/installer.sh`
+- [x] `tests/update-smoke.sh`
+- [x] `shellcheck packaging/*.sh` when available
+- [x] `desktop-file-validate packaging/ark.desktop` when available
+- [x] `git diff --check`
 
 ### Update smoke sequence
 
-- [ ] Install `0.1.0` through curl.
-- [ ] Serve fake `0.1.1`.
-- [ ] Click **Update**.
-- [ ] Confirm download and verification.
-- [ ] Confirm `current` points to `0.1.1`.
-- [ ] Restart ark.
-- [ ] Confirm `ark --version` reports `0.1.1`.
-- [ ] Confirm project/config behavior is unchanged.
-- [ ] Corrupt signature and confirm rejection.
-- [ ] Disconnect network and confirm ark remains usable.
-- [ ] Kill during download and confirm `0.1.0` remains active.
-- [ ] Run rollback and confirm `0.1.0` returns.
+- [x] Install `0.1.0` through curl.
+- [x] Serve fake `0.1.1`.
+- [x] Click **Update**.
+- [x] Confirm download and verification.
+- [x] Confirm `current` points to `0.1.1`.
+- [x] Restart ark.
+- [x] Confirm `ark --version` reports `0.1.1`.
+- [x] Confirm project/config behavior is unchanged.
+- [x] Corrupt signature and confirm rejection.
+- [x] Disconnect network and confirm ark remains usable.
+- [x] Kill during download and confirm `0.1.0` remains active.
+- [x] Run rollback and confirm `0.1.0` returns.
 
 ### Clean-system tests
 
 - [ ] Ubuntu 24.04 without Rust.
 - [ ] Fedora Workstation.
-- [ ] Wayland session.
-- [ ] X11 session.
-- [ ] DPI scale 1.0 and 2.0.
-- [ ] Desktop icon launch.
-- [ ] `ark .`.
-- [ ] Terminal/OpenCode smoke.
-- [ ] Clipboard smoke.
-- [ ] Git status smoke.
-- [ ] RSS/PSS below 100 MB.
+- [x] Wayland session.
+- [x] X11 session.
+- [x] DPI scale 1.0 and 2.0.
+- [x] Desktop icon launch.
+- [x] `ark .`.
+- [x] Terminal/OpenCode smoke.
+- [x] Clipboard smoke.
+- [x] Git status smoke.
+- [x] RSS/PSS below 100 MB.
+
+### Evidence — 2026-11-27
+
+- `tests/update-smoke.sh` passed in headless CI mode and interactive X11 mode.
+  The interactive run clicked **Install Update**, confirmed `current` switched to
+  `0.1.1`, clicked **Restart to finish**, and then rolled back to `0.1.0-beta`.
+- The same smoke rejected a corrupt manifest signature, stayed on `0.1.0-beta`
+  after an offline check, and kept `0.1.0-beta` active after killing a throttled
+  download.
+- The real generated installer completed through `curl ... | sh` against a
+  local release server and reported `ark 0.1.0-beta`.
+- Installed binary ran with `/usr/bin:/bin` as PATH, without Cargo.
+- Default Wayland and forced X11 first-frame smoke passed; X11 scale factors
+  1.0 and 2.0 both presented successfully.
+- `gtk-launch ark` launched the installed desktop entry successfully.
+- Terminal command, `opencode --version`, and git command smoke passed.
+- Native clipboard round-trip and terminal-selection copy tests passed.
+- Git-status UI smoke showed modified and untracked badges in a real repository.
+- Live process measurement: 27,388 KiB RSS, 23,574 KiB PSS, 27,388 KiB peak RSS,
+  below the 100 MB budget.
+- Ubuntu 24.04 and Fedora Workstation remain unverified on this Garuda Linux host.
 
 ---
 
@@ -781,7 +801,7 @@ The curl bootstrap still trusts the installer host/TLS. Publish immutable versio
 - SHA-256 verification.
 - Versioned user-local install.
 - Desktop entry/icon.
-- Manual updates only.
+- Updater helper, update UI, automatic checks, restart, and rollback.
 
 ## `0.1.0`
 
