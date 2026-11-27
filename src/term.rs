@@ -1811,20 +1811,21 @@ mod tests {
         assert!(!term.resize(GridSize::new(60, 20)), "same size: no-op");
 
         // Process-group teardown: a background sleep dies with the tab.
-        term.key_input(b"sleep 300 & echo $!\r");
+        // Write the PID to a file instead of scraping terminal rendering; job
+        // control formatting and prompt prefixes vary across shells and CI load.
+        let pid_file = d.path().join("background.pid");
+        let quoted_pid_file = crate::git::shell_quote(&pid_file.to_string_lossy());
+        term.key_input(format!("sleep 300 & echo $! > {quoted_pid_file}\r").as_bytes());
         let mut pid = None;
         let start = Instant::now();
         while pid.is_none() && start.elapsed() < Duration::from_secs(5) {
             term.drain_output(256);
-            for line in visible_text(&term).lines() {
-                let t = line.trim();
-                if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
-                    pid = t.parse::<u32>().ok();
-                }
+            if let Ok(contents) = std::fs::read_to_string(&pid_file) {
+                pid = contents.trim().parse::<u32>().ok();
             }
             thread::sleep(Duration::from_millis(20));
         }
-        let pid = pid.expect("background job pid printed");
+        let pid = pid.expect("background job pid recorded");
         let proc = format!("/proc/{pid}");
         assert!(Path::new(&proc).exists(), "sleep {pid} alive before teardown");
         let shell_pid = term.child.as_ref().and_then(|c| c.process_id());
