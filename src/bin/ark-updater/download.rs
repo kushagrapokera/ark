@@ -153,24 +153,57 @@ pub(super) fn verify_checksum(path: &Path, expected: &str) -> Result<(), UpdateE
 }
 
 pub(super) fn verify_signature(archive: &Path, signature: &Path) -> Result<(), UpdateError> {
-    let public_key = std::env::var_os("ARK_UPDATE_PUBLIC_KEY")
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            UpdateError::SignatureInvalid("ARK_UPDATE_PUBLIC_KEY is not configured".into())
+    let runtime_key = std::env::var_os("ARK_UPDATE_PUBLIC_KEY").map(PathBuf::from);
+    let mut temporary_key = None;
+    let public_key = if let Some(path) = runtime_key {
+        path
+    } else {
+        let embedded = option_env!("ARK_UPDATE_PUBLIC_KEY_PEM")
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| {
+                UpdateError::SignatureInvalid(
+                    "no update public key is embedded or configured".into(),
+                )
+            })?;
+        let path = archive.with_file_name(".ark-update-public.pem");
+        std::fs::write(&path, embedded).map_err(|error| {
+            UpdateError::SignatureInvalid(format!(
+                "could not materialize embedded update public key: {error}"
+            ))
         })?;
-    let output = Command::new("openssl")
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&path)
+                .map_err(UpdateError::from)?
+                .permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&path, permissions).map_err(UpdateError::from)?;
+        }
+        temporary_key = Some(path.clone());
+        path
+    };
+    let result = Command::new("openssl")
         .args(["pkeyutl", "-verify", "-pubin", "-rawin"])
         .arg("-inkey")
-        .arg(public_key)
+        .arg(&public_key)
         .arg("-in")
         .arg(archive)
         .arg("-sigfile")
         .arg(signature)
-        .output()
-        .map_err(|error| UpdateError::CommandFailed {
-            tool: "openssl".into(),
-            detail: error.to_string(),
-        })?;
+        .output();
+    if temporary_key.is_some() {
+        if let Err(error) = std::fs::remove_file(&public_key) {
+            super::warn(format!(
+                "could not remove temporary update public key {}: {error}",
+                public_key.display()
+            ));
+        }
+    }
+    let output = result.map_err(|error| UpdateError::CommandFailed {
+        tool: "openssl".into(),
+        detail: error.to_string(),
+    })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         return Err(UpdateError::SignatureInvalid(detail));

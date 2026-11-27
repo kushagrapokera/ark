@@ -3,7 +3,7 @@
 set -eu
 umask 022
 
-ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 die() {
@@ -62,7 +62,7 @@ UPDATER=${ARK_UPDATER:-$ROOT/target/release/ark-updater}
 
 OUTPUT_DIR=${ARK_OUTPUT_DIR:-$ROOT/target/release}
 mkdir -p "$OUTPUT_DIR"
-OUTPUT_DIR=$(CDPATH= cd "$OUTPUT_DIR" && pwd)
+OUTPUT_DIR=$(CDPATH='' cd "$OUTPUT_DIR" && pwd)
 RELEASE_NAME="ark-$VERSION-linux-$ARCH"
 RELEASE_DIR="$OUTPUT_DIR/$RELEASE_NAME"
 ARCHIVE="$OUTPUT_DIR/$RELEASE_NAME.tar.gz"

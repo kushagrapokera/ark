@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/ark-installer-test.XXXXXX")
 trap 'rm -rf "$TMP"' 0 1 2 15
 

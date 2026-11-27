@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/ark-update-test.XXXXXX")
 SERVER_PID=
 
@@ -34,6 +34,10 @@ fi
 exit 0
 EOF
     chmod 755 "$path"
+}
+
+sign_manifest() {
+    openssl pkeyutl -sign -inkey "$TMP/private.pem" -rawin -in "$1" -out "$1.sig"
 }
 
 write_manifest() {
@@ -150,6 +154,11 @@ ARCHIVE_SIZE=$MALICIOUS_SIZE
 write_manifest "$DIST/traversal.json" 0.1.2 ark-0.1.2-linux-x86_64.tar.gz ark-0.1.2.tar.gz.sig "$MALICIOUS_CHECKSUM"
 ARCHIVE_SIZE=$MALICIOUS_SIZE
 write_manifest "$DIST/downgrade.json" 0.0.9 ark-0.1.2-linux-x86_64.tar.gz ark-0.1.2.tar.gz.sig "$MALICIOUS_CHECKSUM"
+for manifest in latest.json bad-signature.json bad-checksum.json size-mismatch.json oversized.json traversal.json downgrade.json; do
+    sign_manifest "$DIST/$manifest"
+done
+write_manifest "$DIST/bad-manifest-signature.json" 0.1.1 ark-0.1.1-linux-x86_64.tar.gz ark-0.1.1.tar.gz.sig "$CHECKSUM"
+printf 'not-a-manifest-signature' > "$DIST/bad-manifest-signature.json.sig"
 
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$DIST" > "$TMP/server.log" 2>&1 &
 SERVER_PID=$!
@@ -229,6 +238,12 @@ if run_updater stage --manifest-url "http://127.0.0.1:$PORT/bad-signature.json" 
     fail "invalid signature was accepted"
 fi
 grep -F 'code: signature-invalid' "$TMP/bad-signature.out" > /dev/null || fail "invalid signature error missing"
+assert_eq "$("$TEST_BIN/ark" --version)" "ark 0.1.0-beta"
+
+if run_updater check --manifest-url "http://127.0.0.1:$PORT/bad-manifest-signature.json" > "$TMP/bad-manifest-signature.out" 2>&1; then
+    fail "invalid manifest signature was accepted"
+fi
+grep -F 'code: signature-invalid' "$TMP/bad-manifest-signature.out" > /dev/null || fail "invalid manifest signature error missing"
 assert_eq "$("$TEST_BIN/ark" --version)" "ark 0.1.0-beta"
 
 if run_updater stage --manifest-url "http://127.0.0.1:$PORT/bad-checksum.json" > "$TMP/bad-checksum.out" 2>&1; then

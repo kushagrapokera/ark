@@ -67,12 +67,14 @@ The first release targets **Linux x86_64**, user-local installation, and GitHub 
 
 ## Current release blockers
 
-Phase 0 is complete except for the user-provided icon. Phases 1–4 are complete:
-packaging, curl bootstrap, the updater helper, and the update UI. Remaining
-release work:
+Phase 0 is complete except for the user-provided icon. Phases 1–5 implementation
+is complete: packaging, curl bootstrap, updater helper, update UI, and signed
+release automation. Remaining release work:
 
 - User-provided 256×256 icon.
-- Phase 5 signing and GitHub release workflow.
+- Configure the `ARK_SIGNING_PRIVATE_KEY` GitHub Secret.
+- Authorize a test tag to produce and verify a draft GitHub Release.
+- Phase 6 end-to-end clean-system verification.
 
 ---
 
@@ -626,19 +628,25 @@ main ark binary does not link updater networking or archive code.
 - `.github/workflows/release.yml`
 - `packaging/sign-release.sh`
 - `packaging/verify-release.sh`
+- `src/bin/ark-updater/main.rs`
+- `src/bin/ark-updater/download.rs`
+- `tests/signing.sh`
+- `tests/embedded-key.sh`
+- `tests/update.sh`
+- `.gitignore`
 
 ### Tasks
 
-- [ ] Add PR CI for tests, clippy, release build, shellcheck, and packaging checks.
-- [ ] Add tag-triggered release workflow.
-- [ ] Build ark and ark-updater independently.
-- [ ] Generate tarball and `SHA256SUMS`.
-- [ ] Generate and sign `latest.json`.
-- [ ] Sign installer and release archive.
-- [ ] Store private signing key in GitHub Secrets.
-- [ ] Embed only the public key in source/artifacts.
-- [ ] Upload all assets to GitHub Releases.
-- [ ] Verify published artifacts after upload.
+- [x] Add PR CI for tests, clippy, release build, shellcheck, and packaging checks.
+- [x] Add tag-triggered release workflow.
+- [x] Build ark and ark-updater independently.
+- [x] Generate tarball and `SHA256SUMS`.
+- [x] Generate and sign `latest.json`.
+- [x] Sign installer and release archive.
+- [ ] Store the private signing key in the `ARK_SIGNING_PRIVATE_KEY` GitHub Secret _(owner action)_.
+- [x] Derive and embed only the public key in the release updater binary.
+- [x] Upload all assets to a draft GitHub Release.
+- [x] Download and verify published assets after upload.
 
 ### Acceptance
 
@@ -647,6 +655,37 @@ main ark binary does not link updater networking or archive code.
 - Stable assets have valid signatures.
 - Missing signature causes CI failure.
 - Signing secrets never appear in logs or artifacts.
+
+### Required GitHub configuration
+
+- Add an unencrypted Ed25519 private key PEM as the `ARK_SIGNING_PRIVATE_KEY`
+  repository secret. The workflow derives the public key at build time; no
+  private key is committed or uploaded.
+- Optionally set the `ARK_MINIMUM_VERSION` repository variable. It defaults to
+  `0.1.0-beta`.
+- Add the real 256×256 PNG at `assets/icons/ark.png`. The workflow rejects a
+  missing or incorrectly sized icon.
+- Push a `v<VERSION>` tag matching `Cargo.toml` only when draft publication is
+  authorized.
+
+### Evidence — 2026-11-27
+
+- `tests/signing.sh`: passed for signed archive/installer/manifest/checksums,
+  corrupt archive signatures, and missing manifest signatures.
+- `tests/embedded-key.sh`: passed with no runtime public-key override.
+- `tests/update.sh`: passed with signed stable manifests and rejected an invalid
+  `latest.json.sig`.
+- `shellcheck packaging/*.sh`: clean.
+- Workflow YAML parsed successfully and `actionlint` reported no issues.
+- `cargo test --all-features --all-targets`: 441 unit tests passed, 0 failed,
+  5 ignored; 5/5 CLI tests passed.
+- `cargo clippy --all-targets --all-features -- -D warnings`: clean.
+- Built actual `0.1.0-beta` release binaries with an ephemeral test public key,
+  packaged and signed them, and passed signed verification. The test private key
+  was removed and never placed in the repository or release directory.
+- No new Cargo dependencies were added.
+- A real tag-triggered draft release was not created: the icon, signing secret,
+  and publication authorization remain owner actions.
 
 ---
 

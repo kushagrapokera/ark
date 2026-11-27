@@ -306,6 +306,11 @@ fn load_manifest(
     download(&url, &path, ark::update::MAX_MANIFEST_BYTES, None)?;
     let text = read_bounded(&path, ark::update::MAX_MANIFEST_BYTES)?;
     let manifest = ReleaseManifest::parse(&text, insecure_http_allowed())?;
+    if manifest.channel == "stable" {
+        let signature = work.path().join("latest.json.sig");
+        download(&format!("{url}.sig"), &signature, 64 * 1024, None)?;
+        verify_signature(&path, &signature)?;
+    }
     if manifest.channel != channel {
         return Err(UpdateError::InvalidManifest(format!(
             "expected channel {channel}, found {}",

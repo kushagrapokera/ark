@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      ARK_MINIMUM_VERSION: ${{ vars.ARK_MINIMUM_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate tag and icon
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=${RELEASE_TAG#v}
+          PACKAGE_VERSION=$(cargo pkgid | sed 's/.*#//')
+          [ "$VERSION" = "$PACKAGE_VERSION" ] || {
+            echo "tag $RELEASE_TAG does not match Cargo version $PACKAGE_VERSION" >&2
+            exit 1
+          }
+          [ -f assets/icons/ark.png ] || {
+            echo "assets/icons/ark.png is required before publishing" >&2
+            exit 1
+          }
+          python3 - <<'PY'
+          import pathlib
+          import struct
+
+          data = pathlib.Path("assets/icons/ark.png").read_bytes()
+          if data[:8] != b"\x89PNG\r\n\x1a\n" or len(data) < 24:
+              raise SystemExit("release icon must be a valid PNG")
+          width, height = struct.unpack(">II", data[16:24])
+          if (width, height) != (256, 256):
+              raise SystemExit(f"release icon must be 256x256, got {width}x{height}")
+          PY
+      - name: Test and lint
+        run: |
+          cargo test --locked --all-features --all-targets
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Prepare signing key
+        env:
+          ARK_SIGNING_PRIVATE_KEY: ${{ secrets.ARK_SIGNING_PRIVATE_KEY }}
+        run: |
+          [ -n "$ARK_SIGNING_PRIVATE_KEY" ] || {
+            echo "ARK_SIGNING_PRIVATE_KEY secret is required" >&2
+            exit 1
+          }
+          printf '%s\n' "$ARK_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/ark-signing-private.pem"
+          chmod 600 "$RUNNER_TEMP/ark-signing-private.pem"
+          openssl pkey -in "$RUNNER_TEMP/ark-signing-private.pem" -check -noout > /dev/null
+          openssl pkey -in "$RUNNER_TEMP/ark-signing-private.pem" -pubout -out "$RUNNER_TEMP/ark-signing-public.pem" > /dev/null 2>&1
+      - name: Build independently
+        run: |
+          export ARK_UPDATE_PUBLIC_KEY_PEM="$(cat "$RUNNER_TEMP/ark-signing-public.pem")"
+          cargo build --release --locked --bin ark
+          cargo build --release --locked --bin ark-updater --features updater
+      - name: Package and sign
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          VERSION=${RELEASE_TAG#v}
+          MINIMUM=${ARK_MINIMUM_VERSION:-0.1.0-beta}
+          DIST="$RUNNER_TEMP/ark-release"
+          ARK_VERSION="$VERSION" \
+          ARK_SKIP_BUILD=1 \
+          ARK_OUTPUT_DIR="$DIST" \
+              sh packaging/build-release.sh
+          sh packaging/sign-release.sh "$DIST" "$VERSION" "$RUNNER_TEMP/ark-signing-private.pem" "$MINIMUM" "$RELEASE_REPOSITORY"
+          sh packaging/verify-release.sh "$DIST/ark-$VERSION-linux-x86_64.tar.gz" "$DIST/SHA256SUMS" "$RUNNER_TEMP/ark-signing-public.pem"
+      - name: Upload draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=${RELEASE_TAG#v}
+          DIST="$RUNNER_TEMP/ark-release"
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true" ] || {
+              echo "refusing to replace a published release" >&2
+              exit 1
+            }
+            gh release upload "$RELEASE_TAG" "$DIST"/* --clobber
+          else
+            gh release create "$RELEASE_TAG" "$DIST"/* --draft --title "ark $VERSION" --generate-notes
+          fi
+          gh release edit "$RELEASE_TAG" --draft=true
+      - name: Verify published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=${RELEASE_TAG#v}
+          DOWNLOAD="$RUNNER_TEMP/ark-release-download"
+          mkdir -p "$DOWNLOAD"
+          gh release download "$RELEASE_TAG" --dir "$DOWNLOAD" --clobber
+          sh packaging/verify-release.sh "$DOWNLOAD/ark-$VERSION-linux-x86_64.tar.gz" "$DOWNLOAD/SHA256SUMS" "$RUNNER_TEMP/ark-signing-public.pem"
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ark-signing-private.pem"
