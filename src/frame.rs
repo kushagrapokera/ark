@@ -20,9 +20,11 @@ use crate::term::{self, TerminalMenuAction, TerminalTabs};
 use crate::text::{TextStyle, TextSystem, UI_FONT_SIZE};
 use crate::tree::{self, FileTree, ROW_H};
 use crate::ui::{Pointer, Rect, Scrollbar, Split};
+use crate::update_process::{UpdateAction, UpdateController};
 use crate::viewer::{self, Viewer, LINE_H};
 
 mod chrome;
+pub mod update;
 
 /// Card-layout metrics from the supplied workbench design.
 const PAD: f64 = 8.0;
@@ -812,6 +814,8 @@ pub struct Frame<'a> {
     pub search: Option<&'a mut SearchState>,
     /// Formatted README state for the active mmap-backed README tab.
     pub markdown: Option<&'a mut MarkdownState>,
+    /// Update controller state for title-bar badge and panel rendering.
+    pub update: Option<&'a UpdateController>,
 }
 
 /// What `draw_frame` changed this frame — the caller marks damage AFTER the
@@ -880,6 +884,8 @@ pub struct FrameEffects {
     pub group_split_moved: bool,
     /// A title-bar layout action was selected.
     pub layout_action: Option<LayoutAction>,
+    /// A title-bar or update-panel action was selected.
+    pub update_action: Option<UpdateAction>,
     /// Accessible name of the icon under the pointer (test/inspection surface).
     #[cfg_attr(not(test), allow(dead_code))]
     pub hovered_icon: Option<&'static str>,
@@ -1000,6 +1006,16 @@ pub fn draw_frame(
     f.icon_tooltip = None;
     if !f.scale.is_finite() || f.scale <= 0.0 {
         return effects;
+    }
+    let update_overlay = f.update.is_some_and(|controller| {
+        controller.ui.open
+            && update::panel_layout(layout, true)
+                .panel
+                .contains(f.pointer.x, f.pointer.y)
+    });
+    let update_click = update_overlay && f.pointer.click;
+    if update_click {
+        f.pointer.click = false;
     }
     let lw = f.canvas.width() as f64 / f.scale;
 
@@ -1435,6 +1451,10 @@ pub fn draw_frame(
 
     chrome::draw_new_item_prompt(f, layout, tree);
     effects.layout_action = title_fx.action;
+    effects.update_action = title_fx.update_action;
+    if let Some(action) = update::draw_panel(f, layout, update_click) {
+        effects.update_action = Some(action);
+    }
     effects.hovered_icon = f.icon_tooltip.map(|tooltip| tooltip.label);
     chrome::draw_icon_tooltip(f);
     effects
@@ -1481,7 +1501,7 @@ fn draw_pane_message(f: &mut Frame, rect: Rect, top: &str, bottom: &str) {
 }
 
 /// Char-boundary-safe truncation (byte slicing could split a codepoint).
-fn truncate_chars(s: &str, max: usize) -> String {
+pub(super) fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 

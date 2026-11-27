@@ -417,6 +417,7 @@ fn new_item_prompt_draws_an_inline_field_without_buttons() {
         icon_tooltip: None,
         search: None,
         markdown: None,
+        update: None,
     };
     let _ = draw_frame(
         &mut frame,
@@ -652,7 +653,7 @@ fn compact_breadcrumb_stays_inside_the_editor_card() {
 }
 
 #[test]
-fn title_bar_has_no_update_or_search_field() {
+fn title_bar_without_update_controller_has_no_search_field() {
     let (_d, mut tree) = scene_fixture("title-clean");
     let mut theme = frame_theme();
     theme.surface_chrome = (1, 1, 1);
@@ -680,7 +681,7 @@ fn title_bar_has_no_update_or_search_field() {
     assert_eq!(
         count_color_in(&canvas, theme.accent, 700, 6, 900, 30),
         0,
-        "the Update button is gone"
+        "the legacy frame without an update controller paints no update badge"
     );
     let actions = chrome::title_bar_actions(&layout);
     assert!(actions.explorer.contains(968.0, 18.0));
@@ -854,6 +855,72 @@ fn title_bar_layout_buttons_report_their_actions() {
         );
         assert_eq!(effects.layout_action, Some(expected));
     }
+}
+
+#[test]
+fn frame_update_actions_reach_effects() {
+    let (_d, mut tree) = scene_fixture("update-actions");
+    let theme = frame_theme();
+    let layout = app_layout(1024.0, 768.0, 304.0);
+    let mut canvas = Canvas::new(1024, 768);
+    let mut text = TextSystem::new();
+    let install_layout = ark::update::InstallLayout::new(
+        PathBuf::from("/data"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/state"),
+        PathBuf::from("/cache"),
+        PathBuf::from("/config"),
+    );
+    let mut controller = crate::update_process::UpdateController::new(
+        Some(install_layout),
+        Some(PathBuf::from("/helper")),
+    );
+    let title = chrome::title_bar_actions(&layout).update;
+    let effects = draw_static_frame_full(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: title.x + title.w / 2.0,
+            y: title.y + title.h / 2.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+        ActivityPanel::Explorer,
+        None,
+        None,
+        Some(&controller),
+    );
+    assert_eq!(effects.update_action, Some(crate::update_process::UpdateAction::Check));
+
+    controller.ui.open = true;
+    controller.ui.state = ark::update::UpdateState::Available;
+    controller.ui.version = Some(ark::update::Version::parse("0.1.1").unwrap());
+    let panel = update::panel_layout(&layout, false);
+    let effects = draw_static_frame_full(
+        &mut canvas,
+        &mut text,
+        &theme,
+        &mut tree,
+        &layout,
+        Pointer {
+            x: panel.primary.x + panel.primary.w / 2.0,
+            y: panel.primary.y + panel.primary.h / 2.0,
+            down: false,
+            click: true,
+        },
+        &[],
+        None,
+        ActivityPanel::Explorer,
+        None,
+        None,
+        Some(&controller),
+    );
+    assert_eq!(effects.update_action, Some(crate::update_process::UpdateAction::Install));
 }
 
 #[test]
@@ -1141,6 +1208,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
                 icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -1192,6 +1260,7 @@ fn source_control_icon_opens_the_per_file_commit_card() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1382,6 +1451,7 @@ fn split_frame_draws_two_groups_and_routes_group_tab_clicks() {
         icon_tooltip: None,
         search: None,
         markdown: None,
+        update: None,
         groups: Some(&groups.groups),
         active_group: 1,
         group_viewers: [Some(&mut va), Some(&mut vb)],
@@ -1743,6 +1813,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1815,6 +1886,7 @@ fn terminal_card_placeholder_and_new_button_render_without_a_pty() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -1969,6 +2041,7 @@ fn terminal_tabs_select_and_close_by_index() {
                 icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2107,6 +2180,37 @@ fn draw_static_frame_with(
     search: Option<&mut crate::search::SearchState>,
     markdown: Option<&mut crate::markdown::MarkdownState>,
 ) -> FrameEffects {
+    draw_static_frame_full(
+        canvas,
+        text,
+        theme,
+        tree,
+        layout,
+        pointer,
+        open_files,
+        active_path,
+        activity,
+        search,
+        markdown,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // one explicit test-frame context
+fn draw_static_frame_full(
+    canvas: &mut Canvas,
+    text: &mut TextSystem,
+    theme: &Theme,
+    tree: &mut FileTree,
+    layout: &AppLayout,
+    pointer: Pointer,
+    open_files: &[PathBuf],
+    active_path: Option<&Path>,
+    activity: ActivityPanel,
+    search: Option<&mut crate::search::SearchState>,
+    markdown: Option<&mut crate::markdown::MarkdownState>,
+    update: Option<&crate::update_process::UpdateController>,
+) -> FrameEffects {
     let mut split = Split { position: 304.0 };
     let mut split_drag = SplitDrag::default();
     let mut scrollbar = Scrollbar::default();
@@ -2144,6 +2248,7 @@ fn draw_static_frame_with(
             icon_tooltip: None,
             search,
             markdown,
+            update,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2256,6 +2361,7 @@ fn frame_scene_renders_spec_surfaces() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2364,6 +2470,7 @@ fn frame_viewer_pane_renders_over_placeholder() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2446,6 +2553,7 @@ fn frame_interactions_report_effects() {
         icon_tooltip: None,
         search: None,
         markdown: None,
+        update: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2621,6 +2729,7 @@ fn frame_single_click_opens_and_viewer_scrolls() {
         icon_tooltip: None,
         search: None,
         markdown: None,
+        update: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -2762,6 +2871,7 @@ fn viewer_flash_paints_accent_strip() {
                 icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -2861,6 +2971,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2923,6 +3034,7 @@ fn frame_config_pane_renders_and_reports_save_click() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -2990,6 +3102,7 @@ fn file_tabs_breadcrumbs_and_activity_bar_report_clicks() {
         icon_tooltip: None,
         search: None,
         markdown: None,
+        update: None,
         groups: None,
         active_group: 0,
         group_viewers: [None, None],
@@ -3135,6 +3248,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],
@@ -3202,6 +3316,7 @@ fn sidebar_three_dot_handle_drags_and_double_click_resets() {
                 icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
                 groups: None,
                 active_group: 0,
                 group_viewers: [None, None],
@@ -3381,6 +3496,7 @@ fn viewer_offset_self_heals_before_hit_testing() {
             icon_tooltip: None,
             search: None,
             markdown: None,
+            update: None,
             groups: None,
             active_group: 0,
             group_viewers: [None, None],

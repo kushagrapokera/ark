@@ -32,6 +32,18 @@ pub enum Wake {
     },
     /// A bounded project keyword-search worker finished.
     SearchFinished(Box<crate::search::SearchReport>),
+    /// One line-oriented update-helper event arrived.
+    UpdateEvent {
+        generation: u64,
+        event: Box<crate::update_protocol::UpdateEvent>,
+    },
+    /// An update-helper process exited.
+    UpdateFinished {
+        generation: u64,
+        command: crate::update_process::UpdateCommand,
+        success: bool,
+        error: Option<String>,
+    },
 }
 
 /// Coalescing flag shared with notify's event thread: `signal` sets it,

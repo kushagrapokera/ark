@@ -51,6 +51,8 @@ mod term;
 mod text;
 mod tree;
 mod ui;
+mod update_process;
+mod update_protocol;
 mod viewer;
 mod watch;
 /// Test-only M2 demo scene.
@@ -374,6 +376,12 @@ struct App {
     git_inflight: bool,
     /// fs activity arrived while the status was in flight.
     git_pending: bool,
+    /// Update helper controller and line-oriented UI state.
+    updater: update_process::UpdateController,
+    /// Delayed first automatic update check for this app session.
+    auto_update_check_at: Option<Instant>,
+    /// Set only after the user explicitly requests restart after an update.
+    restart_requested: bool,
     /// Smoke-test mode (`ARK_SMOKE=1`): exit cleanly after the first
     /// successful present so automated verification never blocks on a human.
     smoke: bool,
@@ -467,6 +475,9 @@ impl App {
             last_trim: None,
             git_inflight: false,
             git_pending: false,
+            updater: update_process::UpdateController::detect(),
+            auto_update_check_at: None,
+            restart_requested: false,
             smoke,
             pending_exit: false,
         }
@@ -1218,6 +1229,7 @@ impl App {
                 icon_tooltip: None,
                 search: Some(&mut self.search),
                 markdown: Some(&mut self.markdown),
+                update: Some(&self.updater),
             },
             &layout,
             &mut self.tree,
@@ -1315,6 +1327,9 @@ impl App {
         }
         if let Some(action) = effects.layout_action {
             self.apply_layout_action(action);
+        }
+        if let Some(action) = effects.update_action {
+            self.apply_update_action(action);
         }
         if let Some((path, line)) = effects.search_open {
             self.open_search_result(path, line, active_group);
@@ -1763,6 +1778,114 @@ impl App {
         }
         self.damage.mark_full();
         self.request_redraw();
+    }
+
+    fn apply_update_action(&mut self, action: update_process::UpdateAction) {
+        match action {
+            update_process::UpdateAction::TogglePanel => {
+                self.updater.ui.open = !self.updater.ui.open;
+            }
+            update_process::UpdateAction::Later => self.updater.ui.later(),
+            update_process::UpdateAction::Check => {
+                self.start_update(update_process::UpdateCommand::Check, false);
+            }
+            update_process::UpdateAction::Install => {
+                if let Some(command) = self.updater.install_command() {
+                    self.start_update(command, false);
+                }
+            }
+            update_process::UpdateAction::Restart => {
+                self.restart_after_update();
+            }
+        }
+        self.damage.mark_full();
+        self.request_redraw();
+    }
+
+    fn start_update(&mut self, command: update_process::UpdateCommand, automatic: bool) {
+        let Some(proxy) = self.proxy.clone() else {
+            self.updater.ui.fail(
+                "event-loop-unavailable",
+                "updates require a running ark event loop",
+                automatic,
+            );
+            return;
+        };
+        if let Err(error) = self.updater.start(command, automatic, proxy) {
+            error!("update helper: {error}");
+        }
+    }
+
+    fn schedule_auto_update_check(&mut self, event_loop: &ActiveEventLoop) {
+        if self.smoke || !self.updater.supported() || self.updater.is_busy() {
+            return;
+        }
+        if !self.updater.automatic_due(std::time::SystemTime::now()) {
+            return;
+        }
+        self.auto_update_check_at = Some(Instant::now() + Duration::from_millis(500));
+        self.schedule_followups(event_loop);
+    }
+
+    fn start_auto_update_if_due(&mut self, now: Instant) -> bool {
+        let Some(due) = self.auto_update_check_at.take() else {
+            return false;
+        };
+        if now < due {
+            self.auto_update_check_at = Some(due);
+            return false;
+        }
+        if self.updater.supported()
+            && !self.updater.is_busy()
+            && self.updater.automatic_due(std::time::SystemTime::now())
+        {
+            self.start_update(update_process::UpdateCommand::Check, true);
+        }
+        true
+    }
+
+    fn restart_after_update(&mut self) -> bool {
+        if !self.flush_config_autosave() {
+            self.updater.ui.fail(
+                "restart-failed",
+                "save or reload pending config changes before restarting",
+                false,
+            );
+            self.damage.mark_full();
+            self.request_redraw();
+            return false;
+        }
+        let target = match self.updater.restart_target() {
+            Ok(target) => target,
+            Err(error) => {
+                self.updater
+                    .ui.fail("restart-failed", error, false);
+                self.damage.mark_full();
+                self.request_redraw();
+                return false;
+            }
+        };
+        match std::process::Command::new(target)
+            .arg(&self.root)
+            .spawn()
+        {
+            Ok(_) => {
+                info!("restarting into updated ark at {}", self.root.display());
+                self.restart_requested = true;
+                true
+            }
+            Err(error) => {
+                error!("could not restart updated ark: {error}");
+                self.updater.ui.fail(
+                    "restart-failed",
+                    format!("could not restart ark: {error}"),
+                    false,
+                );
+                self.damage.mark_full();
+                self.request_redraw();
+                false
+            }
+        }
     }
 
     /// Open a viewer in a group, or focus the group that already owns it.
@@ -2489,6 +2612,9 @@ impl App {
     fn schedule_followups(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let mut earliest: Option<Instant> = self.flash_until;
+        if let Some(due) = self.auto_update_check_at {
+            earliest = Some(earliest.map_or(due, |d| d.min(due)));
+        }
         if self.fs_dirty {
             let at = self.last_tree_refresh.unwrap_or(now) + TREE_REFRESH_DEBOUNCE;
             earliest = Some(earliest.map_or(at, |d| d.min(at)));
@@ -2559,6 +2685,7 @@ impl ApplicationHandler<Wake> for App {
                 // M7: status on open — dispatched here (the loop is live);
                 // send_event before run_app is dropped by winit.
                 self.request_git_refresh();
+                self.schedule_auto_update_check(event_loop);
                 // Catch fs events that fired during startup (their wake was
                 // coalesced away before the loop existed).
                 if self.watcher.as_ref().map(Watcher::take_pending).unwrap_or(false) {
@@ -2604,6 +2731,26 @@ impl ApplicationHandler<Wake> for App {
                     self.request_redraw();
                 }
             }
+            Wake::UpdateEvent { generation, event } => {
+                if !matches!(event.as_ref(), update_protocol::UpdateEvent::Progress(_)) {
+                    info!("update helper event: {event:?}");
+                }
+                if self.updater.handle_event(generation, *event) {
+                    self.damage.mark_full();
+                    self.request_redraw();
+                }
+            }
+            Wake::UpdateFinished {
+                generation,
+                command,
+                success,
+                error,
+            } => {
+                if self.updater.finish(generation, command, success, error) {
+                    self.damage.mark_full();
+                    self.request_redraw();
+                }
+            }
         }
     }
 
@@ -2613,7 +2760,13 @@ impl ApplicationHandler<Wake> for App {
             event_loop.exit();
             return;
         }
+        if self.restart_requested {
+            info!("restart requested — exiting current ark process");
+            event_loop.exit();
+            return;
+        }
         let now = Instant::now();
+        self.start_auto_update_if_due(now);
         self.start_search_if_due(now);
         if self.search_debounce.is_some() {
             self.schedule_followups(event_loop);

@@ -15,7 +15,7 @@ use crate::ui::{Pointer, Rect};
 
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, LayoutAction, CARD_RADIUS};
 
-fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, bold: bool) {
+pub(super) fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, bold: bool) {
     let size = super::ui_size(size, f.ui_scale);
     let font_size = (size * f.scale) as f32;
     let m = f.text.mono_metrics(font_size, font_size * 1.35);
@@ -129,6 +129,7 @@ fn card(f: &mut Frame, rect: Rect) {
 pub(super) struct TitleBarActions {
     pub explorer: Rect,
     pub terminal: Rect,
+    pub update: Rect,
 }
 
 impl Default for TitleBarActions {
@@ -137,6 +138,7 @@ impl Default for TitleBarActions {
         Self {
             explorer: empty,
             terminal: empty,
+            update: empty,
         }
     }
 }
@@ -144,6 +146,7 @@ impl Default for TitleBarActions {
 #[derive(Debug, Default)]
 pub(super) struct TitleBarEffects {
     pub action: Option<LayoutAction>,
+    pub update_action: Option<crate::update_process::UpdateAction>,
 }
 
 pub(super) fn title_bar_actions(layout: &AppLayout) -> TitleBarActions {
@@ -155,6 +158,7 @@ pub(super) fn title_bar_actions(layout: &AppLayout) -> TitleBarActions {
     TitleBarActions {
         explorer: Rect { x: bar.w - 66.0, y, w: 20.0, h: 20.0 },
         terminal: Rect { x: bar.w - 42.0, y, w: 20.0, h: 20.0 },
+        update: super::update::title_rect(layout),
     }
 }
 
@@ -194,12 +198,63 @@ pub(super) fn draw_title_bar(f: &mut Frame, layout: &AppLayout) -> TitleBarEffec
             if active { f.theme.accent } else { f.theme.text_muted },
         );
     }
+    if let Some(controller) = f.update {
+        let rect = actions.update;
+        if rect.w > 0.0 {
+            let supported = controller.supported();
+            let hovered = rect.contains(f.pointer.x, f.pointer.y);
+            if hovered && supported {
+                f.canvas.fill_round_rect(
+                    rect.x,
+                    rect.y,
+                    rect.w,
+                    rect.h,
+                    4.0,
+                    f.theme.surface_hover,
+                    f.scale,
+                );
+            }
+            let color = if !supported {
+                f.theme.text_dim
+            } else {
+                match controller.ui.state {
+                    ark::update::UpdateState::Available
+                    | ark::update::UpdateState::Staged
+                    | ark::update::UpdateState::Installed => f.theme.accent,
+                    ark::update::UpdateState::Failed => f.theme.git_deleted,
+                    _ => f.theme.text_muted,
+                }
+            };
+            icon(f, Icon::Update, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0, 14.0, color);
+            if supported
+                && matches!(
+                    controller.ui.state,
+                    ark::update::UpdateState::Available
+                        | ark::update::UpdateState::Staged
+                        | ark::update::UpdateState::Installed
+                )
+            {
+                f.canvas.fill_round_rect(
+                    rect.x + rect.w - 4.0,
+                    rect.y,
+                    4.0,
+                    4.0,
+                    2.0,
+                    f.theme.accent,
+                    f.scale,
+                );
+            }
+        }
+    }
     if f.pointer.click {
         if actions.explorer.w > 0.0 && actions.explorer.contains(f.pointer.x, f.pointer.y) {
             effects.action = Some(LayoutAction::ToggleExplorer);
         } else if actions.terminal.w > 0.0 && actions.terminal.contains(f.pointer.x, f.pointer.y) {
             effects.action = Some(LayoutAction::ToggleTerminal);
         }
+    }
+    if let Some(controller) = f.update {
+        effects.update_action = super::update::title_action(layout, f.pointer, controller);
     }
     effects
 }

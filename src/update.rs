@@ -6,6 +6,7 @@ mod install;
 mod json;
 mod layout;
 mod manifest;
+mod state;
 mod version;
 
 pub use archive::validate_archive_listing;
@@ -13,6 +14,7 @@ pub use error::UpdateError;
 pub use install::{InstallInfo, StagedRelease};
 pub use layout::InstallLayout;
 pub use manifest::{ReleaseAsset, ReleaseManifest};
+pub use state::UpdateState;
 pub use version::{Target, Version};
 
 use std::collections::BTreeMap;

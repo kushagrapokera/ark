@@ -34,6 +34,7 @@ pub enum Icon {
     Plus,
     Close,
     Refresh,
+    Update,
     Collapse,
     NewFile,
     NewFolder,
@@ -71,6 +72,7 @@ impl Icon {
             Self::Plus => "New Terminal",
             Self::Close => "Close",
             Self::Refresh => "Refresh Explorer",
+            Self::Update => "Check for updates",
             Self::Collapse => "Collapse Folders",
             Self::NewFile => "New File",
             Self::NewFolder => "New Folder",
@@ -280,7 +282,7 @@ pub fn draw(
             pb.line_to(cx - 0.28 * s, cy + 0.28 * s);
             pb.finish().expect("valid close path")
         }
-        Icon::Refresh => {
+        Icon::Refresh | Icon::Update => {
             let mut pb = PathBuilder::new();
             pb.move_to(cx + 0.30 * s, cy - 0.24 * s);
             pb.cubic_to(
@@ -402,6 +404,7 @@ pub fn draw(
         | Icon::Plus
         | Icon::Close
         | Icon::Refresh
+        | Icon::Update
         | Icon::Collapse
         | Icon::NewFile
         | Icon::NewFolder
@@ -471,6 +474,7 @@ mod tests {
             Icon::Plus,
             Icon::Close,
             Icon::Refresh,
+            Icon::Update,
             Icon::Collapse,
             Icon::NewFile,
             Icon::NewFolder,

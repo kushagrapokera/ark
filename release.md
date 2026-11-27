@@ -67,11 +67,11 @@ The first release targets **Linux x86_64**, user-local installation, and GitHub 
 
 ## Current release blockers
 
-Phase 0 is complete except for the user-provided icon. Phases 1–3 are complete:
-packaging, curl bootstrap, and the updater helper. Remaining release work:
+Phase 0 is complete except for the user-provided icon. Phases 1–4 are complete:
+packaging, curl bootstrap, the updater helper, and the update UI. Remaining
+release work:
 
 - User-provided 256×256 icon.
-- Phase 4 update UI.
 - Phase 5 signing and GitHub release workflow.
 
 ---
@@ -560,24 +560,35 @@ main ark binary does not link updater networking or archive code.
 - `src/frame.rs`
 - `src/frame/chrome.rs`
 - `src/frame/update.rs`
+- `src/frame/update/tests.rs`
+- `src/frame/tests.rs`
 - `src/update.rs`
+- `src/update/state.rs`
+- `src/update_process.rs`
+- `src/update_process/rate.rs`
+- `src/update_process/runner.rs`
+- `src/update_process/tests.rs`
+- `src/update_protocol.rs`
+- `src/icons.rs`
+- `src/watch.rs`
+- `src/tests.rs`
 
 ### Tasks
 
-- [ ] Add update state to `App`.
-- [ ] Add title-bar update badge/button.
-- [ ] Check once shortly after startup.
-- [ ] Store last successful check in XDG state.
-- [ ] Rate-limit automatic checks to once per 24 hours.
-- [ ] Add manual **Check for updates** action.
-- [ ] Spawn `ark-updater` without blocking the UI thread.
-- [ ] Parse line-oriented helper events.
-- [ ] Show version, release notes URL, download size, and progress.
-- [ ] Add **Install Update**, **Update Later**, and **Restart to finish** states.
-- [ ] Show actionable errors.
-- [ ] Warn when terminals/agents are running.
-- [ ] Flush config autosave before restart.
-- [ ] Never restart automatically.
+- [x] Add update state to `App`.
+- [x] Add title-bar update badge/button.
+- [x] Check once shortly after startup.
+- [x] Store last successful check in XDG state.
+- [x] Rate-limit automatic checks to once per 24 hours.
+- [x] Add manual **Check for updates** action.
+- [x] Spawn `ark-updater` without blocking the UI thread.
+- [x] Parse line-oriented helper events.
+- [x] Show version, release notes URL, download size, and progress.
+- [x] Add **Install Update**, **Update Later**, and **Restart to finish** states.
+- [x] Show actionable errors.
+- [x] Warn when terminals/agents are running.
+- [x] Flush config autosave before restart.
+- [x] Never restart automatically.
 
 ### Acceptance
 
@@ -587,6 +598,23 @@ main ark binary does not link updater networking or archive code.
 - Failed update keeps the old version selected.
 - Update button is inaccessible or disabled for unsupported install layouts.
 - Existing frame interaction tests still pass.
+
+### Evidence — 2026-11-27
+
+- Protocol/state/controller/frame/App tests cover event parsing, bounded lines,
+  monotonic progress, stale generations, 24-hour rate limiting, downgrade/error
+  handling, title/panel actions, unsupported layouts, and restart autosave.
+- `cargo test`: 441 unit tests passed, 0 failed, 5 ignored; 5/5 CLI tests passed.
+- `cargo test --all-features --all-targets`: passed.
+- `cargo clippy --all-targets --all-features -- -D warnings`: clean.
+- Locked release builds for ark and `ark-updater` succeeded.
+- Built, verified, and installed a real `0.1.0-beta` tarball.
+- Installed-copy smoke with a fake helper observed the startup
+  `UpdateAvailable` event, wrote `last-check`, and suppressed a second launch's
+  automatic check inside 24 hours.
+- First-frame `ARK_SMOKE=1` run exited successfully with 23,788 KiB maximum RSS
+  (Python `resource.getrusage`); GNU `time` and `smem` were unavailable.
+- No new Cargo dependencies were added.
 
 ---
 

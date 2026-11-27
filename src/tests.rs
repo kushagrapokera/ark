@@ -608,6 +608,114 @@ fn app_closing_config_flushes_pending_autosave() {
 }
 
 #[test]
+fn app_update_install_without_proxy_reports_actionable_error() {
+    let d = temp_dir("app-update-no-proxy");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let layout = ark::update::InstallLayout::new(
+        d.path().join("data"),
+        d.path().join("bin"),
+        d.path().join("state"),
+        d.path().join("cache"),
+        d.path().join("config"),
+    );
+    app.updater = update_process::UpdateController::new(
+        Some(layout),
+        Some(d.path().join("ark-updater")),
+    );
+    app.updater.ui.state = ark::update::UpdateState::Available;
+    app.updater.ui.version = Some(ark::update::Version::parse("0.1.1").unwrap());
+
+    app.apply_update_action(update_process::UpdateAction::Install);
+
+    assert_eq!(app.updater.ui.state, ark::update::UpdateState::Failed);
+    assert_eq!(app.updater.ui.error_code.as_deref(), Some("event-loop-unavailable"));
+}
+
+#[test]
+fn app_restart_flushes_config_and_launches_current_version() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let d = temp_dir("app-update-restart");
+    let config = d.path().join("config.yaml");
+    fs::write(&config, "a: 1\n").expect("write config");
+    let data = d.path().join("data");
+    let current = data.join("ark/current");
+    fs::create_dir_all(&current).expect("create current");
+    let marker = d.path().join("restart-root");
+    let executable = current.join("ark");
+    fs::write(
+        &executable,
+        format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", marker.display()),
+    )
+    .expect("write fake ark");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let layout = ark::update::InstallLayout::new(
+        data,
+        d.path().join("bin"),
+        d.path().join("state"),
+        d.path().join("cache"),
+        d.path().join("config"),
+    );
+    app.updater = update_process::UpdateController::new(
+        Some(layout),
+        Some(d.path().join("ark-updater")),
+    );
+    app.open_config(config.clone());
+    assert!(app
+        .config_edits
+        .as_mut()
+        .expect("config editor")
+        .on_ime_commit("b: 2\n"));
+
+    assert!(app.restart_after_update());
+
+    assert_eq!(fs::read_to_string(&config).expect("read config"), "a: 1\nb: 2\n");
+    assert!(app.restart_requested);
+    for _ in 0..100 {
+        if marker.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fs::read_to_string(&marker).expect("restart root"), d.path().to_string_lossy());
+}
+
+#[test]
+fn app_restart_refuses_unresolved_config_conflict() {
+    let d = temp_dir("app-update-restart-conflict");
+    let config = d.path().join("config.yaml");
+    fs::write(&config, "a: 1\n").expect("write config");
+    let mut app = App::new(d.path().to_path_buf(), false, None, None);
+    let layout = ark::update::InstallLayout::new(
+        d.path().join("data"),
+        d.path().join("bin"),
+        d.path().join("state"),
+        d.path().join("cache"),
+        d.path().join("config"),
+    );
+    app.updater = update_process::UpdateController::new(
+        Some(layout),
+        Some(d.path().join("ark-updater")),
+    );
+    app.open_config(config.clone());
+    assert!(app
+        .config_edits
+        .as_mut()
+        .expect("config editor")
+        .on_ime_commit("mine\n"));
+    fs::write(&config, "a: 2\n").expect("external edit");
+
+    assert!(!app.restart_after_update());
+
+    assert_eq!(fs::read_to_string(&config).expect("read config"), "a: 2\n");
+    assert!(!app.restart_requested);
+    assert_eq!(app.updater.ui.state, ark::update::UpdateState::Failed);
+    assert_eq!(app.updater.ui.error_code.as_deref(), Some("restart-failed"));
+}
+
+#[test]
 fn app_markdown_preview_toggles_and_resets_on_tab_change() {
     let d = temp_dir("app-readme-preview");
     let readme = d.path().join("README.md");
