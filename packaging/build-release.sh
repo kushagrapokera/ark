@@ -21,6 +21,8 @@ need cp
 need rm
 need tar
 need sha256sum
+need awk
+need sed
 
 OS=$(uname -s)
 [ "$OS" = "Linux" ] || die "unsupported operating system: $OS"
@@ -39,6 +41,10 @@ else
 fi
 case "$VERSION" in
     '' | *[!A-Za-z0-9.+-]*) die "invalid release version: $VERSION" ;;
+esac
+REPO=${ARK_REPO:-kushagrapokera/ark}
+case "$REPO" in
+    '' | *[!A-Za-z0-9._/-]*) die "invalid release repository: $REPO" ;;
 esac
 
 if [ "${ARK_SKIP_BUILD:-0}" != "1" ]; then
@@ -78,10 +84,20 @@ for doc in README.md LICENSE CHANGELOG.md; do
 done
 
 tar -czf "$ARCHIVE" -C "$OUTPUT_DIR" "$RELEASE_NAME"
+ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+INSTALLER="$OUTPUT_DIR/ark-installer.sh"
+sed \
+    -e "s|@ARK_REPO@|$REPO|g" \
+    -e "s|@ARK_VERSION@|$VERSION|g" \
+    -e "s|@ARK_ARCH@|$ARCH|g" \
+    -e "s|@ARK_SHA256@|$ARCHIVE_SHA|g" \
+    "$ROOT/packaging/ark-installer.sh.in" > "$INSTALLER"
+chmod 755 "$INSTALLER"
 (
     cd "$OUTPUT_DIR"
-    sha256sum "$RELEASE_NAME.tar.gz" > SHA256SUMS
+    sha256sum "$RELEASE_NAME.tar.gz" ark-installer.sh > SHA256SUMS
 )
 
 printf 'Built: %s\n' "$ARCHIVE"
+printf 'Installer: %s\n' "$INSTALLER"
 printf 'Checksums: %s\n' "$OUTPUT_DIR/SHA256SUMS"

@@ -1,0 +1,110 @@
+#!/bin/sh
+# Bootstrap installer generated for a specific ark release.
+set -eu
+umask 022
+
+ARK_REPO='@ARK_REPO@'
+ARK_VERSION='@ARK_VERSION@'
+ARK_ARCH_BAKED='@ARK_ARCH@'
+ARK_SHA256='@ARK_SHA256@'
+
+TMP=
+cleanup() {
+    [ -z "$TMP" ] || rm -rf "$TMP"
+}
+trap cleanup 0 1 2 15
+
+die() {
+    echo "ark installer: $*" >&2
+    exit 1
+}
+
+need() {
+    command -v "$1" > /dev/null 2>&1 || die "required command not found: $1"
+}
+
+need uname
+need mktemp
+need tar
+need sha256sum
+need awk
+need grep
+need rm
+need mkdir
+
+OS=$(uname -s)
+[ "$OS" = "Linux" ] || die "unsupported operating system: $OS"
+
+ARCH=${ARK_ARCH:-$(uname -m)}
+case "$ARCH" in
+    x86_64) ;;
+    aarch64 | arm64) ARCH=aarch64 ;;
+    *) die "unsupported architecture: $ARCH" ;;
+esac
+[ "$ARCH" = "$ARK_ARCH_BAKED" ] || die "this installer does not contain a $ARCH build"
+
+BASE_URL=${ARK_BASE_URL:-https://github.com/$ARK_REPO/releases/download/v$ARK_VERSION}
+BASE_URL=${BASE_URL%/}
+case "$BASE_URL" in
+    https://* | http://*) ;;
+    *) die "ARK_BASE_URL must use HTTP or HTTPS" ;;
+esac
+ARCHIVE_NAME="ark-$ARK_VERSION-linux-$ARCH.tar.gz"
+ARCHIVE_URL="$BASE_URL/$ARCHIVE_NAME"
+
+download() {
+    url=$1
+    dest=$2
+    tool=${ARK_DOWNLOAD_TOOL:-}
+    if [ -z "$tool" ]; then
+        if command -v curl > /dev/null 2>&1; then
+            tool=curl
+        elif command -v wget > /dev/null 2>&1; then
+            tool=wget
+        else
+            die "curl or wget is required to download ark"
+        fi
+    fi
+    command -v "$tool" > /dev/null 2>&1 || die "downloader not found: $tool (install curl or wget)"
+    case "$tool" in
+        curl)
+            case "$url" in
+                https://*) curl --proto '=https' --tlsv1.2 -fLsS "$url" -o "$dest" ;;
+                http://*) curl -fLsS "$url" -o "$dest" ;;
+                *) die "unsupported download URL: $url" ;;
+            esac
+            ;;
+        wget)
+            case "$url" in
+                https://* | http://*) wget -q -O "$dest" "$url" ;;
+                *) die "unsupported download URL: $url" ;;
+            esac
+            ;;
+        *) die "downloader must be curl or wget" ;;
+    esac
+}
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/ark-install.XXXXXX")
+ARCHIVE="$TMP/$ARCHIVE_NAME"
+
+printf 'Downloading ark %s...\n' "$ARK_VERSION"
+download "$ARCHIVE_URL" "$ARCHIVE"
+
+ACTUAL=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+[ "$ACTUAL" = "$ARK_SHA256" ] || die "checksum mismatch for $ARCHIVE_NAME"
+
+tar -tzf "$ARCHIVE" > "$TMP/archive-list" || die "downloaded file is not a readable tar.gz"
+if grep -E '(^/|(^|/)\.\.(/|$))' "$TMP/archive-list" > /dev/null; then
+    die "archive contains an absolute or parent-traversal path"
+fi
+
+mkdir -p "$TMP/extract"
+tar -xzf "$ARCHIVE" -C "$TMP/extract"
+set -- "$TMP/extract"/*
+[ "$#" -eq 1 ] || die "archive must contain exactly one top-level directory"
+RELEASE_DIR=$1
+[ -f "$RELEASE_DIR/install-release.sh" ] || die "release installer is missing"
+
+printf 'Installing ark %s...\n' "$ARK_VERSION"
+sh "$RELEASE_DIR/install-release.sh"
+printf 'ark %s is ready. Run: ark .\n' "$ARK_VERSION"

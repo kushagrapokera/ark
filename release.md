@@ -68,12 +68,12 @@ The first release targets **Linux x86_64**, user-local installation, and GitHub 
 ## Current release blockers
 
 Phase 0 is complete except for the user-provided icon. Phase 1 packaging and
-versioned installation are complete. Remaining release work:
+versioned installation are complete. Phase 2 bootstrap generation is complete;
+public upload remains pending. Remaining release work:
 
 - User-provided 256×256 icon.
-- Curl bootstrap installer.
+- GitHub release upload workflow.
 - Updater helper and update UI.
-- CI/release workflow.
 - Release signing and manifest.
 
 ---
@@ -420,21 +420,23 @@ Validation rules:
 
 - `packaging/ark-installer.sh.in`
 - `packaging/build-release.sh`
-- `.github/workflows/release.yml`
+- `tests/curl-installer.sh`
+- `.github/workflows/release.yml` _(upload wiring deferred to Phase 5)_
 
 ### Tasks
 
-- [ ] Create POSIX shell template; no Bash-only syntax.
-- [ ] Bake repository, version, architecture, and checksum into the generated script.
-- [ ] Support `curl` or `wget`.
-- [ ] Map `x86_64` and reject unsupported architectures.
-- [ ] Download tarball to a temporary directory.
-- [ ] Verify baked SHA-256 or signed `SHA256SUMS`.
-- [ ] Extract with `tar`.
-- [ ] Run bundled `install-release.sh`.
-- [ ] Clean temporary files on success and failure.
-- [ ] Support `ARK_BASE_URL` for local integration tests.
-- [ ] Generate and upload `ark-installer.sh` per release.
+- [x] Create POSIX shell template; no Bash-only syntax.
+- [x] Bake repository, version, architecture, and checksum into the generated script.
+- [x] Support `curl` or `wget`.
+- [x] Map `x86_64` and reject unsupported architectures.
+- [x] Download tarball to a temporary directory.
+- [x] Verify baked SHA-256 or signed `SHA256SUMS`.
+- [x] Extract with `tar`.
+- [x] Run bundled `install-release.sh`.
+- [x] Clean temporary files on success and failure.
+- [x] Support `ARK_BASE_URL` for local integration tests.
+- [ ] Generate and upload `ark-installer.sh` per release _(generation complete;
+  upload workflow deferred to Phase 5 pending the real icon and signing)_.
 
 ### Acceptance
 
@@ -442,7 +444,23 @@ Validation rules:
 - Corrupted tarball is rejected before installation.
 - Unsupported architecture fails clearly.
 - Missing `tar`, `curl`/`wget`, or `sha256sum` produces actionable errors.
-- Published command works on a clean Ubuntu system without Rust.
+- Published command works on a clean Ubuntu system without Rust _(pending
+  public release and real icon)_.
+
+### Evidence — 2026-11-27
+
+- `tests/curl-installer.sh`: passed for curl, wget, corrupt downloads,
+  unsupported architecture, missing downloader, and temp cleanup.
+- `tests/installer.sh`: still passes.
+- `sh -n packaging/*.sh tests/*.sh`: passed.
+- Built a real `0.1.0-beta` tarball and generated `ark-installer.sh`.
+- Ran the exact `curl ... | sh` flow against a local HTTP release server.
+- Installed binary reported `ark 0.1.0-beta`.
+- Installed binary completed `ARK_SMOKE=1` first-frame smoke.
+- `cargo test`: 404 passed, 0 failed, 5 ignored; 5/5 CLI tests passed.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `cargo build --release`: succeeded.
+- `shellcheck` was not installed on this machine.
 
 ---
 
