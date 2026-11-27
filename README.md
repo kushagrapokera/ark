@@ -82,6 +82,14 @@ ark --version
 ark --help
 ```
 
+### UI zoom
+
+- `Ctrl++` increases the whole-UI scale.
+- `Ctrl+-` decreases it.
+- `Ctrl+wheel down` increases it; `Ctrl+wheel up` decreases it.
+
+Zoom ranges from **75% to 150%** in 10% steps and resets when ark restarts.
+
 ### Terminal shortcuts
 
 - `Ctrl+T` — open a new terminal tab

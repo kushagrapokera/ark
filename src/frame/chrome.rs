@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use cosmic_text::Weight;
+use tiny_skia::Pixmap;
 
 use crate::icons::{self, Icon, IconTooltip};
 use crate::render::{Canvas, ColorRgb, Theme};
@@ -14,6 +15,31 @@ use crate::tree::{FileTree, CHEVRON_ZONE, INDENT_PX, ROW_H, TRACK_W};
 use crate::ui::{Pointer, Rect};
 
 use super::{ActivityPanel, AppLayout, EditorGroup, EditorGroupLayout, Frame, LayoutAction, CARD_RADIUS};
+
+#[cfg(test)]
+mod icon_tests;
+
+/// Draw a chrome icon from logical coordinates/size. The renderer applies the
+/// effective scale exactly once.
+pub(super) fn draw_icon(
+    pixmap: &mut Pixmap,
+    icon: Icon,
+    cx: f64,
+    cy: f64,
+    size: f64,
+    color: ColorRgb,
+    scale: f64,
+) {
+    icons::draw(
+        pixmap,
+        icon,
+        cx as f32,
+        cy as f32,
+        size as f32,
+        color,
+        scale,
+    );
+}
 
 pub(super) fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color: ColorRgb, bold: bool) {
     let size = super::ui_size(size, f.ui_scale);
@@ -35,12 +61,12 @@ pub(super) fn text(f: &mut Frame, label: &str, x: f64, y: f64, size: f64, color:
 
 fn icon(f: &mut Frame, icon: Icon, cx: f64, cy: f64, size: f64, color: ColorRgb) {
     let size = super::ui_size(size, f.ui_scale);
-    icons::draw(
+    draw_icon(
         f.canvas.pixmap_mut(),
         icon,
-        (cx * f.scale) as f32,
-        (cy * f.scale) as f32,
-        (size * f.scale) as f32,
+        cx,
+        cy,
+        size,
         color,
         f.scale,
     );
@@ -1065,12 +1091,12 @@ fn draw_terminal_tab(
         rect.x + 12.0
     };
     let icon_size = super::ui_size(12.0, ui_scale);
-    icons::draw(
+    draw_icon(
         canvas.pixmap_mut(),
         Icon::Terminal,
-        (icon_x * scale) as f32,
-        ((rect.y + rect.h / 2.0) * scale) as f32,
-        (icon_size * scale) as f32,
+        icon_x,
+        rect.y + rect.h / 2.0,
+        icon_size,
         if active { theme.fg } else { theme.text_muted },
         scale,
     );
@@ -1105,12 +1131,12 @@ fn draw_terminal_tab(
     if closable && rect.w >= 44.0 {
         let close = terminal_tab_close_rect(rect);
         let close_size = super::ui_size(10.0, ui_scale);
-        icons::draw(
+        draw_icon(
             canvas.pixmap_mut(),
             Icon::Close,
-            ((close.x + close.w / 2.0) * scale) as f32,
-            ((close.y + close.h / 2.0) * scale) as f32,
-            (close_size * scale) as f32,
+            close.x + close.w / 2.0,
+            close.y + close.h / 2.0,
+            close_size,
             theme.text_muted,
             scale,
         );

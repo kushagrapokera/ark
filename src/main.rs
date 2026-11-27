@@ -55,6 +55,7 @@ mod update_process;
 mod update_protocol;
 mod viewer;
 mod watch;
+mod zoom;
 /// Test-only M2 demo scene.
 #[cfg(test)]
 mod demo;
@@ -267,6 +268,11 @@ struct App {
     title: String,
     theme: Theme,
     text: TextSystem,
+    /// Window/device scale before user zoom.
+    device_scale: f64,
+    /// Session-only whole-UI zoom multiplier.
+    zoom: f64,
+    /// Effective render scale: device scale × user zoom.
     scale: f64,
     window: Option<Arc<Window>>,
     context: Option<Context<Arc<Window>>>,
@@ -415,6 +421,8 @@ impl App {
             title,
             theme: Theme { ..Theme::DARK_PLUS },
             text: TextSystem::new(),
+            device_scale: 1.0,
+            zoom: 1.0,
             scale: 1.0,
             window: None,
             context: None,
@@ -762,6 +770,56 @@ impl App {
         };
     }
 
+    /// Apply one bounded whole-UI zoom step.
+    fn adjust_zoom(&mut self, step: i32) -> bool {
+        let next = zoom::next_zoom(self.zoom, step);
+        let next_scale = self.device_scale * next;
+        if !self.update_effective_scale(next_scale) {
+            return false;
+        }
+        self.zoom = next;
+        self.damage.mark_full();
+        info!("ui zoom changed to {:.0}%", self.zoom * 100.0);
+        self.request_redraw();
+        true
+    }
+
+    /// Change the window/device scale while preserving session zoom.
+    fn set_device_scale(&mut self, device_scale: f64) -> bool {
+        if !device_scale.is_finite() || device_scale <= 0.0 {
+            return false;
+        }
+        let changed = self.update_effective_scale(device_scale * self.zoom);
+        self.device_scale = device_scale;
+        changed
+    }
+
+    /// Update raster scale while keeping the pointer at the same physical
+    /// position. A scale change invalidates click/double-click geometry.
+    fn update_effective_scale(&mut self, next_scale: f64) -> bool {
+        if !next_scale.is_finite()
+            || next_scale <= 0.0
+            || (next_scale - self.scale).abs() < f64::EPSILON
+        {
+            return false;
+        }
+        let ratio = self.scale / next_scale;
+        self.pointer.x *= ratio;
+        self.pointer.y *= ratio;
+        self.pointer.click = false;
+        self.pointer.down = false;
+        self.last_click = None;
+        self.pending_dbl = false;
+        self.terminal_mouse_press = None;
+        self.split_drag = SplitDrag::default();
+        self.group_split_drag = SplitDrag::default();
+        self.term_drag = TerminalDrag::default();
+        self.scrollbar = Scrollbar::default();
+        self.group_scrollbars = [Scrollbar::default(); 2];
+        self.scale = next_scale;
+        true
+    }
+
     /// Request one redraw when a window exists.
     fn request_redraw(&self) {
         if let Some(w) = &self.window {
@@ -826,7 +884,7 @@ impl App {
         if size.width == 0 || size.height == 0 {
             return None;
         }
-        Some(frame::app_layout_with_visibility(
+        Some(frame::app_layout_with_visibility_and_zoom(
             size.width as f64 / self.scale,
             size.height as f64 / self.scale,
             self.split.position,
@@ -834,6 +892,7 @@ impl App {
             self.editor_groups.groups.len(),
             self.layout_visibility,
             self.term_height,
+            self.zoom,
         ))
     }
 
@@ -2675,8 +2734,13 @@ impl ApplicationHandler<Wake> for App {
         };
         match Surface::new(&context, window.clone()) {
             Ok(surface) => {
-                self.scale = window.scale_factor();
-                info!("window ready (root: {}, scale {:.2}x)", self.root.display(), self.scale);
+                self.set_device_scale(window.scale_factor());
+                info!(
+                    "window ready (root: {}, scale {:.2}x, zoom {:.2}x)",
+                    self.root.display(),
+                    self.scale,
+                    self.zoom
+                );
                 self.context = Some(context);
                 self.surface = Some(surface);
                 self.window = Some(window);
@@ -2858,9 +2922,12 @@ impl ApplicationHandler<Wake> for App {
             }
             WindowEvent::Resized(_) => self.request_redraw(),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.scale = scale_factor;
+                self.set_device_scale(scale_factor);
                 self.damage.mark_full();
-                info!("scale factor changed to {scale_factor:.2}x");
+                info!(
+                    "scale factor changed to {:.2}x (ui zoom {:.2}x)",
+                    self.scale, self.zoom
+                );
                 self.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -3028,6 +3095,12 @@ impl ApplicationHandler<Wake> for App {
                 self.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if self.modifiers.state().control_key() {
+                    if let Some(step) = zoom::wheel_step(&delta) {
+                        self.adjust_zoom(step);
+                    }
+                    return;
+                }
                 let Some(dy) = wheel_scroll_px(&delta) else { return };
                 let Some(layout) = self.app_layout() else { return };
                 // Wheel scrolling applies over the whole panel under the
@@ -3199,6 +3272,10 @@ impl ApplicationHandler<Wake> for App {
                     return;
                 }
                 self.reset_caret_blink();
+                if let Some(step) = zoom::key_step(&event.logical_key, self.modifiers.state()) {
+                    self.adjust_zoom(step);
+                    return;
+                }
                 if self.new_item.is_some() {
                     let mods = self.modifiers.state();
                     if mods.control_key()

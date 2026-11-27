@@ -25,6 +25,8 @@ use crate::viewer::{self, Viewer, LINE_H};
 
 mod chrome;
 pub mod update;
+#[cfg(test)]
+mod zoom_tests;
 
 /// Card-layout metrics from the supplied workbench design.
 const PAD: f64 = 8.0;
@@ -95,7 +97,7 @@ pub enum LayoutAction {
 pub struct AppLayout {
     /// Top title/menu/layout-control bar.
     pub title_bar: Rect,
-    /// Window-size text/icon scale, separate from device pixel ratio.
+    /// Nominal-window text/icon scale, separate from device scale and user zoom.
     pub ui_scale: f64,
     /// Padded card area between the title bar and bottom window edge.
     pub workbench: Rect,
@@ -206,8 +208,9 @@ pub fn app_layout_with_groups_and_terminal(
     )
 }
 
-/// Full workbench layout with explicit panel visibility.
-pub fn app_layout_with_visibility(
+/// Full workbench layout with explicit panel visibility and session zoom.
+#[allow(clippy::too_many_arguments)] // explicit responsive/layout inputs
+pub fn app_layout_with_visibility_and_zoom(
     w: f64,
     h: f64,
     split_x: f64,
@@ -215,13 +218,19 @@ pub fn app_layout_with_visibility(
     group_count: usize,
     visibility: LayoutVisibility,
     term_height: Option<f64>,
+    zoom: f64,
 ) -> AppLayout {
     let w = w.max(0.0);
     let h = h.max(0.0);
-    let ui_scale = responsive_ui_scale(w, h);
-    let narrow = w < 560.0;
-    let compact = w < 760.0;
-    let short = h < 620.0;
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    // Geometry uses the zoomed logical viewport, while responsive decisions
+    // use the real window size so zoom alone never changes panel visibility.
+    let nominal_w = w * zoom;
+    let nominal_h = h * zoom;
+    let ui_scale = responsive_ui_scale(nominal_w, nominal_h);
+    let narrow = nominal_w < 560.0;
+    let compact = nominal_w < 760.0;
+    let short = nominal_h < 620.0;
     let pad = if narrow { 4.0 } else { PAD };
     let gap = if narrow { 4.0 } else { GAP };
     let activity_w = if narrow { 40.0 } else { ACTIVITY_W };
@@ -461,6 +470,28 @@ pub fn app_layout_with_visibility(
         terminal_toolbar,
         term_grid,
     }
+}
+
+/// Full workbench layout with explicit panel visibility at default zoom.
+pub fn app_layout_with_visibility(
+    w: f64,
+    h: f64,
+    split_x: f64,
+    group_divider: f64,
+    group_count: usize,
+    visibility: LayoutVisibility,
+    term_height: Option<f64>,
+) -> AppLayout {
+    app_layout_with_visibility_and_zoom(
+        w,
+        h,
+        split_x,
+        group_divider,
+        group_count,
+        visibility,
+        term_height,
+        1.0,
+    )
 }
 
 fn editor_group_layout(
@@ -750,7 +781,7 @@ pub struct Frame<'a> {
     pub text: &'a mut TextSystem,
     pub theme: &'a Theme,
     pub scale: f64,
-    /// Window-size text/icon scale.
+    /// Nominal-window text/icon scale.
     pub ui_scale: f64,
     /// Recent input emphasis in `[0,1]` for the sidebar handle pulse.
     pub activity_pulse: f32,
